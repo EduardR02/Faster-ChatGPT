@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<link rel="stylesheet" type="text/css" href="../css/layout.css" >
+	<meta charset="UTF-8">
+	<title>Settings</title>
+</head>
+<body>
+    <div class="container">
+        <div class="setting_container">
+            <div class="setting">
+                <label for="api-key" class="setting-label">Your OpenAI API key:</label>
+                <input type="text" id="api-key" class="std-input setting-input" placeholder="(Existing key won't be shown) Your OpenAI API key here...">
+            </div>
+            <div class="setting">
+                <label for="max-tokens" class="setting-label">Max tokens:</label>
+                <input type="number" id="max-tokens" class="std-input small setting-input">
+            </div>
+            <div class="setting">
+                <label for="temperature" class="setting-label">Temperature:</label>
+                <input type="number" id="temperature" class="std-input small setting-input">
+            </div>
+            <div class="setting">
+                <label class="setting-label">Model:</label>
+                <div class="dummy">
+                    <input type="radio" id="gpt-3.5-turbo" name="model-select" value="gpt-3.5-turbo", class="checkbox">
+                    <label class="setting-label">GPT-3.5-turbo</label>
+                    <input type="radio" id="gpt-4" name="model-select" value="gpt-4" class="checkbox">
+                    <label class="setting-label">GPT-4</label>
+                </div>
+            </div>
+            <div class="setting">
+                <label for="customize-prompt" class="setting-label">Customize your prompt:</label>
+            </div>
+        </div>
+        <textarea type="text" id="customize-prompt" placeholder="Type your prompt here..." class="std-input setting-input"></textarea>
+        <button id="buttonSave" class="button"><span>Save </span></button>
+        <label class="setting-label">Refer to OpenAI <a target="blank_" href=https://platform.openai.com/docs/api-reference/chat/create>Documentation</a> on how to set these values. Provided values will not be checked for correctness.</label>
+    </div>
+	<div class="clearfix"></div>
+	<script type="module" src="../js/settings.js"></script>
+</body>
+</html>

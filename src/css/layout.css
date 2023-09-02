@@ -1,0 +1,209 @@
+body {
+  font-family: Consolas, Courier New, monospace;
+  font-size: 14px;
+  background-color: #282c34;
+}
+
+.side-panel {
+  display: flex;
+  margin-left: auto;
+  color: #ffffff;
+  padding: 20px;
+  box-sizing: border-box;
+  flex-direction: column;
+  margin-bottom: 20px;
+}
+
+.setting_container_old {
+  display: flex;
+  margin-left: auto;
+  box-sizing: border-box;
+  flex-direction: column;
+  width: 260px;
+  padding: 5px;
+}
+
+.block_div {
+  width: 260px;
+  display: flex;
+  margin-left: auto;
+  box-sizing: border-box;
+  flex-direction: column;
+  margin: 0px;
+  padding: 5px;
+}
+
+.container {
+  display:flex;
+  flex-direction:column;
+  width:auto;
+  align-items:center;
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.setting_container {
+  width:100%;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  align-items:center;
+}
+
+.setting {
+  display: contents;
+}
+
+.setting-label {
+  text-align: left;
+  margin-right: 10px;
+  color: #ffffff;
+  margin-bottom: 10px;
+}
+
+/* Chrome, Safari, Edge, Opera, removes arrows from number input*/
+input::-webkit-outer-spin-button,
+input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+a:link {
+  color:#61afef;
+}
+
+a:visited {
+  color:#ef596f;
+}
+
+.setting-input {
+  width:100%;
+  margin-bottom: 10px;
+}
+
+.small {
+  max-width: 100px;
+}
+
+.checkbox {
+  appearance:none;
+  border-radius: 30%;
+  width: 20px;
+  height: 20px;
+  margin:auto;
+  transition: 0.15s all linear;
+  position: relative;
+  background-color: #c0b9d7;
+  border: 1px solid #61afef;
+  cursor: pointer;
+  margin-bottom:-5px;
+}
+
+.checkbox:checked {
+  border-color: #ef596f;
+  background-color:#ef596f;
+  outline:none;
+}
+
+h1 {
+  color: #61afef;
+}
+
+p {
+  color: #ffffff;
+}
+
+.center {
+  text-align: center;
+}
+
+.std-input {
+  padding: 10px;
+  box-sizing: border-box;
+  font-family: Consolas, Courier New, monospace;
+  border: 1px solid #61afef;
+  background-color: #c0b9d7;
+  color: #282c34;
+  resize: none;
+  height: auto;
+  overflow: hidden;
+}
+
+.std-input:focus {
+  outline: none;
+  border-color: #ef596f;
+}
+
+:root {
+  --check-primary: #61afef;
+  --check-secondary: #ef596f;
+}
+
+.button {
+  font-family: Consolas, Courier New, monospace;
+  border-radius: 8px;
+  position: relative;
+  background: var(--check-primary, #61afef);
+  border: none;
+  color: #282c34;
+  text-align: center;
+  font-size: 16px;
+  padding: 10px;
+  width: auto;
+  transition: all 0.1s;
+  cursor: pointer;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.no-bottom-margin {
+  margin-bottom: 0;
+}
+
+.button span {
+  cursor: pointer;
+  position: relative;
+  transition: 0.1s;
+}
+
+.button span:after {
+  content: '\00bb';
+  position: absolute;
+  opacity: 0;
+  top: 0;
+  right: -20px;
+  transition: 0.2s;
+}
+
+.button:hover span {
+  padding-right: 25px;
+}
+
+.button:hover span:after {
+  opacity: 1;
+  right: 0;
+}
+
+.button:after {
+  content: "";
+  background: var(--check-secondary, #ef596f);
+  display: block;
+  position: absolute;
+  padding-top: 300%;
+  padding-left: 350%;
+  margin-left: -20px !important;
+  margin-top: -120%;
+  opacity: 0;
+  transition: all 0.5s
+}
+
+.button:active:after {
+  padding: 0;
+  margin: 0;
+  opacity: 1;
+  transition: 0s
+}
+
+.clearfix {
+  clear: both;
+}
