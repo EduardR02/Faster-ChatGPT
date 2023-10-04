@@ -190,6 +190,10 @@ function init_context(selection, url) {
             settings.model = res.model;
             chrome.storage.onChanged.addListener(update_settings);
             resolve();
+            if (settings.api_key === "") {
+                post_error_message_in_chat("api key", "Please enter your api key in the settings.");
+                reject("api key not set");
+            }
         })
         .catch(error => {reject(error)});
     });

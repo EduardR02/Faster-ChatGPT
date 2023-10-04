@@ -30,8 +30,8 @@ export function set_lifetime_tokens(new_lifetime_tokens) {
 export function get_api_key() {
     return new Promise((resolve, reject) => {
         chrome.storage.sync.get('api_key', function(res) {
-            if (res.api_key === undefined) {
-                reject("api_key is undefined");
+            if (res.api_key === undefined || res.api_key === "") {
+                reject("api_key is undefined or empty");
             }
             else {
                 resolve(res.api_key);
