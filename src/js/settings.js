@@ -22,6 +22,7 @@ function save() {
     settings.max_tokens = parseInt(document.getElementById('max-tokens').value.trim());
     settings.temperature = parseFloat(document.getElementById('temperature').value.trim());
     settings.model = document.querySelector('input[name="model-select"]:checked').value;
+    settings.close_on_deselect = document.getElementById('close-on-deselect').checked;
     for (let key in settings) {
         if (settings[key] === existing_settings[key] || settings[key] === undefined ||
             settings[key] === NaN || settings[key] === "") {
@@ -40,10 +41,11 @@ function save() {
 
 
 function init_values() {
-    chrome.storage.sync.get(['max_tokens', 'temperature', 'model'], function(res) {
+    chrome.storage.sync.get(['max_tokens', 'temperature', 'model', 'close_on_deselect'], function(res) {
         document.getElementById('max-tokens').value = res.max_tokens;
         document.getElementById('temperature').value = res.temperature;
         document.getElementById(res.model).checked = true;
+        document.getElementById('close-on-deselect').checked = res.close_on_deselect;
         existing_settings = res;
     });
 }

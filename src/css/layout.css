@@ -58,7 +58,8 @@ body {
   text-align: left;
   margin-right: 10px;
   color: #ffffff;
-  margin-bottom: 10px;
+  margin-bottom: 20px;
+  margin-top: 10px;
 }
 
 /* Chrome, Safari, Edge, Opera, removes arrows from number input*/
@@ -96,7 +97,19 @@ a:visited {
   background-color: #c0b9d7;
   border: 1px solid #61afef;
   cursor: pointer;
-  margin-bottom:-5px;
+  margin-right: 10px;
+  vertical-align: center;
+  margin-top: 8px;
+}
+
+.dummy {
+  display: flex;
+  align-items: center;
+  width: max-content;
+}
+
+.other-checkbox-align {
+  margin-top: -10px;
 }
 
 .checkbox:checked {

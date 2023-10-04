@@ -55,6 +55,10 @@ function listener(event) {
     else if (selection.length === 0 && previous_selection.length > 0) {
         // previous_selection has to be > 0, otherwise will spam messages on normal mouse clicks
         previous_selection = "";
-        chrome.runtime.sendMessage({ type: "close_side_panel" });
+        chrome.storage.sync.get("close_on_deselect").then((res) => {
+            if (res.close_on_deselect) {
+                chrome.runtime.sendMessage({ type: "close_side_panel" });
+            }
+        });
     }
 }
