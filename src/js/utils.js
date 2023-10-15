@@ -84,7 +84,8 @@ export function set_defaults() {
         temperature: 1.2,
         model : "gpt-3.5-turbo",
         api_key: "",
-        close_on_deselect: true
+        close_on_deselect: true,
+        stream_response: true
     }
     chrome.storage.sync.set(settings);
     // for some reason relative path does not work, only full path.

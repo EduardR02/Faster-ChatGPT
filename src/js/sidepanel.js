@@ -91,13 +91,18 @@ function api_call() {
             "messages": messages,
             "max_tokens": settings.max_tokens,
             "temperature": settings.temperature,
-            "stream": true
+            "stream": settings.stream_response
         })
     };
 
     fetch('https://api.openai.com/v1/chat/completions', requestOptions)
         .then(response => {
-            response_stream(response);
+            if (settings.stream_response) {
+                response_stream(response);
+            }
+            else {
+                get_reponse_no_stream(response);
+            }
         })
         .catch(error => {
             post_error_message_in_chat("api request (likely incorrect key)", error.message);
@@ -120,6 +125,8 @@ function get_reponse_no_stream(response) {
 
 // "stolen" from https://umaar.com/dev-tips/269-web-streams-openai/ and https://www.builder.io/blog/stream-ai-javascript
 async function response_stream(response_stream) {
+    // with this, lifetimetokens won't work (currently) because you'd have to manually count the streamed tokens (too lazy)
+    // also right now you can't "stop generating", also too lazy lol
     let targetDiv = document.getElementById('conversation');
     let inputField = document.getElementById('textInput');
     let newParagraph = document.createElement('p');
@@ -182,12 +189,13 @@ function init_context(selection, url) {
     });
     // init settings
     let settings_promise = new Promise((resolve, reject) => {
-        chrome.storage.sync.get(['api_key', 'max_tokens', 'temperature', 'model'])
+        chrome.storage.sync.get(['api_key', 'max_tokens', 'temperature', 'model', 'stream_response'])
         .then(res => {
             settings.api_key = res.api_key;
             settings.max_tokens = res.max_tokens;
             settings.temperature = res.temperature;
             settings.model = res.model;
+            settings.stream_response = res.stream_response;
             chrome.storage.onChanged.addListener(update_settings);
             resolve();
             if (settings.api_key === "") {
