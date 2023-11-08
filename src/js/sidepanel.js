@@ -5,7 +5,7 @@ let selection_string = "Selected text: "
 let user_prompt_string = "You: ";
 let assistant_prompt_string = "Assistant: ";
 const RoleEnum = {system: "system", user: "user", assistant: "assistant"};
-let models = {"4k": "gpt-3.5-turbo", "16k": "gpt-3.5-turbo-16k", "8k": "gpt-4", "32k": "gpt-4-32k"};
+let models = {"gpt-3.5": "gpt-3.5-turbo", "gpt-4": "gpt-4-1106-preview"};
 let settings = {};
 // stores the current conversation
 let messages = [];
@@ -74,11 +74,10 @@ function api_call() {
     // increase context length if necessary
     let model = "";
     if (settings.model === "gpt-3.5-turbo") {
-        model = current_context_length + settings.max_tokens > 4000 ? models["16k"] : models["4k"];
+        model = models["gpt-3.5"];
     }
     else {
-        // gpt 4 32k is not yet available
-        model = current_context_length + settings.max_tokens > 8000 ? models["32k"] : models["8k"];
+        model = models["gpt-4"];
     }
     let requestOptions = {
         method: 'POST',
