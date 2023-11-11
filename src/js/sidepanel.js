@@ -259,6 +259,7 @@ function input_listener() {
                     init_context("No context", "No URL").then(() => {
                         get_mode(function(current_mode) {
                             if (is_on(current_mode)) {
+                                append_context(inputText, RoleEnum.user);
                                 api_call();
                             }
                         });
