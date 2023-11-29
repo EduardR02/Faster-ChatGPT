@@ -27,6 +27,6 @@
 		"service_worker": "src/js/background.js",
 		"type": "module"
 	},
-	"minimum_chrome_version": "116",
+	"minimum_chrome_version": "1",
 	"options_page": "src/html/settings.html"
 }
