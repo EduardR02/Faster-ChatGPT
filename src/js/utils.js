@@ -82,7 +82,7 @@ export function set_defaults() {
         lifetime_tokens: 0,
         max_tokens: 380,
         temperature: 1.2,
-        model : "gpt-3.5-turbo",
+        model : "gpt-4o-mini",
         api_key: "",
         close_on_deselect: true,
         stream_response: true

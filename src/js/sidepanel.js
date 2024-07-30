@@ -5,7 +5,7 @@ let selection_string = "Selected text: "
 let user_prompt_string = "You: ";
 let assistant_prompt_string = "Assistant: ";
 const RoleEnum = {system: "system", user: "user", assistant: "assistant"};
-let models = {"gpt-3.5": "gpt-3.5-turbo", "gpt-4": "gpt-4-1106-preview"};
+let models = {"gpt-3.5-turbo": "gpt-3.5-turbo", "gpt-4": "gpt-4", "gpt-4-turbo": "gpt-4-turbo-preview", "gpt-4o": "gpt-4o", "gpt-4o-mini": "gpt-4o-mini"};
 let settings = {};
 // stores the current conversation
 let messages = [];
@@ -72,13 +72,7 @@ function remove_added_paragraphs() {
 
 function api_call() {
     // increase context length if necessary
-    let model = "";
-    if (settings.model === "gpt-3.5-turbo") {
-        model = models["gpt-3.5"];
-    }
-    else {
-        model = models["gpt-4"];
-    }
+    let model = models[settings.model];
     let requestOptions = {
         method: 'POST',
         headers: {
