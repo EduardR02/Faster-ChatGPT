@@ -1,4 +1,4 @@
-import { ModeEnum, get_mode, get_lifetime_tokens, set_lifetime_tokens,
+import { ModeEnum, get_mode, set_lifetime_tokens,
     auto_resize_textfield_listener, update_textfield_height, is_on } from "./utils.js";
 
 let selection_string = "Selected text: "
@@ -9,7 +9,6 @@ let models = {"gpt-3.5-turbo": "gpt-3.5-turbo", "gpt-4": "gpt-4", "gpt-4-turbo":
 let settings = {};
 // stores the current conversation
 let messages = [];
-let current_context_length = 0;
 
 
 
@@ -84,7 +83,12 @@ function api_call() {
             "messages": messages,
             "max_tokens": settings.max_tokens,
             "temperature": settings.temperature,
-            "stream": settings.stream_response
+            "stream": settings.stream_response,
+            ...(settings.stream_response && {
+                "stream_options": {
+                    "include_usage": true
+                }
+            })
         })
     };
 
@@ -108,18 +112,14 @@ function get_reponse_no_stream(response) {
         let response_text = data.choices[0].message.content;
         append_to_chat_html(assistant_prompt_string + response_text);
         append_context(response_text, RoleEnum.assistant);
-        current_context_length = data.usage.total_tokens;
-        get_lifetime_tokens(function (lifetime_tokens) {
-            set_lifetime_tokens(lifetime_tokens + current_context_length);
-        });
+        set_lifetime_tokens(data.usage.prompt_tokens, data.usage.completion_tokens);
     });
 }
 
 
 // "stolen" from https://umaar.com/dev-tips/269-web-streams-openai/ and https://www.builder.io/blog/stream-ai-javascript
 async function response_stream(response_stream) {
-    // with this, lifetimetokens won't work (currently) because you'd have to manually count the streamed tokens (too lazy)
-    // also right now you can't "stop generating", also too lazy lol
+    // right now you can't "stop generating", too lazy lol
     let targetDiv = document.getElementById('conversation');
     let inputField = document.getElementById('textInput');
     let newParagraph = document.createElement('p');
@@ -128,36 +128,43 @@ async function response_stream(response_stream) {
 
     const reader = response_stream.body.getReader();
     const decoder = new TextDecoder("utf-8");
+
     try {
-        // Iterate through the chunks in the response body using for-await...of
-        while (1) {
+        let buffer = '';
+        while (true) {
             const { done, value } = await reader.read();
-            if (done) {
-                break;
-            }
-            const chunk = decoder.decode(value);
-            // Clean up the data
-            const lines = chunk
-                .split("\n")
-                .map((line) => line.replace("data: ", ""))
-                .filter((line) => line.length > 0)
-                .filter((line) => line !== "[DONE]")
-                .map((line) => JSON.parse(line));
-            // Destructuring!
-            for (const parsedLine of lines) {
-            const { choices } = parsedLine;
-            const { delta } = choices[0];
-            const { content } = delta;
-                if (content) {
-                    newParagraph.innerHTML += content.replaceAll("\n", "<br>");
+            if (done) break;
+            
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    const data = line.slice(6);
+                    if (data === '[DONE]') continue;
+
+                    try {
+                        const parsed = JSON.parse(data);
+                        if (parsed.choices && parsed.choices.length > 0) {
+                            const content = parsed.choices[0].delta.content;
+                            if (content) {
+                                newParagraph.innerHTML += content.replace(/\n/g, '<br>');
+                                targetDiv.scrollIntoView(false);
+                            }
+                        } else if (parsed.usage && parsed.usage.prompt_tokens) {
+                            set_lifetime_tokens(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);  
+                        }
+                    } catch (err) {
+                        post_error_message_in_chat('Error parsing JSON:', err);
+                    }
                 }
-                targetDiv.scrollIntoView(false);
             }
         }
+    } catch (error) {
+        post_error_message_in_chat("API request error (likely incorrect key)", error.message);
     }
-    catch (error) {
-        post_error_message_in_chat("api request (likely incorrect key)", error.message);
-    }
+    
 }
 
 

@@ -16,14 +16,21 @@ export function is_on(mode) {
 
 
 export function get_lifetime_tokens(callback) {
-    chrome.storage.sync.get('lifetime_tokens', function(res) {
-        callback(res.lifetime_tokens);
+    chrome.storage.sync.get(['lifetime_input_tokens', 'lifetime_output_tokens'], function(res) {
+        callback({
+            input: res.lifetime_input_tokens || 0,
+            output: res.lifetime_output_tokens || 0
+        });
     });
 }
 
-
-export function set_lifetime_tokens(new_lifetime_tokens) {
-    chrome.storage.sync.set({lifetime_tokens: new_lifetime_tokens});
+export function set_lifetime_tokens(newInputTokens, newOutputTokens) {
+    get_lifetime_tokens(function(currentTokens) {
+        chrome.storage.sync.set({
+            lifetime_input_tokens: currentTokens.input + newInputTokens,
+            lifetime_output_tokens: currentTokens.output + newOutputTokens
+        });
+    });
 }
 
 
@@ -79,7 +86,8 @@ export function loadTextFromFile(filePath) {
 export function set_defaults() {
     let settings = {
         mode: ModeEnum.InstantPromptMode,
-        lifetime_tokens: 0,
+        lifetime_input_tokens: 0,
+        lifetime_output_tokens: 0,
         max_tokens: 380,
         temperature: 1.2,
         model : "gpt-4o-mini",
