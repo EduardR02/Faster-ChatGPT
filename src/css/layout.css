@@ -46,7 +46,7 @@ body {
 .setting_container {
   width:100%;
   display: grid;
-  grid-template-columns: max-content 1fr;
+  grid-template-columns: minmax(auto, max-content) minmax(0, 1fr);
   align-items:center;
 }
 

@@ -176,8 +176,8 @@ function init_context(selection, url) {
         chrome.storage.local.get("prompt")
             .then(res => {
                 // this is to "possibly" improve prompting by surrounding the selection with quotes
-                let selectionWithQuotes = '"""' + selection + '"""';
-                let url_with_quotes = '"""' + url + '"""';
+                let selectionWithQuotes = '"""[' + selection + ']"""';
+                let url_with_quotes = '"""[' + url + ']"""';
                 // current prompt states that both in triple quotes, with url preceding selection
                 let concat = res.prompt + "\n" + url_with_quotes + "\n" + selectionWithQuotes;
                 messages = [];
