@@ -166,7 +166,7 @@ async function response_stream(response_stream) {
     } catch (error) {
         post_error_message_in_chat("API request error (likely incorrect key)", error.message);
     }
-    append_context(message.join('\n'), RoleEnum.assistant);
+    append_context(message.join(''), RoleEnum.assistant);
 }
 
 
