@@ -123,6 +123,7 @@ async function response_stream(response_stream) {
     let targetDiv = document.getElementById('conversation');
     let inputField = document.getElementById('textInput');
     let newParagraph = document.createElement('p');
+    let message = [];
     targetDiv.insertBefore(newParagraph, inputField);
     newParagraph.textContent = assistant_prompt_string;
 
@@ -149,6 +150,7 @@ async function response_stream(response_stream) {
                         if (parsed.choices && parsed.choices.length > 0) {
                             const content = parsed.choices[0].delta.content;
                             if (content) {
+                                message.push(content);
                                 newParagraph.innerHTML += content.replace(/\n/g, '<br>');
                                 targetDiv.scrollIntoView(false);
                             }
@@ -164,7 +166,7 @@ async function response_stream(response_stream) {
     } catch (error) {
         post_error_message_in_chat("API request error (likely incorrect key)", error.message);
     }
-    
+    append_context(message.join('\n'), RoleEnum.assistant);
 }
 
 
