@@ -17,14 +17,9 @@ function run_on_init() {
 		chrome.runtime.openOptionsPage();
 	});
 
-	let inputTokensText = document.getElementById("inputTokensText");
+	let tokensValue = document.getElementById("tokensValue");
     get_lifetime_tokens(function(res) {
-        inputTokensText.innerText = "Lifetime Input Tokens: " + res.input + " ";
-    });
-
-	let outputTokensText = document.getElementById("outputTokensText");
-    get_lifetime_tokens(function(res) {
-        outputTokensText.innerText = "Lifetime Output Tokens: " + res.output + " ";
+        tokensValue.innerText = res.input + " | " + res.output;
     });
 
 	get_mode(function(mode) {
