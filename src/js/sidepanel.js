@@ -5,7 +5,8 @@ let selection_string = "Selected text"
 let user_prompt_string = "You";
 let assistant_prompt_string = "Assistant";
 const RoleEnum = {system: "system", user: "user", assistant: "assistant"};
-let models = {"gpt-3.5-turbo": "gpt-3.5-turbo", "gpt-4": "gpt-4", "gpt-4-turbo": "gpt-4-turbo-preview", "gpt-4o": "gpt-4o", "gpt-4o-mini": "gpt-4o-mini"};
+let openai_models = {"gpt-3.5-turbo": "gpt-3.5-turbo", "gpt-4": "gpt-4", "gpt-4-turbo": "gpt-4-turbo-preview", "gpt-4o": "gpt-4o", "gpt-4o-mini": "gpt-4o-mini"};
+let anthropic_models = {"sonnet-3.5": "claude-3-5-sonnet-20240620"}
 let settings = {};
 // stores the current conversation
 let messages = [];
@@ -70,28 +71,9 @@ function remove_added_paragraphs() {
 
 function api_call() {
     // increase context length if necessary
-    let model = models[settings.model];
-    let requestOptions = {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + settings.api_key
-        },
-        body: JSON.stringify({
-            "model": model,
-            "messages": messages,
-            "max_tokens": settings.max_tokens,
-            "temperature": settings.temperature,
-            "stream": settings.stream_response,
-            ...(settings.stream_response && {
-                "stream_options": {
-                    "include_usage": true
-                }
-            })
-        })
-    };
+    let [api_link, requestOptions] = create_api_request();
 
-    fetch('https://api.openai.com/v1/chat/completions', requestOptions)
+    fetch(api_link, requestOptions)
         .then(response => {
             if (settings.stream_response) {
                 response_stream(response);
@@ -106,13 +88,95 @@ function api_call() {
 }
 
 
+function create_api_request() {
+    if (settings.model in openai_models) {
+        return create_openai_request();
+    }
+    else if (settings.model in anthropic_models) {
+        return create_anthropic_request();
+    }
+    else {
+        post_error_message_in_chat("model", "Model not found");
+    }
+}
+
+function create_anthropic_request() {
+    let model = anthropic_models[settings.model];
+    if (settings.api_key_anthropic === "") {
+        post_error_message_in_chat("Anthropic api key", "Anthropic api key is empty, switch to OpenAI or enter a key in the settings");
+    }
+    let requestOptions = {
+        method: 'POST',
+        credentials: 'omit',
+        headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': settings.api_key_anthropic,
+            'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+            "model": model,
+            "system": messages[0].content,
+            "messages": messages.slice(1),
+            "max_tokens": settings.max_tokens,
+            "temperature": settings.temperature,
+            "stream": settings.stream_response
+        })
+    };
+    return ['https://api.anthropic.com/v1/messages', requestOptions];
+}
+
+function create_openai_request() {
+    let model = openai_models[settings.model];
+    if (settings.api_key_openai === "") {
+        post_error_message_in_chat("OpenAI api key", "OpenAI api key is empty, switch to Anthropic or enter a key in the settings.");
+    }
+    let requestOptions = {
+        method: 'POST',
+        credentials: 'omit',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + settings.api_key_openai
+        },
+        body: JSON.stringify({
+            "model": model,
+            "messages": messages,
+            "max_tokens": settings.max_tokens,
+            "temperature": settings.temperature,
+            "stream": settings.stream_response,
+            ...(settings.stream_response && {
+                "stream_options": {
+                    "include_usage": true
+                }
+            })
+        })
+    };
+    return ['https://api.openai.com/v1/chat/completions', requestOptions];
+}
+
+
 function get_reponse_no_stream(response) {
     response.json().then(data => {
-        let response_text = data.choices[0].message.content;
+        let [response_text, input_tokens, output_tokens] = get_response_data_no_stream(data);
+        
         append_to_chat_html(response_text, RoleEnum.assistant);
         append_context(response_text, RoleEnum.assistant);
-        set_lifetime_tokens(data.usage.prompt_tokens, data.usage.completion_tokens);
+        set_lifetime_tokens(input_tokens, output_tokens);
     });
+}
+
+function get_response_data_no_stream(data) {
+    let response_text, input_tokens, output_tokens;
+    if (settings.model in openai_models) {
+        response_text = data.choices[0].message.content;
+        input_tokens = data.usage.prompt_tokens;
+        output_tokens = data.usage.completion_tokens;
+    }
+    else {
+        response_text = data.content[0].text;
+        input_tokens = data.usage.input_tokens;
+        output_tokens = data.usage.output_tokens;
+    }
+    return [response_text, input_tokens, output_tokens];
 }
 
 
@@ -121,6 +185,7 @@ async function response_stream(response_stream) {
     // right now you can't "stop generating", too lazy lol
     let contentDiv = append_to_chat_html("", RoleEnum.assistant);
     let message = [];
+    let is_openai = settings.model in openai_models;
 
     const reader = response_stream.body.getReader();
     const decoder = new TextDecoder("utf-8");
@@ -141,16 +206,7 @@ async function response_stream(response_stream) {
                     if (data === '[DONE]') continue;
 
                     try {
-                        const parsed = JSON.parse(data);
-                        if (parsed.choices && parsed.choices.length > 0) {
-                            const content = parsed.choices[0].delta.content;
-                            if (content) {
-                                message.push(content);
-                                contentDiv.innerHTML += content.replace(/\n/g, '<br>');
-                            }
-                        } else if (parsed.usage && parsed.usage.prompt_tokens) {
-                            set_lifetime_tokens(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);  
-                        }
+                        stream_parse(data, message, contentDiv, is_openai);
                     } catch (err) {
                         post_error_message_in_chat('Error parsing JSON:', err);
                     }
@@ -161,6 +217,58 @@ async function response_stream(response_stream) {
         post_error_message_in_chat("API request error (likely incorrect key)", error.message);
     }
     append_context(message.join(''), RoleEnum.assistant);
+}
+
+function stream_parse(data, message, contentDiv, is_openai) {
+    const parsed = JSON.parse(data);
+    if (is_openai) {
+        if (parsed.choices && parsed.choices.length > 0) {
+            const content = parsed.choices[0].delta.content;
+            if (content) {
+                add_content_streaming(content, message, contentDiv);
+            }
+        } else if (parsed.usage && parsed.usage.prompt_tokens) {
+            set_lifetime_tokens(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);  
+        }
+    }
+    else {
+        // Anthropic specific streaming handling
+        switch (parsed.type) {
+            case 'content_block_delta':
+                const content = parsed.delta.text;
+                if (content) {
+                    add_content_streaming(content, message, contentDiv);
+                }
+                break;
+
+            case 'message_start':
+                if (parsed.usage && parsed.usage.input_tokens) {
+                    // for some reason api returns output tokens in the beginning also, but only like 1 or 2 (in docs)
+                    // so maybe it counts the first block separately or smth idk
+                    set_lifetime_tokens(parsed.usage.input_tokens, parsed.usage.output_tokens);
+                }
+                break;
+
+            case 'message_delta':
+                if (parsed.usage && parsed.usage.output_tokens) {
+                    set_lifetime_tokens(0, parsed.usage.output_tokens);  
+                }
+                break;
+            case 'error':
+                // in api they mention high traffic as an example
+                post_error_message_in_chat('Anthropic stream response (error block received)', parsed.error);
+                break;
+
+            default:
+                // stuff like ping, message_end, and other things we don't care about
+                break;
+        }
+    }
+}
+
+function add_content_streaming(content, message, contentDiv) {
+    message.push(content);
+    contentDiv.innerHTML += content.replace(/\n/g, '<br>');
 }
 
 
@@ -185,18 +293,19 @@ function init_context(selection, url) {
     });
     // init settings
     let settings_promise = new Promise((resolve, reject) => {
-        chrome.storage.sync.get(['api_key', 'max_tokens', 'temperature', 'model', 'stream_response'])
+        chrome.storage.sync.get(['api_key_openai', 'api_key_anthropic', 'max_tokens', 'temperature', 'model', 'stream_response'])
         .then(res => {
-            settings.api_key = res.api_key;
+            settings.api_key_openai = res.api_key_openai;
+            settings.api_key_anthropic = res.api_key_anthropic;
             settings.max_tokens = res.max_tokens;
             settings.temperature = res.temperature;
             settings.model = res.model;
             settings.stream_response = res.stream_response;
             chrome.storage.onChanged.addListener(update_settings);
             resolve();
-            if (settings.api_key === "") {
-                post_error_message_in_chat("api key", "Please enter your api key in the settings.");
-                reject("api key not set");
+            if (settings.api_key_openai === "" && settings.api_key_anthropic === "") {
+                post_error_message_in_chat("api keys", "Please enter an api key in the settings, both are currently empty.");
+                reject("api keys not set");
             }
         })
         .catch(error => {reject(error)});

@@ -18,7 +18,8 @@ function init() {
 
 function save() {
     let settings = {}
-    settings.api_key = document.getElementById('api-key').value.trim();
+    settings.api_key_openai = document.getElementById('api-key-openai').value.trim();
+    settings.api_key_anthropic = document.getElementById('api-key-anthropic').value.trim();
     settings.max_tokens = parseInt(document.getElementById('max-tokens').value.trim());
     settings.temperature = parseFloat(document.getElementById('temperature').value.trim());
     settings.model = document.querySelector('input[name="model-select"]:checked').value;

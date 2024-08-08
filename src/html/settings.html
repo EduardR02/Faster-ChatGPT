@@ -9,8 +9,12 @@
     <div class="container">
         <div class="setting_container">
             <div class="setting">
-                <label for="api-key" class="setting-label">Your OpenAI API key:</label>
-                <input type="text" id="api-key" class="std-input setting-input" placeholder="(Existing key won't be shown) Your OpenAI API key here...">
+                <label for="api-key-openai" class="setting-label">Your OpenAI API key:</label>
+                <input type="text" id="api-key-openai" class="std-input setting-input" placeholder="(Existing key won't be shown) Your OpenAI API key here...">
+            </div>
+            <div class="setting">
+                <label for="api-key-anthropic" class="setting-label">Your Anthropic API key:</label>
+                <input type="text" id="api-key-anthropic" class="std-input setting-input" placeholder="(Existing key won't be shown) Your Anthropic API key here...">
             </div>
             <div class="setting">
                 <label for="max-tokens" class="setting-label">Max tokens:</label>
@@ -45,6 +49,8 @@
                     <label class="setting-label">GPT-4o</label>
                     <input type="radio" id="gpt-4o-mini" name="model-select" value="gpt-4o-mini" class="checkbox">
                     <label class="setting-label">GPT-4o mini</label>
+                    <input type="radio" id="sonnet-3.5" name="model-select" value="sonnet-3.5" class="checkbox">
+                    <label class="setting-label">Sonnet 3.5</label>
                 </div>
             </div>
             <div class="setting">

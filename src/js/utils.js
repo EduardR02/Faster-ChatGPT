@@ -34,25 +34,6 @@ export function set_lifetime_tokens(newInputTokens, newOutputTokens) {
 }
 
 
-export function get_api_key() {
-    return new Promise((resolve, reject) => {
-        chrome.storage.sync.get('api_key', function(res) {
-            if (res.api_key === undefined || res.api_key === "") {
-                reject("api_key is undefined or empty");
-            }
-            else {
-                resolve(res.api_key);
-            }
-        });
-    });
-}
-
-
-export function set_api_key(new_api_key) {
-    chrome.storage.sync.set({api_key: new_api_key});
-}
-
-
 export function auto_resize_textfield_listener(element_id) {
     let inputField = document.getElementById(element_id);
 
@@ -88,10 +69,11 @@ export function set_defaults() {
         mode: ModeEnum.InstantPromptMode,
         lifetime_input_tokens: 0,
         lifetime_output_tokens: 0,
-        max_tokens: 380,
+        max_tokens: 500,
         temperature: 1.2,
         model : "gpt-4o-mini",
-        api_key: "",
+        api_key_openai: "",
+        api_key_anthropic: "",
         close_on_deselect: true,
         stream_response: true
     }
