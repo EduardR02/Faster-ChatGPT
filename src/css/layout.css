@@ -126,6 +126,41 @@ p {
   color: #ffffff;
 }
 
+.message-content {
+  color: #ffffff;
+  margin-left: 1em;
+}
+
+.assistant-content {
+  color: #ffffff;
+}
+
+.user-content {
+  color: #ffffff;
+}
+
+.system-content {
+  color: #e5c07b;
+}
+
+.message-prefix {
+  font-weight: bold;
+  display: block;
+  margin-bottom: 0.3em;
+}
+
+.assistant-prefix {
+  color: #ef596f;
+}
+
+.user-prefix {
+  color: #98c379;
+}
+
+.system-prefix {
+  color: #61afef;
+}
+
 .center {
   text-align: center;
 }

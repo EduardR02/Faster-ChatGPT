@@ -1,9 +1,9 @@
 import { ModeEnum, get_mode, set_lifetime_tokens,
     auto_resize_textfield_listener, update_textfield_height, is_on } from "./utils.js";
 
-let selection_string = "Selected text: "
-let user_prompt_string = "You: ";
-let assistant_prompt_string = "Assistant: ";
+let selection_string = "Selected text"
+let user_prompt_string = "You";
+let assistant_prompt_string = "Assistant";
 const RoleEnum = {system: "system", user: "user", assistant: "assistant"};
 let models = {"gpt-3.5-turbo": "gpt-3.5-turbo", "gpt-4": "gpt-4", "gpt-4-turbo": "gpt-4-turbo-preview", "gpt-4o": "gpt-4o", "gpt-4o-mini": "gpt-4o-mini"};
 let settings = {};
@@ -34,7 +34,7 @@ function init() {
 
 function when_new_selection(text, url) {
     remove_added_paragraphs();
-    document.getElementById('customText').innerText = selection_string + text;
+    append_to_chat_html(text, RoleEnum.system, selection_string);
     init_context(text, url).then(() => {
         get_mode(function(current_mode) {
             if (current_mode === ModeEnum.InstantPromptMode) {
@@ -62,9 +62,8 @@ function remove_added_paragraphs() {
     const contentDiv = document.getElementById('conversation');
     // Get a list of all <p> elements within the <div>
     const pElements = contentDiv.querySelectorAll('p');
-    // Start from the second <p> element and remove the rest, because first is the selection
-    for (let i = 1; i < pElements.length; i++) {
-        contentDiv.removeChild(pElements[i]);
+    for (const element of pElements) {
+        contentDiv.removeChild(element);
     }
 }
 
@@ -110,7 +109,7 @@ function api_call() {
 function get_reponse_no_stream(response) {
     response.json().then(data => {
         let response_text = data.choices[0].message.content;
-        append_to_chat_html(assistant_prompt_string + response_text);
+        append_to_chat_html(response_text, RoleEnum.assistant);
         append_context(response_text, RoleEnum.assistant);
         set_lifetime_tokens(data.usage.prompt_tokens, data.usage.completion_tokens);
     });
@@ -120,12 +119,8 @@ function get_reponse_no_stream(response) {
 // "stolen" from https://umaar.com/dev-tips/269-web-streams-openai/ and https://www.builder.io/blog/stream-ai-javascript
 async function response_stream(response_stream) {
     // right now you can't "stop generating", too lazy lol
-    let targetDiv = document.getElementById('conversation');
-    let inputField = document.getElementById('textInput');
-    let newParagraph = document.createElement('p');
+    let contentDiv = append_to_chat_html("", RoleEnum.assistant);
     let message = [];
-    targetDiv.insertBefore(newParagraph, inputField);
-    newParagraph.textContent = assistant_prompt_string;
 
     const reader = response_stream.body.getReader();
     const decoder = new TextDecoder("utf-8");
@@ -151,8 +146,7 @@ async function response_stream(response_stream) {
                             const content = parsed.choices[0].delta.content;
                             if (content) {
                                 message.push(content);
-                                newParagraph.innerHTML += content.replace(/\n/g, '<br>');
-                                targetDiv.scrollIntoView(false);
+                                contentDiv.innerHTML += content.replace(/\n/g, '<br>');
                             }
                         } else if (parsed.usage && parsed.usage.prompt_tokens) {
                             set_lifetime_tokens(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);  
@@ -220,28 +214,42 @@ function append_context(message, role_) {
 }
 
 
-function append_to_chat_html(text) {
-    // it is assumed that text is sanitized
+function append_to_chat_html(text, role, roleString = null) {
     let targetDiv = document.getElementById('conversation');
     let inputField = document.getElementById('textInput');
 
-    // handle new lines
     let newParagraph = document.createElement('p');
+    newParagraph.classList.add(role + "-message");
+
+    // Create and style the prefix span
+    let prefixSpan = document.createElement('span');
+    prefixSpan.classList.add('message-prefix', role + '-prefix');
+    if (!roleString)
+        roleString = role === RoleEnum.user ? user_prompt_string : assistant_prompt_string;
+    prefixSpan.textContent = roleString;
+    newParagraph.appendChild(prefixSpan);
+
+    // Create a container for the message content
+    let contentDiv = document.createElement('div');
+    contentDiv.classList.add('message-content', role + '-content');
+    newParagraph.appendChild(contentDiv);
+
+    // Handle new lines in the message content
     text.split('\n').forEach(function(line, index) {
         if (index > 0) {
-            newParagraph.appendChild(document.createElement('br'));
+            contentDiv.appendChild(document.createElement('br'));
         }
-        newParagraph.appendChild(document.createTextNode(line));
+        contentDiv.appendChild(document.createTextNode(line));
     });
   
-    // insert before input field
     targetDiv.insertBefore(newParagraph, inputField);
-    targetDiv.scrollIntoView(false);    // false scrolls to bottom of element, true to top
+    targetDiv.scrollIntoView(false);
+    return contentDiv;
 }
 
 
 function post_error_message_in_chat(error_occurred, error_message) {
-    append_to_chat_html("Error occurred here: " + error_occurred +  "\nHere is the error message:\n" + error_message);
+    append_to_chat_html("Error occurred here: " + error_occurred +  "\nHere is the error message:\n" + error_message, RoleEnum.system);
 }
 
 
@@ -255,7 +263,7 @@ function input_listener() {
             //let inputText = escapeHtml(inputField.value);
             let inputText = inputField.value;
             if (inputText.trim().length !== 0) {
-                append_to_chat_html(user_prompt_string + inputText);
+                append_to_chat_html(inputText, RoleEnum.user);
                 append_context(inputText, RoleEnum.user);
                 if (Object.keys(settings).length === 0) {
                     // if the panel is just opened with no selection, have to init first
