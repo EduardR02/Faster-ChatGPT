@@ -242,10 +242,10 @@ function stream_parse(data, message, contentDiv, is_openai) {
                 break;
 
             case 'message_start':
-                if (parsed.usage && parsed.usage.input_tokens) {
+                if (parsed.message && parsed.message.usage && parsed.message.usage.input_tokens) {
                     // for some reason api returns output tokens in the beginning also, but only like 1 or 2 (in docs)
                     // so maybe it counts the first block separately or smth idk
-                    set_lifetime_tokens(parsed.usage.input_tokens, parsed.usage.output_tokens);
+                    set_lifetime_tokens(parsed.message.usage.input_tokens, parsed.message.usage.output_tokens);
                 }
                 break;
 
