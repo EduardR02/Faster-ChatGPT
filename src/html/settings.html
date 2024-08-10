@@ -55,6 +55,12 @@
             </div>
             <div class="setting">
                 <label for="customize-prompt" class="setting-label">Customize your prompt:</label>
+                <div class="dummy">
+                    <input type="radio" id="selection-prompt" name="prompt-select" value="selection_prompt", class="checkbox">
+                    <label class="setting-label">Selection Prompt</label>
+                    <input type="radio" id="chat-prompt" name="prompt-select" value="chat_prompt" class="checkbox">
+                    <label class="setting-label">Chat Prompt</label>
+                </div>
             </div>
         </div>
         <textarea type="text" id="customize-prompt" placeholder="Type your prompt here..." class="std-input setting-input"></textarea>

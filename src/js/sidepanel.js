@@ -2,8 +2,7 @@ import { ModeEnum, get_mode, set_lifetime_tokens,
     auto_resize_textfield_listener, update_textfield_height, is_on } from "./utils.js";
 
 let selection_string = "Selected text"
-let user_prompt_string = "You";
-let assistant_prompt_string = "Assistant";
+const ChatRoleDict = {user: "You", assistant: "Assistant", system: "System"};
 const RoleEnum = {system: "system", user: "user", assistant: "assistant"};
 let openai_models = {"gpt-3.5-turbo": "gpt-3.5-turbo", "gpt-4": "gpt-4", "gpt-4-turbo": "gpt-4-turbo-preview", "gpt-4o": "gpt-4o", "gpt-4o-mini": "gpt-4o-mini"};
 let anthropic_models = {"sonnet-3.5": "claude-3-5-sonnet-20240620"}
@@ -22,10 +21,15 @@ function init() {
     // Panel is now fully loaded, you can initialize your message listeners
     // and other functionality here.
     input_listener();
+    init_settings();
     auto_resize_textfield_listener("textInput");
     chrome.runtime.onMessage.addListener(function(msg){
         if (msg.type === 'new_selection') {
             when_new_selection(msg.text, msg.url);
+        }
+        if (msg.type === 'new_chat') {
+            // popup will only send this if sidepanel is closed beforehand. We don't want to override an ongoing session (and won't be handled here)
+            when_new_chat();
         }
     });
     // Signal to the background script that we are ready
@@ -33,10 +37,10 @@ function init() {
 }
 
 
-function when_new_selection(text, url) {
+function when_new_selection(text_, url_) {
     remove_added_paragraphs();
-    append_to_chat_html(text, RoleEnum.system, selection_string);
-    init_context(text, url).then(() => {
+    append_to_chat_html(text_, RoleEnum.system, selection_string);
+    init_prompt({mode: "selection", text: text_, url: url_}).then(() => {
         get_mode(function(current_mode) {
             if (current_mode === ModeEnum.InstantPromptMode) {
                 api_call();
@@ -46,12 +50,22 @@ function when_new_selection(text, url) {
 }
 
 
+function when_new_chat() {
+    get_mode(function(current_mode) {
+        if (current_mode === ModeEnum.InstantPromptMode) {
+            post_warning_in_chat("Instant prompt mode does not make sense in chat mode and will be ignored.");
+        }
+        init_prompt({mode: "chat"});
+    });
+}
+
+
 function update_settings(changes, namespace) {
     if (namespace !== "sync") {
         return;
     }
     for (let change in changes) {
-        if (change === "lifetime_tokens" || change === "mode") {
+        if (!(change in settings) || change === "lifetime_tokens" || change === "mode") {
             continue;
         }
         settings[change] = changes[change].newValue;
@@ -268,53 +282,49 @@ function stream_parse(data, message, contentDiv, is_openai) {
 
 function add_content_streaming(content, message, contentDiv) {
     message.push(content);
-    contentDiv.innerHTML += content.replace(/\n/g, '<br>');
+    contentDiv.innerHTML += content.replaceAll("\n", '<br>');
 }
 
 
-function init_context(selection, url) {
-    // init prompt
-    let prompt_promise =  new Promise((resolve, reject) => {
-        chrome.storage.local.get("prompt")
+function init_prompt(context) {
+    let prompt_string = context.mode + "_prompt";
+
+    return new Promise((resolve, reject) => {
+        chrome.storage.local.get(prompt_string)
             .then(res => {
-                // this is to "possibly" improve prompting by surrounding the selection with quotes
-                let selectionWithQuotes = '"""[' + selection + ']"""';
-                let url_with_quotes = '"""[' + url + ']"""';
-                // current prompt states that both in triple quotes, with url preceding selection
-                let concat = res.prompt + "\n" + url_with_quotes + "\n" + selectionWithQuotes;
                 messages = [];
-                append_context(concat, RoleEnum.system);
+                let prompt = res[prompt_string];
+                if (context.mode === "selection") {
+                    let selectionWithQuotes = '"""[' + context.selection + ']"""';
+                    let url_with_quotes = '"""[' + context.url + ']"""';
+                    prompt = prompt + "\n" + url_with_quotes + "\n" + selectionWithQuotes;
+                }
+                append_context(prompt, RoleEnum.system);
                 resolve();
             })
             .catch(error => {
-                post_error_message_in_chat("loading prompt_file", error.message);
+                post_error_message_in_chat(`loading ${context.mode} prompt file`, error.message);
                 reject(error);
             });
     });
-    // init settings
-    let settings_promise = new Promise((resolve, reject) => {
-        chrome.storage.sync.get(['api_key_openai', 'api_key_anthropic', 'max_tokens', 'temperature', 'model', 'stream_response'])
-        .then(res => {
-            settings.api_key_openai = res.api_key_openai;
-            settings.api_key_anthropic = res.api_key_anthropic;
-            settings.max_tokens = res.max_tokens;
-            settings.temperature = res.temperature;
-            settings.model = res.model;
-            settings.stream_response = res.stream_response;
-            chrome.storage.onChanged.addListener(update_settings);
-            resolve();
-            if (settings.api_key_openai === "" && settings.api_key_anthropic === "") {
-                post_error_message_in_chat("api keys", "Please enter an api key in the settings, both are currently empty.");
-                reject("api keys not set");
-            }
-        })
-        .catch(error => {reject(error)});
-    });
-    return Promise.all([prompt_promise, settings_promise]);
 }
 
 
-
+function init_settings() {
+    chrome.storage.sync.get(['api_key_openai', 'api_key_anthropic', 'max_tokens', 'temperature', 'model', 'stream_response'])
+    .then(res => {
+        settings.api_key_openai = res.api_key_openai;
+        settings.api_key_anthropic = res.api_key_anthropic;
+        settings.max_tokens = res.max_tokens;
+        settings.temperature = res.temperature;
+        settings.model = res.model;
+        settings.stream_response = res.stream_response;
+        chrome.storage.onChanged.addListener(update_settings);
+        if (settings.api_key_openai === "" && settings.api_key_anthropic === "") {
+            post_error_message_in_chat("api keys", "Please enter an api key in the settings, both are currently empty.");
+        }
+    });
+}
 
 
 function append_context(message, role_) {
@@ -334,7 +344,7 @@ function append_to_chat_html(text, role, roleString = null) {
     let prefixSpan = document.createElement('span');
     prefixSpan.classList.add('message-prefix', role + '-prefix');
     if (!roleString)
-        roleString = role === RoleEnum.user ? user_prompt_string : assistant_prompt_string;
+        roleString = ChatRoleDict[role];
     prefixSpan.textContent = roleString;
     newParagraph.appendChild(prefixSpan);
 
@@ -361,6 +371,10 @@ function post_error_message_in_chat(error_occurred, error_message) {
     append_to_chat_html("Error occurred here: " + error_occurred +  "\nHere is the error message:\n" + error_message, RoleEnum.system);
 }
 
+function post_warning_in_chat(warning_message) {
+    append_to_chat_html("Warning: " + warning_message, RoleEnum.system);
+}
+
 
 function input_listener() {
     let inputField = document.getElementById('textInput');
@@ -375,8 +389,8 @@ function input_listener() {
                 append_to_chat_html(inputText, RoleEnum.user);
                 append_context(inputText, RoleEnum.user);
                 if (Object.keys(settings).length === 0) {
-                    // if the panel is just opened with no selection, have to init first
-                    init_context("No context", "No URL").then(() => {
+                    // if panel is manually opened without selection
+                    init_prompt({mode: "chat"}).then(() => {
                         get_mode(function(current_mode) {
                             if (is_on(current_mode)) {
                                 append_context(inputText, RoleEnum.user);

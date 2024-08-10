@@ -17,6 +17,9 @@ function run_on_init() {
 		chrome.runtime.openOptionsPage();
 	});
 
+	let button3 = document.getElementById("buttonChat");
+	button3.addEventListener("click", open_side_panel);
+
 	let tokensValue = document.getElementById("tokensValue");
     get_lifetime_tokens(function(res) {
         tokensValue.innerText = res.input + " | " + res.output;
@@ -28,6 +31,24 @@ function run_on_init() {
 	});
 }
 
+
+function open_side_panel() {
+    let isModeOn = new Promise(resolve => get_mode(mode => resolve(is_on(mode))));
+    let isSidePanelClosed = new Promise(resolve => 
+        chrome.runtime.sendMessage({ type: "is_sidepanel_open" }, response => resolve(!response.isOpen))
+    );
+
+    Promise.all([isModeOn, isSidePanelClosed])
+        .then(([modeOn, panelClosed]) => {
+            if (modeOn && panelClosed) {
+				(async () => {
+					let response = await chrome.runtime.sendMessage({ type: "open_side_panel" });
+					response = await chrome.runtime.sendMessage({ type: "new_chat" });
+					window.close();
+				})();
+            }
+        });
+}
 
 function toggle_mode(callback) {
 	chrome.storage.sync.get('mode', function(res) {

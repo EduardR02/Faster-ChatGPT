@@ -7,16 +7,40 @@ init()
 
 
 function init() {
-    textarea_setup();
     init_values();
     let saveButton = document.getElementById('buttonSave');
     saveButton.addEventListener('click', function() {
         save();
     });
+
+    let promptSelectButtons = document.querySelectorAll('input[name="prompt-select"]');
+    promptSelectButtons.forEach(radio => {
+        radio.addEventListener('change', function() {
+            if (this.checked) {
+                const prompt_string = this.value;
+                textarea_update(prompt_string);
+            }
+        });
+    });
 }
 
 
 function save() {
+    save_settings();
+    save_prompt();
+}
+
+
+function save_prompt() {
+    let text = document.getElementById('customize-prompt').value.trim();
+    let prompt_string = document.querySelector('input[name="prompt-select"]:checked').value;
+    if (text !== existing_settings.prompt && text !== "") {
+        chrome.storage.local.set({[prompt_string]: text});
+    }
+}
+
+
+function save_settings() {
     let settings = {}
     settings.api_key_openai = document.getElementById('api-key-openai').value.trim();
     settings.api_key_anthropic = document.getElementById('api-key-anthropic').value.trim();
@@ -35,10 +59,6 @@ function save() {
         }
     }
     chrome.storage.sync.set(settings);
-    let text = document.getElementById('customize-prompt').value.trim();
-    if (text !== existing_settings.prompt && text !== "") {
-        chrome.storage.local.set({prompt: text});
-    }
 }
 
 
@@ -51,16 +71,25 @@ function init_values() {
         document.getElementById('stream-response').checked = res.stream_response;
         existing_settings = res;
     });
+    textarea_setup();
 }
 
 
-function textarea_setup() {
+function textarea_update(prompt_string) {
     let textarea = document.getElementById('customize-prompt');
-    auto_resize_textfield_listener('customize-prompt');
-    chrome.storage.local.get("prompt").then((text) => {
-        textarea.value = text.prompt;
+    chrome.storage.local.get(prompt_string).then((result) => {
+        let text = result[prompt_string] || '';
+        textarea.value = text;
         update_textfield_height(textarea);
-        existing_settings.prompt = text.prompt;
+        existing_settings.prompt = text;
     });
+}
+
+function textarea_setup() {
+    let selection_radio = document.getElementById("selection-prompt");
+    selection_radio.checked = true;
+    
+    auto_resize_textfield_listener('customize-prompt');
+    textarea_update(selection_radio.value);
 }
 

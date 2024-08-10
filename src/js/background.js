@@ -13,7 +13,8 @@ chrome.runtime.onInstalled.addListener(function(details) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'open_side_panel') {
-        openSidePanelAndSendMessage(msg, sender);
+        openSidePanel(sender).then(() => {sendResponse("dummy");});
+        return true;
     }
     else if (msg.type === 'is_sidepanel_open') {
         isSidePanelOpen().then(isOpenCurr => {sendResponse({ isOpen: isOpenCurr });});
@@ -34,17 +35,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 
-async function openSidePanelAndSendMessage(msg, sender) {
+async function openSidePanel(sender) {
     // this is necessary. If enabled was set to false, it won't open without
     // setting it to true first again, meaning .open() doesn't implicitly set it to true
     chrome.sidePanel.setOptions({
         path: sidepanel_path,
         enabled: true
     });
-    // use windowid instead of tabid so you can switch tabs and ithe context is preserved
-    chrome.sidePanel.open({ windowId: sender.tab.windowId });
+    if (sender && sender.tab) {
+        chrome.sidePanel.open({ windowId: sender.tab.windowId });
+    }
+    else {
+        chrome.windows.getLastFocused((window) => {
+            chrome.sidePanel.open({ windowId: window.id });
+        });
+    }
 
-    await new Promise(resolve => {
+    return new Promise(resolve => {
         chrome.runtime.onMessage.addListener(function listener(message) {
             if (message.type === "sidepanel_ready") {
                 chrome.runtime.onMessage.removeListener(listener);
@@ -52,7 +59,6 @@ async function openSidePanelAndSendMessage(msg, sender) {
             }
         });
     });
-    chrome.runtime.sendMessage({type: "new_selection", text: msg.text, url: msg.url});
 }
 
 

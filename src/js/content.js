@@ -42,9 +42,12 @@ function listener(event) {
     if (selection.length > 0 && selection !== previous_selection && event.ctrlKey) {
         (async () => {
             let current_url = window.location.href;
-            const response = await chrome.runtime.sendMessage({ type: "is_sidepanel_open" });
+            let response = await chrome.runtime.sendMessage({ type: "is_sidepanel_open" });
             if (!response.isOpen) {
-                chrome.runtime.sendMessage({ type: "open_side_panel", text: selection, url: current_url });
+                (async () => {
+					response = await chrome.runtime.sendMessage({ type: "open_side_panel" });
+					response = await chrome.runtime.sendMessage({ type: "new_selection", text: selection, url: current_url });
+				})();
             }
             else {
                 chrome.runtime.sendMessage({ type: "new_selection", text: selection, url: current_url });
