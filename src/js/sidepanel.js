@@ -295,7 +295,7 @@ function init_prompt(context) {
                 messages = [];
                 let prompt = res[prompt_string];
                 if (context.mode === "selection") {
-                    let selectionWithQuotes = '"""[' + context.selection + ']"""';
+                    let selectionWithQuotes = '"""[' + context.text + ']"""';
                     let url_with_quotes = '"""[' + context.url + ']"""';
                     prompt = prompt + "\n" + url_with_quotes + "\n" + selectionWithQuotes;
                 }
