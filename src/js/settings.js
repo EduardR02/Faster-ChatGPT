@@ -2,6 +2,14 @@ import {auto_resize_textfield_listener, update_textfield_height} from "./utils.j
 
 
 let existing_settings = {};
+const apiProviders = ['anthropic', 'openai', 'gemini'];
+const apiDisplayNames = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  gemini: 'Gemini'
+};
+
+let currentApiIndex = 0;
 
 init()
 
@@ -12,7 +20,10 @@ function init() {
     saveButton.addEventListener('click', function() {
         save();
     });
-
+    let apiCycleButton = document.getElementById('button-api-cycle');
+    apiCycleButton.addEventListener('click', function() {
+        cycle_api_key_input();
+    });
     let promptSelectButtons = document.querySelectorAll('input[name="prompt-select"]');
     promptSelectButtons.forEach(radio => {
         radio.addEventListener('change', function() {
@@ -27,7 +38,24 @@ function init() {
 
 function save() {
     save_settings();
+    save_api_key();
     save_prompt();
+}
+
+
+function cycle_api_key_input() {
+    currentApiIndex = (currentApiIndex + 1) % apiProviders.length;
+    set_api_label();
+}
+
+
+function set_api_label() {
+    let input_field = document.getElementById('api-key-input');
+    let label = input_field.labels[0];
+    label.textContent = `Your ${apiDisplayNames[apiProviders[currentApiIndex]]} API Key:`;
+    let placeholder = existing_settings.api_keys[apiProviders[currentApiIndex]] ? "Existing key (hidden)" : "Enter your API key here";
+    input_field.placeholder = placeholder;
+    input_field.value = "";
 }
 
 
@@ -40,10 +68,19 @@ function save_prompt() {
 }
 
 
+function save_api_key() {
+    let input_field = document.getElementById('api-key-input');
+    let key = input_field.value.trim();
+    if (key !== "" && key !== existing_settings.api_keys[apiProviders[currentApiIndex]]) {
+        let api_keys = existing_settings.api_keys;
+        api_keys[apiProviders[currentApiIndex]] = key;
+        chrome.storage.sync.set({api_keys: api_keys});
+    }
+}
+
+
 function save_settings() {
-    let settings = {}
-    settings.api_key_openai = document.getElementById('api-key-openai').value.trim();
-    settings.api_key_anthropic = document.getElementById('api-key-anthropic').value.trim();
+    let settings = {};
     settings.max_tokens = parseInt(document.getElementById('max-tokens').value.trim());
     settings.temperature = parseFloat(document.getElementById('temperature').value.trim());
     settings.model = document.querySelector('input[name="model-select"]:checked').value;
@@ -63,13 +100,15 @@ function save_settings() {
 
 
 function init_values() {
-    chrome.storage.sync.get(['max_tokens', 'temperature', 'model', 'close_on_deselect', 'stream_response'], function(res) {
+    chrome.storage.sync.get(['api_keys', 'max_tokens', 'temperature', 'model', 'close_on_deselect', 'stream_response'], function(res) {
         document.getElementById('max-tokens').value = res.max_tokens;
         document.getElementById('temperature').value = res.temperature;
         document.getElementById(res.model).checked = true;
         document.getElementById('close-on-deselect').checked = res.close_on_deselect;
         document.getElementById('stream-response').checked = res.stream_response;
+        res.api_keys = res.api_keys || {};
         existing_settings = res;
+        set_api_label();
     });
     textarea_setup();
 }

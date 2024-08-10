@@ -9,12 +9,11 @@
     <div class="container">
         <div class="setting_container">
             <div class="setting">
-                <label for="api-key-openai" class="setting-label">Your OpenAI API key:</label>
-                <input type="text" id="api-key-openai" class="std-input setting-input" placeholder="(Existing key won't be shown) Your OpenAI API key here...">
-            </div>
-            <div class="setting">
-                <label for="api-key-anthropic" class="setting-label">Your Anthropic API key:</label>
-                <input type="text" id="api-key-anthropic" class="std-input setting-input" placeholder="(Existing key won't be shown) Your Anthropic API key here...">
+                <label for="api-key-input" class="setting-label">Your API key:</label>
+                <div class="api-row-align">
+                    <input type="text" id="api-key-input" class="std-input setting-input" placeholder="Enter your API key here">
+                    <button id="button-api-cycle" class="button api-button"><span>Switch </span></button>
+                </div>
             </div>
             <div class="setting">
                 <label for="max-tokens" class="setting-label">Max tokens:</label>
@@ -51,6 +50,13 @@
                     <label class="setting-label">GPT-4o mini</label>
                     <input type="radio" id="sonnet-3.5" name="model-select" value="sonnet-3.5" class="checkbox">
                     <label class="setting-label">Sonnet 3.5</label>
+                </div>
+            </div>
+            <div class="setting">
+                <label class="setting-label"></label>
+                <div class="dummy">
+                    <input type="radio" id="gemini-1.5-pro-exp" name="model-select" value="gemini-1.5-pro-exp" class="checkbox">
+                    <label class="setting-label">Gemini 1.5 Pro Exp</label>
                 </div>
             </div>
             <div class="setting">

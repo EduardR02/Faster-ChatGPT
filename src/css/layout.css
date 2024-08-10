@@ -44,7 +44,7 @@ body {
 }
 
 .setting_container {
-  width:100%;
+  width: 100%;
   display: grid;
   grid-template-columns: minmax(auto, max-content) minmax(0, 1fr);
   align-items:center;
@@ -104,8 +104,19 @@ a:visited {
 
 .dummy {
   display: flex;
+  align-items: left;
+  width: fit-content;
+}
+
+.api-row-align {
+  display: flex;
   align-items: center;
-  width: max-content;
+  width: auto;
+}
+
+.api-button {
+  margin-left: 10px;
+  min-width: max-content;
 }
 
 .other-checkbox-align {

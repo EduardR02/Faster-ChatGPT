@@ -72,8 +72,7 @@ export function set_defaults() {
         max_tokens: 500,
         temperature: 1.2,
         model : "gpt-4o-mini",
-        api_key_openai: "",
-        api_key_anthropic: "",
+        api_keys: {},
         close_on_deselect: true,
         stream_response: true
     }
