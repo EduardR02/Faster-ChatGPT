@@ -261,11 +261,11 @@ function get_response_data_no_stream(data) {
 // "stolen" from https://umaar.com/dev-tips/269-web-streams-openai/ and https://www.builder.io/blog/stream-ai-javascript
 async function response_stream(response_stream) {
     // right now you can't "stop generating", too lazy lol
-    let contentDiv = append_to_chat_html("", RoleEnum.assistant);
+    let [contentDiv, conversationDiv] = append_to_chat_html("", RoleEnum.assistant);
     let message = [];
     let api_provider = settings.model in openai_models ? "openai" : settings.model in anthropic_models ? "anthropic" : "gemini";
     let input_tokens = 0, output_tokens = 0;
-    let streamWriter = api_provider === "gemini" ? new StreamWriter(contentDiv, 2000) : null;
+    let streamWriter = api_provider === "gemini" ? new StreamWriter(contentDiv, conversationDiv, 2000) : null;
 
     const reader = response_stream.body.getReader();
     const decoder = new TextDecoder("utf-8");
@@ -286,7 +286,7 @@ async function response_stream(response_stream) {
                     if (data === '[DONE]') continue;
 
                     try {
-                        let [in_tok, out_tok] = stream_parse(data, message, contentDiv, api_provider, streamWriter);
+                        let [in_tok, out_tok] = stream_parse(data, message, contentDiv, conversationDiv, api_provider, streamWriter);
                         if (api_provider === "gemini") {
                             input_tokens = Math.max(input_tokens, in_tok);
                             output_tokens = Math.max(output_tokens, out_tok);
@@ -306,14 +306,14 @@ async function response_stream(response_stream) {
     append_context(message.join(''), RoleEnum.assistant);
 }
 
-function stream_parse(data, message, contentDiv, api_provider, streamWriter) {
+function stream_parse(data, message, contentDiv, conversationDiv, api_provider, streamWriter) {
     const parsed = JSON.parse(data);
     switch (api_provider) {
         case "openai":
             if (parsed.choices && parsed.choices.length > 0) {
                 const content = parsed.choices[0].delta.content;
                 if (content) {
-                    add_content_streaming(content, message, contentDiv);
+                    add_content_streaming(content, message, contentDiv, conversationDiv);
                 }
             } else if (parsed.usage && parsed.usage.prompt_tokens) {
                 set_lifetime_tokens(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);  
@@ -326,7 +326,7 @@ function stream_parse(data, message, contentDiv, api_provider, streamWriter) {
                 case 'content_block_delta':
                     const content = parsed.delta.text;
                     if (content) {
-                        add_content_streaming(content, message, contentDiv);
+                        add_content_streaming(content, message, contentDiv, conversationDiv);
                     }
                     break;
     
@@ -373,10 +373,10 @@ function stream_parse(data, message, contentDiv, api_provider, streamWriter) {
     return [0, 0];
 }
 
-function add_content_streaming(content, message, contentDiv) {
+function add_content_streaming(content, message, contentDiv, conversationDiv) {
     message.push(content);
     contentDiv.textContent += content;
-    contentDiv.scrollIntoView(false);
+    conversationDiv.scrollIntoView(false);
 }
 
 
@@ -452,7 +452,7 @@ function append_to_chat_html(text, role, roleString = null) {
   
     targetDiv.insertBefore(newParagraph, inputField);
     targetDiv.scrollIntoView(false);
-    return contentDiv;
+    return [contentDiv, targetDiv];
 }
 
 

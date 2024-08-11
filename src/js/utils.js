@@ -89,8 +89,9 @@ export function set_defaults() {
 
 
 export class StreamWriter {
-    constructor(contentDiv, wordsPerMinute = 200) {
+    constructor(contentDiv, conversationDiv, wordsPerMinute = 200) {
         this.contentDiv = contentDiv;
+        this.conversationDiv = conversationDiv;
         this.contentQueue = [];
         this.isProcessing = false;
         this.delay = 12000 / wordsPerMinute;    // wpm to ms per char conversion
@@ -119,7 +120,7 @@ export class StreamWriter {
                 const chunk = this.contentQueue.splice(0, charsToProcess);
 
                 this.contentDiv.textContent += chunk.join('');
-                this.contentDiv.scrollIntoView(false);
+                this.conversationDiv.scrollIntoView(false);
 
                 this.lastFrameTime = currentTime;
                 this.processCharacters();
