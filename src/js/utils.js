@@ -88,4 +88,47 @@ export function set_defaults() {
 }
 
 
+export class StreamWriter {
+    constructor(contentDiv, wordsPerMinute = 200) {
+        this.contentDiv = contentDiv;
+        this.contentQueue = [];
+        this.isProcessing = false;
+        this.delay = 12000 / wordsPerMinute;    // wpm to ms per char conversion
+        this.accumulatedChars = 0;
+        this.lastFrameTime = 0;
+    }
+
+    processContent(content) {
+        this.contentQueue = this.contentQueue.concat(content.split(""));
+
+        if (!this.isProcessing) {
+            this.isProcessing = true;
+            this.processCharacters();
+        }
+    }
+
+    processCharacters() {
+        requestAnimationFrame((currentTime) => {
+            if (this.contentQueue.length > 0) {
+                const elapsed = currentTime - this.lastFrameTime;
+
+                this.accumulatedChars += elapsed / this.delay;
+                const charsToProcess = Math.floor(this.accumulatedChars);
+                this.accumulatedChars -= charsToProcess;
+
+                const chunk = this.contentQueue.splice(0, charsToProcess);
+
+                this.contentDiv.textContent += chunk.join('');
+                this.contentDiv.scrollIntoView(false);
+
+                this.lastFrameTime = currentTime;
+                this.processCharacters();
+            } else {
+                this.isProcessing = false;
+            }
+        });
+    }
+}
+
+
 export const ModeEnum = {"InstantPromptMode": 0, "PromptMode": 1, "Off": 2};

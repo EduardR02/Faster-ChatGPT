@@ -1,11 +1,11 @@
-import { ModeEnum, get_mode, set_lifetime_tokens,
+import { StreamWriter, ModeEnum, get_mode, set_lifetime_tokens,
     auto_resize_textfield_listener, update_textfield_height, is_on } from "./utils.js";
 
-let selection_string = "Selected text"
 const ChatRoleDict = {user: "You", assistant: "Assistant", system: "System"};
 const RoleEnum = {system: "system", user: "user", assistant: "assistant"};
 let openai_models = {"gpt-3.5-turbo": "gpt-3.5-turbo", "gpt-4": "gpt-4", "gpt-4-turbo": "gpt-4-turbo-preview", "gpt-4o": "gpt-4o", "gpt-4o-mini": "gpt-4o-mini"};
-let anthropic_models = {"sonnet-3.5": "claude-3-5-sonnet-20240620"}
+let anthropic_models = {"sonnet-3.5": "claude-3-5-sonnet-20240620"};
+let gemini_models = {"gemini-1.5-pro-exp": "gemini-1.5-pro-exp-0801"};
 let settings = {};
 // stores the current conversation
 let messages = [];
@@ -39,7 +39,7 @@ function init() {
 
 function when_new_selection(text_, url_) {
     remove_added_paragraphs();
-    append_to_chat_html(text_, RoleEnum.system, selection_string);
+    append_to_chat_html(text_, RoleEnum.system, "Selected text");
     init_prompt({mode: "selection", text: text_, url: url_}).then(() => {
         get_mode(function(current_mode) {
             if (current_mode === ModeEnum.InstantPromptMode) {
@@ -109,6 +109,9 @@ function create_api_request() {
     else if (settings.model in anthropic_models) {
         return create_anthropic_request();
     }
+    else if (settings.model in gemini_models) {
+        return create_gemini_request();
+    }
     else {
         post_error_message_in_chat("model", "Model not found");
     }
@@ -116,15 +119,15 @@ function create_api_request() {
 
 function create_anthropic_request() {
     let model = anthropic_models[settings.model];
-    if (settings.api_key_anthropic === "") {
-        post_error_message_in_chat("Anthropic api key", "Anthropic api key is empty, switch to OpenAI or enter a key in the settings");
+    if (!("anthropic" in settings.api_keys) || settings.api_keys.anthropic === "") {
+        post_error_message_in_chat("Anthropic api key", "Anthropic api key is empty, switch to another model or enter a key in the settings");
     }
     let requestOptions = {
         method: 'POST',
         credentials: 'omit',
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': settings.api_key_anthropic,
+            'x-api-key': settings.api_keys.anthropic,
             'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
@@ -141,15 +144,15 @@ function create_anthropic_request() {
 
 function create_openai_request() {
     let model = openai_models[settings.model];
-    if (settings.api_key_openai === "") {
-        post_error_message_in_chat("OpenAI api key", "OpenAI api key is empty, switch to Anthropic or enter a key in the settings.");
+    if (!("openai" in settings.api_keys) || settings.api_keys.openai === "") {
+        post_error_message_in_chat("OpenAI api key", "OpenAI api key is empty, switch to another model or enter a key in the settings.");
     }
     let requestOptions = {
         method: 'POST',
         credentials: 'omit',
         headers: {
             'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + settings.api_key_openai
+            'Authorization': 'Bearer ' + settings.api_keys.openai
         },
         body: JSON.stringify({
             "model": model,
@@ -165,6 +168,62 @@ function create_openai_request() {
         })
     };
     return ['https://api.openai.com/v1/chat/completions', requestOptions];
+}
+
+
+function create_gemini_request() {
+    if (!("gemini" in settings.api_keys) || settings.api_keys.gemini === "") {
+        post_error_message_in_chat("Gemini API Key", "Gemini API key is empty, switch to another model or enter a key in the settings.");
+    }
+    // gemini either has "model" or "user", even the system prompt is classified as "user"
+    let mapped_messages = messages.map((message) => ({
+        role: message.role === "assistant" ? "model" : "user",
+        parts: [{text: message.content}]
+    }));
+    let requestOptions = {
+        method: 'POST',
+        credentials: 'omit',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            "contents": mapped_messages.slice(1),
+            "systemInstruction": mapped_messages[0],
+            "safetySettings": get_gemini_safety_settings(),
+            "generationConfig": {
+                "temperature": settings.temperature,
+                "maxOutputTokens": settings.max_tokens,
+                "responseMimeType": "text/plain"
+            },
+            
+        })
+    };
+    let responseTypeString = settings.stream_response ? "streamGenerateContent" : "generateContent";
+    let whenStream = settings.stream_response ? "alt=sse&" : "";
+    let requestLink = `https://generativelanguage.googleapis.com/v1beta/models/${gemini_models[settings.model]}:${responseTypeString}?${whenStream}key=${settings.api_keys.gemini}`;
+    return [requestLink, requestOptions];
+}
+
+
+function get_gemini_safety_settings() {
+    return [
+        {
+            "category": "HARM_CATEGORY_HARASSMENT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_HATE_SPEECH",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "threshold": "BLOCK_NONE",
+        },
+        {
+            "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "threshold": "BLOCK_NONE",
+        },
+    ];
 }
 
 
@@ -185,10 +244,15 @@ function get_response_data_no_stream(data) {
         input_tokens = data.usage.prompt_tokens;
         output_tokens = data.usage.completion_tokens;
     }
-    else {
+    else if (settings.model in anthropic_models) {
         response_text = data.content[0].text;
         input_tokens = data.usage.input_tokens;
         output_tokens = data.usage.output_tokens;
+    }
+    else if (settings.model in gemini_models) {
+        response_text = data.candidates[0].content.parts[0].text;
+        input_tokens = data.usageMetadata.promptTokenCount;
+        output_tokens = data.usageMetadata.candidatesTokenCount;
     }
     return [response_text, input_tokens, output_tokens];
 }
@@ -199,7 +263,9 @@ async function response_stream(response_stream) {
     // right now you can't "stop generating", too lazy lol
     let contentDiv = append_to_chat_html("", RoleEnum.assistant);
     let message = [];
-    let is_openai = settings.model in openai_models;
+    let api_provider = settings.model in openai_models ? "openai" : settings.model in anthropic_models ? "anthropic" : "gemini";
+    let input_tokens = 0, output_tokens = 0;
+    let streamWriter = api_provider === "gemini" ? new StreamWriter(contentDiv, 2000) : null;
 
     const reader = response_stream.body.getReader();
     const decoder = new TextDecoder("utf-8");
@@ -220,7 +286,11 @@ async function response_stream(response_stream) {
                     if (data === '[DONE]') continue;
 
                     try {
-                        stream_parse(data, message, contentDiv, is_openai);
+                        let [in_tok, out_tok] = stream_parse(data, message, contentDiv, api_provider, streamWriter);
+                        if (api_provider === "gemini") {
+                            input_tokens = Math.max(input_tokens, in_tok);
+                            output_tokens = Math.max(output_tokens, out_tok);
+                        }
                     } catch (err) {
                         post_error_message_in_chat('Error parsing JSON:', err);
                     }
@@ -230,59 +300,83 @@ async function response_stream(response_stream) {
     } catch (error) {
         post_error_message_in_chat("API request error (likely incorrect key)", error.message);
     }
+    if (api_provider === "gemini") {
+        set_lifetime_tokens(input_tokens, output_tokens);
+    }
     append_context(message.join(''), RoleEnum.assistant);
 }
 
-function stream_parse(data, message, contentDiv, is_openai) {
+function stream_parse(data, message, contentDiv, api_provider, streamWriter) {
     const parsed = JSON.parse(data);
-    if (is_openai) {
-        if (parsed.choices && parsed.choices.length > 0) {
-            const content = parsed.choices[0].delta.content;
-            if (content) {
-                add_content_streaming(content, message, contentDiv);
-            }
-        } else if (parsed.usage && parsed.usage.prompt_tokens) {
-            set_lifetime_tokens(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);  
-        }
-    }
-    else {
-        // Anthropic specific streaming handling
-        switch (parsed.type) {
-            case 'content_block_delta':
-                const content = parsed.delta.text;
+    switch (api_provider) {
+        case "openai":
+            if (parsed.choices && parsed.choices.length > 0) {
+                const content = parsed.choices[0].delta.content;
                 if (content) {
                     add_content_streaming(content, message, contentDiv);
                 }
-                break;
+            } else if (parsed.usage && parsed.usage.prompt_tokens) {
+                set_lifetime_tokens(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);  
+            }
+            break;
 
-            case 'message_start':
-                if (parsed.message && parsed.message.usage && parsed.message.usage.input_tokens) {
-                    // for some reason api returns output tokens in the beginning also, but only like 1 or 2 (in docs)
-                    // so maybe it counts the first block separately or smth idk
-                    set_lifetime_tokens(parsed.message.usage.input_tokens, parsed.message.usage.output_tokens);
+        case "anthropic":
+            // Anthropic specific streaming handling
+            switch (parsed.type) {
+                case 'content_block_delta':
+                    const content = parsed.delta.text;
+                    if (content) {
+                        add_content_streaming(content, message, contentDiv);
+                    }
+                    break;
+    
+                case 'message_start':
+                    if (parsed.message && parsed.message.usage && parsed.message.usage.input_tokens) {
+                        // for some reason api returns output tokens in the beginning also, but only like 1 or 2 (in docs)
+                        // so maybe it counts the first block separately or smth idk
+                        set_lifetime_tokens(parsed.message.usage.input_tokens, parsed.message.usage.output_tokens);
+                    }
+                    break;
+    
+                case 'message_delta':
+                    if (parsed.usage && parsed.usage.output_tokens) {
+                        set_lifetime_tokens(0, parsed.usage.output_tokens);  
+                    }
+                    break;
+                case 'error':
+                    // in api they mention high traffic as an example
+                    post_error_message_in_chat('Anthropic stream response (error block received)', parsed.error);
+                    break;
+    
+                default:
+                    // stuff like ping, message_end, and other things we don't care about
+                    break;
+            }
+            break;
+        
+        case "gemini":
+            if (parsed.candidates && parsed.candidates.length > 0) {
+                const content = parsed.candidates[0].content.parts[0].text;
+                if (content) {
+                    message.push(content);
+                    streamWriter.processContent(content);
                 }
-                break;
-
-            case 'message_delta':
-                if (parsed.usage && parsed.usage.output_tokens) {
-                    set_lifetime_tokens(0, parsed.usage.output_tokens);  
-                }
-                break;
-            case 'error':
-                // in api they mention high traffic as an example
-                post_error_message_in_chat('Anthropic stream response (error block received)', parsed.error);
-                break;
-
-            default:
-                // stuff like ping, message_end, and other things we don't care about
-                break;
-        }
+            }
+            if (parsed.usageMetadata && parsed.usageMetadata.promptTokenCount) {
+                return [parsed.usageMetadata.promptTokenCount, parsed.usageMetadata.candidatesTokenCount];
+            }
+            break;
+        
+        default:
+            break;
     }
+    return [0, 0];
 }
 
 function add_content_streaming(content, message, contentDiv) {
     message.push(content);
-    contentDiv.innerHTML += content.replaceAll("\n", '<br>');
+    contentDiv.textContent += content;
+    contentDiv.scrollIntoView(false);
 }
 
 
@@ -311,17 +405,16 @@ function init_prompt(context) {
 
 
 function init_settings() {
-    chrome.storage.sync.get(['api_key_openai', 'api_key_anthropic', 'max_tokens', 'temperature', 'model', 'stream_response'])
+    chrome.storage.sync.get(['api_keys', 'max_tokens', 'temperature', 'model', 'stream_response'])
     .then(res => {
-        settings.api_key_openai = res.api_key_openai;
-        settings.api_key_anthropic = res.api_key_anthropic;
+        settings.api_keys = res.api_keys || {};
         settings.max_tokens = res.max_tokens;
         settings.temperature = res.temperature;
         settings.model = res.model;
         settings.stream_response = res.stream_response;
         chrome.storage.onChanged.addListener(update_settings);
-        if (settings.api_key_openai === "" && settings.api_key_anthropic === "") {
-            post_error_message_in_chat("api keys", "Please enter an api key in the settings, both are currently empty.");
+        if (Object.keys(settings.api_keys).length === 0) {
+            post_error_message_in_chat("api keys", "Please enter an api key in the settings, all are currently empty.");
         }
     });
 }
@@ -350,16 +443,12 @@ function append_to_chat_html(text, role, roleString = null) {
 
     // Create a container for the message content
     let contentDiv = document.createElement('div');
+    // this is nice, we don't have to bother with the <br>s now, much simpler
+    contentDiv.style.whiteSpace = 'pre-wrap';
     contentDiv.classList.add('message-content', role + '-content');
     newParagraph.appendChild(contentDiv);
 
-    // Handle new lines in the message content
-    text.split('\n').forEach(function(line, index) {
-        if (index > 0) {
-            contentDiv.appendChild(document.createElement('br'));
-        }
-        contentDiv.appendChild(document.createTextNode(line));
-    });
+    contentDiv.textContent = text;
   
     targetDiv.insertBefore(newParagraph, inputField);
     targetDiv.scrollIntoView(false);
@@ -406,24 +495,5 @@ function input_listener() {
             inputField.value = '';
             update_textfield_height(inputField);
         }
-    });
-}
-
-
-// not needed right now because innerText is used instead of innerHTML
-// https://stackoverflow.com/questions/24816/escaping-html-strings-with-jquery
-function escapeHtml(string) {
-    let entityMap = {
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#39;',
-        '/': '&#x2F;',
-        '`': '&#x60;',
-        '=': '&#x3D;'
-    };
-    return String(string).replace(/[&<>"'`=\/]/g, function (s) {
-        return entityMap[s];
     });
 }
