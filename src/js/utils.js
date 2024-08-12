@@ -88,6 +88,45 @@ export function set_defaults() {
 }
 
 
+export class TokenCounter {
+    constructor(provider) {
+        this.provider = provider;
+        this.inputTokens = 0;
+        this.outputTokens = 0;
+    }
+
+    update(inputTokens, outputTokens) {
+        if (this.provider === 'gemini') {
+            // Gemini API returns the total token count up to that point in the stream, so last value is the total.
+            this.inputTokens = inputTokens;
+            this.outputTokens = outputTokens;
+        } else {
+            this.inputTokens += inputTokens;
+            this.outputTokens += outputTokens;
+        }
+    }
+
+    updateLifetimeTokens() {
+        set_lifetime_tokens(this.inputTokens, this.outputTokens);
+    }
+}
+
+
+export class StreamWriterSimple {
+    constructor(contentDiv, conversationDiv) {
+        this.contentDiv = contentDiv;
+        this.conversationDiv = conversationDiv;
+        this.message = [];
+    }
+
+    processContent(content) {
+        this.message.push(content);
+        this.contentDiv.textContent += content;
+        this.conversationDiv.scrollIntoView(false);
+    }
+}
+
+
 export class StreamWriter {
     constructor(contentDiv, conversationDiv, wordsPerMinute = 200) {
         this.contentDiv = contentDiv;
@@ -97,9 +136,11 @@ export class StreamWriter {
         this.delay = 12000 / wordsPerMinute;    // wpm to ms per char conversion
         this.accumulatedChars = 0;
         this.lastFrameTime = 0;
+        this.message = [];
     }
 
     processContent(content) {
+        this.message.push(content);
         this.contentQueue = this.contentQueue.concat(content.split(""));
 
         if (!this.isProcessing) {
