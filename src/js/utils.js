@@ -143,6 +143,7 @@ export class StreamWriterSimple {
         });
         footerDiv.appendChild(regerateButton);
         this.contentDiv.appendChild(footerDiv);
+        this.conversationDiv.scrollIntoView(false);
     }
 }
 
