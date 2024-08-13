@@ -155,6 +155,7 @@ export class StreamWriter extends StreamWriterSimple {
         this.delay = 12000 / wordsPerMinute;    // wpm to ms per char conversion
         this.accumulatedChars = 0;
         this.lastFrameTime = 0;
+        this.pendingFooter = null;
     }
 
     processContent(content) {
@@ -185,8 +186,21 @@ export class StreamWriter extends StreamWriterSimple {
                 this.processCharacters();
             } else {
                 this.isProcessing = false;
+                if (this.pendingFooter) {
+                    const {inputTokens, outputTokens, action_onclick} = this.pendingFooter;
+                    this.addFooter(inputTokens, outputTokens, action_onclick);
+                    this.pendingFooter = null;
+                }
             }
         });
+    }
+
+    addFooter(inputTokens, outputTokens, action_onclick) {
+        if (this.isProcessing) {
+            this.pendingFooter = {inputTokens, outputTokens, action_onclick};
+        } else {
+            super.addFooter(inputTokens, outputTokens, action_onclick);
+        }
     }
 }
 
