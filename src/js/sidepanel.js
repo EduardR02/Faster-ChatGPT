@@ -21,6 +21,12 @@ const MODELS = {
     }
 };
 
+const MaxTemp = {
+    openai: 2.0,
+    anthropic: 1.0,
+    gemini: 2.0
+}
+
 let settings = {};
 let messages = [];
 
@@ -136,7 +142,7 @@ function create_anthropic_request() {
             system: messages[0].content,
             messages: messages.slice(1),
             max_tokens: settings.max_tokens,
-            temperature: settings.temperature,
+            temperature: settings.temperature > MaxTemp.anthropic ? MaxTemp.anthropic : settings.temperature,
             stream: settings.stream_response
         })
     };
@@ -157,7 +163,7 @@ function create_openai_request() {
             model: MODELS.openai[settings.model],
             messages: messages,
             max_tokens: settings.max_tokens,
-            temperature: settings.temperature,
+            temperature: settings.temperature > MaxTemp.openai ? MaxTemp.openai : settings.temperature,
             stream: settings.stream_response,
             ...(settings.stream_response && {
                 stream_options: { include_usage: true }
@@ -184,7 +190,7 @@ function create_gemini_request() {
             systemInstruction: mapped_messages[0],
             safetySettings: get_gemini_safety_settings(),
             generationConfig: {
-                temperature: settings.temperature,
+                temperature: settings.temperature > MaxTemp.gemini ? MaxTemp.gemini : settings.temperature,
                 maxOutputTokens: settings.max_tokens,
                 responseMimeType: "text/plain"
             },
