@@ -8,7 +8,7 @@ body {
   display: flex;
   margin-left: auto;
   color: #ffffff;
-  padding: 20px;
+  padding: 10px;
   box-sizing: border-box;
   flex-direction: column;
   margin-bottom: 20px;
@@ -172,6 +172,27 @@ p {
   color: #61afef;
 }
 
+.message-footer {
+  display: flex;
+  align-items: center;
+  font-size: 0.8em;
+  color: #61afef;
+  margin-top: 1em;
+}
+
+.regenerate-button {
+  margin-left: auto;
+}
+
+.message-footer > span {
+  transition: transform 0.3s ease, margin-left 0.3s ease;
+}
+
+.message-footer.centered > span {
+  margin-left: 50%;
+  transform: translateX(-50%);
+}
+
 .center {
   text-align: center;
 }
@@ -213,6 +234,13 @@ p {
   cursor: pointer;
   overflow: hidden;
   margin-bottom: 10px;
+}
+
+.regenerate-button {
+  padding: 1px 6px;
+  background: #98c379;
+  margin-bottom: 0;
+  margin-left: auto;
 }
 
 .no-bottom-margin {

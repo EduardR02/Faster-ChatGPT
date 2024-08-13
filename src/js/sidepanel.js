@@ -143,6 +143,7 @@ function create_anthropic_request() {
     return ['https://api.anthropic.com/v1/messages', requestOptions];
 }
 
+
 function create_openai_request() {
     check_api_key('openai');
     const requestOptions = {
@@ -215,13 +216,18 @@ function get_gemini_safety_settings() {
 
 function get_reponse_no_stream(response) {
     response.json().then(data => {
+        let [contentDiv, conversationDiv] = append_to_chat_html("", RoleEnum.assistant);
+        let streamWriter = new StreamWriterSimple(contentDiv, conversationDiv);
+
         let [response_text, input_tokens, output_tokens] = get_response_data_no_stream(data);
-        
-        append_to_chat_html(response_text, RoleEnum.assistant);
+        streamWriter.processContent(response_text);
+        streamWriter.addFooter(input_tokens, output_tokens, regenerate_response);
+
         append_context(response_text, RoleEnum.assistant);
         set_lifetime_tokens(input_tokens, output_tokens);
     });
 }
+
 
 function get_response_data_no_stream(data) {
     const provider = get_provider_for_model(settings.model);
@@ -279,8 +285,18 @@ async function response_stream(response_stream) {
         post_error_message_in_chat("API request error (likely incorrect key)", error.message);
     }
     tokenCounter.updateLifetimeTokens();
+    streamWriter.addFooter(tokenCounter.inputTokens, tokenCounter.outputTokens, regenerate_response);
     append_context(streamWriter.message.join(''), RoleEnum.assistant);
 }
+
+
+function regenerate_response() {
+    while (messages.length !== 0 && messages[messages.length - 1].role === RoleEnum.assistant) {
+        messages.pop();
+    }
+    api_call();
+}
+
 
 function stream_parse(data, api_provider, streamWriter, tokenCounter) {
     try {
@@ -299,6 +315,7 @@ function stream_parse(data, api_provider, streamWriter, tokenCounter) {
     }
 }
 
+
 function handle_openai_stream(parsed, streamWriter, tokenCounter) {
     if (parsed.choices && parsed.choices.length > 0) {
         const content = parsed.choices[0].delta.content;
@@ -309,6 +326,7 @@ function handle_openai_stream(parsed, streamWriter, tokenCounter) {
         tokenCounter.update(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);  
     }
 }
+
 
 function handle_anthropic_stream(parsed, streamWriter, tokenCounter) {
     switch (parsed.type) {
@@ -333,6 +351,7 @@ function handle_anthropic_stream(parsed, streamWriter, tokenCounter) {
             break;
     }
 }
+
 
 function handle_gemini_stream(parsed, streamWriter, tokenCounter) {
     if (parsed.candidates && parsed.candidates.length > 0) {
@@ -421,11 +440,11 @@ function append_to_chat_html(text, role, roleString = null) {
 
 
 function post_error_message_in_chat(error_occurred, error_message) {
-    append_to_chat_html("Error occurred here: " + error_occurred +  "\nHere is the error message:\n" + error_message, RoleEnum.system);
+    return append_to_chat_html("Error occurred here: " + error_occurred +  "\nHere is the error message:\n" + error_message, RoleEnum.system);
 }
 
 function post_warning_in_chat(warning_message) {
-    append_to_chat_html("Warning: " + warning_message, RoleEnum.system);
+    return append_to_chat_html("Warning: " + warning_message, RoleEnum.system);
 }
 
 
@@ -449,6 +468,16 @@ function input_listener() {
 }
 
 
+function remove_button() {
+    let button = document.querySelector('.regenerate-button');
+    if (button) {
+        let parent = button.parentElement;
+        button.remove();
+        parent.classList.add('centered');
+    }
+}
+
+
 function handle_input(inputText) {
     // previously it was possible to open the sidepanel manually from above the bookmarks bar, but seems to not be possible anymore.
     if (Object.keys(settings).length === 0 || messages[0].role !== "system") {
@@ -461,6 +490,7 @@ function handle_input(inputText) {
             });
         });
     } else {
+        remove_button();
         api_call();
     }
 }

@@ -124,19 +124,37 @@ export class StreamWriterSimple {
         this.contentDiv.textContent += content;
         this.conversationDiv.scrollIntoView(false);
     }
+
+    addFooter(inputTokens, outputTokens, action_onclick) {
+        let footerDiv = document.createElement("div");
+        footerDiv.classList.add("message-footer");
+        // need span to be able to calculate the width of the text in css for the centering animation
+        let tokensSpan = document.createElement('span');
+        tokensSpan.textContent = `${inputTokens} | ${outputTokens}`;
+        footerDiv.appendChild(tokensSpan);
+
+        let regerateButton = document.createElement("button");
+        regerateButton.textContent = '\u{21BB}'; // refresh symbol
+        regerateButton.classList.add("button", "regenerate-button");
+        regerateButton.addEventListener('click', () => {
+            regerateButton.remove();
+            footerDiv.classList.add('centered');
+            action_onclick();
+        });
+        footerDiv.appendChild(regerateButton);
+        this.contentDiv.appendChild(footerDiv);
+    }
 }
 
 
-export class StreamWriter {
+export class StreamWriter extends StreamWriterSimple {
     constructor(contentDiv, conversationDiv, wordsPerMinute = 200) {
-        this.contentDiv = contentDiv;
-        this.conversationDiv = conversationDiv;
+        super(contentDiv, conversationDiv);
         this.contentQueue = [];
         this.isProcessing = false;
         this.delay = 12000 / wordsPerMinute;    // wpm to ms per char conversion
         this.accumulatedChars = 0;
         this.lastFrameTime = 0;
-        this.message = [];
     }
 
     processContent(content) {
