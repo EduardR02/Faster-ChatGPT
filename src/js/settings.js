@@ -86,6 +86,7 @@ function save_settings() {
     settings.model = document.querySelector('input[name="model-select"]:checked').value;
     settings.close_on_deselect = document.getElementById('close-on-deselect').checked;
     settings.stream_response = document.getElementById('stream-response').checked;
+    settings.arena_mode = document.getElementById('arena-mode').checked;
     for (let key in settings) {
         if (settings[key] === existing_settings[key] || settings[key] === undefined ||
             settings[key] === NaN || settings[key] === "") {
@@ -100,12 +101,13 @@ function save_settings() {
 
 
 function init_values() {
-    chrome.storage.sync.get(['api_keys', 'max_tokens', 'temperature', 'model', 'close_on_deselect', 'stream_response'], function(res) {
+    chrome.storage.sync.get(['api_keys', 'max_tokens', 'temperature', 'model', 'close_on_deselect', 'stream_response', 'arena_mode'], function(res) {
         document.getElementById('max-tokens').value = res.max_tokens;
         document.getElementById('temperature').value = res.temperature;
         document.getElementById(res.model).checked = true;
         document.getElementById('close-on-deselect').checked = res.close_on_deselect;
         document.getElementById('stream-response').checked = res.stream_response;
+        document.getElementById('arena-mode').checked = res.arena_mode || false;
         res.api_keys = res.api_keys || {};
         existing_settings = res;
         set_api_label();

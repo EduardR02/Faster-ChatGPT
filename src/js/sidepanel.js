@@ -21,6 +21,9 @@ const MODELS = {
     }
 };
 
+// const ARENA_MODELS = ["sonnet-3.5", "gpt-4o", "gemini-1.5-pro-exp"];
+const ARENA_MODELS = ["gpt-4o-mini", "gemini-1.5-pro-exp"]; // for testing
+
 const MaxTemp = {
     openai: 2.0,
     anthropic: 1.0,
@@ -29,6 +32,7 @@ const MaxTemp = {
 
 let settings = {};
 let messages = [];
+let pending_message = {};
 
 
 document.addEventListener('DOMContentLoaded', init);
@@ -95,23 +99,57 @@ function remove_added_paragraphs() {
 }
 
 
-function api_call() {
-    const [api_link, requestOptions] = create_api_request();
+function api_call(model) {
+    if (settings.arena_mode) {
+        if (ARENA_MODELS.length < 2) {
+            post_error_message_in_chat("Arena mode", "Not enough models enabled for Arena mode.");
+            return;
+        }
+        let [model1, model2] = get_random_arena_models();
+        api_call_single(model1);
+        api_call_single(model2);
+    }
+    else {
+        model = model || settings.model;
+        api_call_single(model);
+    }
+}
+
+
+function get_random_arena_models() {
+    // ok fk it, by doing it with calculating random indices it seems to be hard to avoid bias, and doing a while loop is stupid
+    // so we'll just do shuffle and pick first, ran this in python for 50 mil iterations on 5 length array, seems unbiased
+    function shuffleArray() {
+        let array = ARENA_MODELS.slice();
+        for (let i = array.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [array[i], array[j]] = [array[j], array[i]];
+        }
+        return array;
+    }
+    let shuffled = shuffleArray();
+    return [shuffled[0], shuffled[1]];
+
+}
+
+
+function api_call_single(model) {
+    const [api_link, requestOptions] = create_api_request(model);
     fetch(api_link, requestOptions)
-        .then(response => settings.stream_response ? response_stream(response) : get_reponse_no_stream(response))
+        .then(response => settings.stream_response ? response_stream(response, model) : get_reponse_no_stream(response, model))
         .catch(error => post_error_message_in_chat("api request (likely incorrect key)", error.message));
 }
 
 
-function create_api_request() {
-    const provider = get_provider_for_model(settings.model);
+function create_api_request(model) {
+    const provider = get_provider_for_model(model);
     switch (provider) {
         case 'openai':
-            return create_openai_request();
+            return create_openai_request(model);
         case 'anthropic':
-            return create_anthropic_request();
+            return create_anthropic_request(model);
         case 'gemini':
-            return create_gemini_request();
+            return create_gemini_request(model);
         default:
             post_error_message_in_chat("model", "Model not found");
             return [null, null];
@@ -127,7 +165,7 @@ function get_provider_for_model(model) {
 }
 
 
-function create_anthropic_request() {
+function create_anthropic_request(model) {
     check_api_key('anthropic');
     const requestOptions = {
         method: 'POST',
@@ -138,7 +176,7 @@ function create_anthropic_request() {
             'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
-            model: MODELS.anthropic[settings.model],
+            model: MODELS.anthropic[model],
             system: messages[0].content,
             messages: messages.slice(1),
             max_tokens: settings.max_tokens,
@@ -150,7 +188,7 @@ function create_anthropic_request() {
 }
 
 
-function create_openai_request() {
+function create_openai_request(model) {
     check_api_key('openai');
     const requestOptions = {
         method: 'POST',
@@ -160,7 +198,7 @@ function create_openai_request() {
             'Authorization': 'Bearer ' + settings.api_keys.openai
         },
         body: JSON.stringify({
-            model: MODELS.openai[settings.model],
+            model: MODELS.openai[model],
             messages: messages,
             max_tokens: settings.max_tokens,
             temperature: settings.temperature > MaxTemp.openai ? MaxTemp.openai : settings.temperature,
@@ -174,7 +212,7 @@ function create_openai_request() {
 }
 
 
-function create_gemini_request() {
+function create_gemini_request(model) {
     check_api_key("gemini");
     // gemini either has "model" or "user", even the system prompt is classified as "user"
     const mapped_messages = messages.map(message => ({
@@ -198,7 +236,7 @@ function create_gemini_request() {
     };
     const responseType = settings.stream_response ? "streamGenerateContent" : "generateContent";
     const streamParam = settings.stream_response ? "alt=sse&" : "";
-    const requestLink = `https://generativelanguage.googleapis.com/v1beta/models/${MODELS.gemini[settings.model]}:${responseType}?${streamParam}key=${settings.api_keys.gemini}`;
+    const requestLink = `https://generativelanguage.googleapis.com/v1beta/models/${MODELS.gemini[model]}:${responseType}?${streamParam}key=${settings.api_keys.gemini}`;
     return [requestLink, requestOptions];
 }
 
@@ -220,23 +258,23 @@ function get_gemini_safety_settings() {
 }
 
 
-function get_reponse_no_stream(response) {
+function get_reponse_no_stream(response, model) {
     response.json().then(data => {
         let [contentDiv, conversationDiv] = append_to_chat_html("", RoleEnum.assistant);
         let streamWriter = new StreamWriterSimple(contentDiv, conversationDiv);
 
-        let [response_text, input_tokens, output_tokens] = get_response_data_no_stream(data);
+        let [response_text, input_tokens, output_tokens] = get_response_data_no_stream(data, model);
         streamWriter.processContent(response_text);
-        streamWriter.addFooter(input_tokens, output_tokens, regenerate_response);
+        streamWriter.addFooter(input_tokens, output_tokens, regenerate_response.bind(null, model));
 
-        append_context(response_text, RoleEnum.assistant);
+        add_to_pending(response_text, RoleEnum.assistant, model);
         set_lifetime_tokens(input_tokens, output_tokens);
     });
 }
 
 
-function get_response_data_no_stream(data) {
-    const provider = get_provider_for_model(settings.model);
+function get_response_data_no_stream(data, model) {
+    const provider = get_provider_for_model(model);
     try {
         switch (provider) {
             case 'openai':
@@ -259,10 +297,10 @@ function get_response_data_no_stream(data) {
 
 
 // "stolen" from https://umaar.com/dev-tips/269-web-streams-openai/ and https://www.builder.io/blog/stream-ai-javascript
-async function response_stream(response_stream) {
+async function response_stream(response_stream, model) {
     // right now you can't "stop generating", too lazy lol
     let [contentDiv, conversationDiv] = append_to_chat_html("", RoleEnum.assistant);
-    let api_provider = get_provider_for_model(settings.model);
+    let api_provider = get_provider_for_model(model);
     let tokenCounter = new TokenCounter(api_provider);
     let streamWriter = api_provider === "gemini" ? new StreamWriter(contentDiv, conversationDiv, 2000) : new StreamWriterSimple(contentDiv, conversationDiv);
 
@@ -291,16 +329,13 @@ async function response_stream(response_stream) {
         post_error_message_in_chat("API request error (likely incorrect key)", error.message);
     }
     tokenCounter.updateLifetimeTokens();
-    streamWriter.addFooter(tokenCounter.inputTokens, tokenCounter.outputTokens, regenerate_response);
-    append_context(streamWriter.message.join(''), RoleEnum.assistant);
+    streamWriter.addFooter(tokenCounter.inputTokens, tokenCounter.outputTokens, regenerate_response.bind(null, model));
+    add_to_pending(streamWriter.message.join(''), RoleEnum.assistant, model);
 }
 
 
-function regenerate_response() {
-    while (messages.length !== 0 && messages[messages.length - 1].role === RoleEnum.assistant) {
-        messages.pop();
-    }
-    api_call();
+function regenerate_response(model) {
+    api_call_single(model);
 }
 
 
@@ -395,14 +430,15 @@ function init_prompt(context) {
 
 
 function init_settings() {
-    chrome.storage.sync.get(['api_keys', 'max_tokens', 'temperature', 'model', 'stream_response'])
+    chrome.storage.sync.get(['api_keys', 'max_tokens', 'temperature', 'model', 'stream_response', 'arena_mode'])
     .then(res => {
         settings = {
             api_keys: res.api_keys || {},
             max_tokens: res.max_tokens,
             temperature: res.temperature,
             model: res.model,
-            stream_response: res.stream_response
+            stream_response: res.stream_response,
+            arena_mode: res.arena_mode
         };
         chrome.storage.onChanged.addListener(update_settings);
         if (Object.keys(settings.api_keys).length === 0) {
@@ -415,6 +451,31 @@ function init_settings() {
 function append_context(message, role) {
     // allowed roles are 'user', 'assistant' or system. System is only on init for the prompt.
     messages.push({role: role, content: message});
+}
+
+
+function add_to_pending(message, role, model) {
+    // this is neat because we can only have one "latest" message per model, so if we regenerate many times we just overwrite.
+    pending_message[model] = {role: role, content: message};
+}
+
+
+function resolve_pending(model) {
+    // because of possible weirdness with toggling arena mode on or off while there are pending messages, we prioritize messages like this:
+    // "function parameter: model" -> "settings.model" -> "random" message that is pending (potentially multiple if arena mode was on).
+    // We care about this at all because the convo is actually supposed to be useful, and we want to pass the best output to continue.
+    if (Object.keys(pending_message).length === 0) return;
+    if (model && model in pending_message) {
+        messages.push(pending_message[model]);
+    }
+    else if (settings.model in pending_message) {
+        messages.push(pending_message[settings.model]);
+    }
+    else {
+        messages.push(pending_message[Object.keys(pending_message)[0]]);
+    }
+
+    pending_message = {};
 }
 
 
@@ -474,13 +535,13 @@ function input_listener() {
 }
 
 
-function remove_button() {
-    let button = document.querySelector('.regenerate-button');
-    if (button) {
+function remove_regenerate_buttons() {
+    let buttons = document.querySelectorAll('.regenerate-button');
+    buttons.forEach(button => {
         let parent = button.parentElement;
         button.remove();
         parent.classList.add('centered');
-    }
+    });
 }
 
 
@@ -496,7 +557,8 @@ function handle_input(inputText) {
             });
         });
     } else {
-        remove_button();
+        remove_regenerate_buttons();
+        resolve_pending();
         api_call();
     }
 }

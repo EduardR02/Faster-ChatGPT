@@ -74,7 +74,8 @@ export function set_defaults() {
         model : "gpt-4o-mini",
         api_keys: {},
         close_on_deselect: true,
-        stream_response: true
+        stream_response: true,
+        arena_mode: false
     }
     chrome.storage.sync.set(settings);
     // for some reason relative path does not work, only full path.
