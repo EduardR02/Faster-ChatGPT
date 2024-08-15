@@ -94,8 +94,8 @@ a:visited {
   margin:auto;
   transition: 0.15s all linear;
   position: relative;
-  background-color: #c0b9d7;
-  border: 1px solid #61afef;
+  background-color: #21252b;
+  border: 1px solid #abb2bf;
   cursor: pointer;
   margin-right: 10px;
   vertical-align: center;
@@ -201,9 +201,9 @@ p {
   padding: 10px;
   box-sizing: border-box;
   font-family: Consolas, Courier New, monospace;
-  border: 1px solid #61afef;
-  background-color: #c0b9d7;
-  color: #282c34;
+  border: 1px solid #abb2bf;
+  background-color: #21252b;
+  color: #ffffff;
   resize: none;
   height: auto;
   overflow: hidden;
