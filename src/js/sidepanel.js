@@ -1,6 +1,260 @@
 import { StreamWriter, StreamWriterSimple, TokenCounter, ModeEnum, get_mode, set_lifetime_tokens,
     auto_resize_textfield_listener, update_textfield_height, is_on } from "./utils.js";
 
+
+class ChatManager {
+    constructor() {
+        this.conversationDiv = document.getElementById('conversation');
+        this.inputField = document.getElementById('textInput');
+        this.isArenaMode = false;
+        this.arenaDivs = [];
+        this.arenaButtons = [];
+        this.hoverOnFunc = null;
+        this.hoverOffFunc = null;
+        this.arenaFooter = null;
+        this.arenaContainer = null;
+        this.contentDivs = [];
+        this.pendingResponses = 0;
+        this.shouldScroll = true;
+        this.scrollListenerActive = false;
+    }
+
+    initArenaMode() {
+        this.isArenaMode = true;
+        this.arenaContainer = null;
+        this.arenaFooter = null;
+        this.arenaDivs = [];
+        this.arenaButtons = [];
+        this.contentDivs = [];
+        this.pendingResponses = 2;
+    }
+
+    updatePendingResponses() {
+        if (this.isArenaMode) {
+            this.pendingResponses--;
+            if (this.pendingResponses === 0) {
+                this.addArenaFooter();
+            }
+        }
+    }
+
+    initParagraph(role) {
+        let paragraph = document.createElement('p');
+        paragraph.classList.add(role + "-message");
+        this.conversationDiv.insertBefore(paragraph, this.inputField);
+        return paragraph;
+    }
+
+    onRegenerate(contentDiv) {
+        let parentDiv = contentDiv.parentElement;
+        let roleString = ChatRoleDict[RoleEnum.assistant] + ' \u{27F3}';
+        this.createMessageDiv(parentDiv, RoleEnum.assistant, '', roleString);
+    }
+
+    createMessageDiv(parentElement, role, text = '', roleString = null) {
+        // unfortunately need this guy in case we want to regenerate a response in arena mode
+        let messageWrapper = document.createElement('div');
+        messageWrapper.classList.add('message-wrapper');
+
+        let prefixSpan = document.createElement('span');
+        prefixSpan.classList.add('message-prefix', role + '-prefix');
+        prefixSpan.textContent = roleString || ChatRoleDict[role];
+        messageWrapper.appendChild(prefixSpan);
+
+        let contentDiv = document.createElement('div');
+        contentDiv.style.whiteSpace = 'pre-wrap';
+        contentDiv.classList.add('message-content', role + '-content');
+        contentDiv.textContent = text;
+        messageWrapper.appendChild(contentDiv);
+        if (role === RoleEnum.assistant) {
+            this.contentDivs.push(contentDiv);
+        }
+        parentElement.appendChild(messageWrapper);
+        this.scrollIntoView();
+        return contentDiv;
+    }
+
+    initMessageBlock(role, roleString = null) {
+        this.createMessageBlock(role, '', roleString);
+    }
+
+    createMessageBlock(role, text, roleString = null) {
+        let paragraph = this.initParagraph(role);
+
+        if (this.isArenaMode && role === RoleEnum.assistant) {
+            let fullDiv = document.createElement('div');
+            fullDiv.classList.add('arena-full-container');
+            this.arenaContainer = fullDiv;
+
+            let arenaDiv = document.createElement('div');
+            arenaDiv.classList.add('arena-wrapper');
+
+            for (let i = 0; i < 2; i++) {
+                let contentDiv = this.createMessageDiv(arenaDiv, role);
+                this.arenaDivs.push(contentDiv);
+            }
+
+            fullDiv.appendChild(arenaDiv);
+            paragraph.appendChild(fullDiv);
+        }
+        else {
+            this.createMessageDiv(paragraph, role, text, roleString);
+        }
+    }
+
+    getContentDiv() {
+        if (this.contentDivs.length === 0) {
+            post_error_message_in_chat("Content divs", "No content divs available.");
+            return null;
+        }
+        return this.contentDivs.shift();
+    }
+
+    addArenaFooter() {
+        const footer = document.createElement('div');
+        footer.classList.add('arena-footer');
+
+        const buttons = [
+            { text: '\u{2713}', choice: 'A' },
+            { text: '==', choice: 'draw' },
+            { text: '\u{2713}', choice: 'B' },
+            { text: 'X', choice: 'no_choice' }
+        ];
+        // add empty div to center the buttons
+        footer.appendChild(document.createElement('div'));
+        buttons.forEach(btn => {
+            const button = document.createElement('button');
+            button.classList.add('button', 'arena-button');
+            if (btn.choice === 'no_choice') {
+                button.classList.add('no-choice');
+            }
+            else if (btn.choice === 'draw') {
+                button.classList.add('draw');
+            }
+            else {
+                button.classList.add('choice');
+            }
+            button.textContent = btn.text;
+            button.onclick = () => this.handleArenaChoice(btn.choice);
+            footer.appendChild(button);
+            this.arenaButtons.push(button);
+        });
+        this.hoverOnFunc = this.buttonsHoverEffect.bind(this);
+        this.hoverOffFunc = this.buttonsRemoveHoverEffect.bind(this);
+        this.arenaButtons.forEach((button) => {
+            button.addEventListener('mouseenter', this.hoverOnFunc);
+            button.addEventListener('mouseleave', this.hoverOffFunc);
+        });
+        this.arenaContainer.appendChild(footer);
+        this.arenaFooter = footer;
+    }
+
+    deleteArenaFooter() {
+        const footer = this.arenaFooter;
+        // do this so when they slide away they don't trigger the hover effect
+        this.arenaButtons.forEach(button => {
+            button.removeEventListener('mouseenter', this.hoverOnFunc);
+            button.removeEventListener('mouseleave', this.hoverOffFunc);
+        });
+        this.hoverOnFunc = null;
+        this.hoverOffFunc = null;
+        this.arenaButtons = [];
+        footer.classList.add('slide-left');
+
+        const handleTransitionEnd = (event) => {
+            if (event.propertyName === 'opacity') {
+                footer.classList.add('slide-up');
+            } else if (event.propertyName === 'margin-top') {
+                footer.removeEventListener('transitionend', handleTransitionEnd);
+                footer.remove();
+            }
+        };
+    
+        footer.addEventListener('transitionend', handleTransitionEnd);
+    }
+
+    buttonsHoverEffect(event) {
+        const hoveredButton = event.currentTarget;
+        if (hoveredButton.classList.contains('choice')) {
+            this.arenaButtons.forEach(button => {
+                if (button !== hoveredButton) {
+                    if (button.classList.contains('choice')) {
+                        button.classList.add('choice-not-hovered');
+                        button.textContent = 'X';
+                    }
+                    else {
+                        button.classList.add('hovered');
+                    }
+                }
+            });
+        }
+        else {
+            this.arenaButtons.forEach(button => {
+                if (button !== hoveredButton) {
+                    button.classList.add('hovered');
+                    if (button.classList.contains('choice')) {
+                        button.textContent = 'X';
+                    }
+                }
+            });
+        }
+    }
+
+    buttonsRemoveHoverEffect(event) {
+        const unhoveredButton = event.currentTarget;
+        if (unhoveredButton.classList.contains('choice')) {
+            this.arenaButtons.forEach(button => {
+                if (button !== unhoveredButton) {
+                    if (button.classList.contains('choice')) {
+                        button.classList.remove('choice-not-hovered');
+                        button.textContent = '\u{2713}';
+                    }
+                    else {
+                        button.classList.remove('hovered');
+                    }
+                }
+            });
+        }
+        else {
+            this.arenaButtons.forEach(button => {
+                if (button !== unhoveredButton) {
+                    button.classList.remove('hovered');
+                    if (button.classList.contains('choice')) {
+                        button.textContent = '\u{2713}';
+                    }
+                }
+            });
+        }
+    }
+
+    handleArenaChoice(choice) {
+        this.deleteArenaFooter();
+        this.arenaContainer = null;
+    }
+
+    scrollIntoView() {
+        if (this.shouldScroll) {
+            this.conversationDiv.scrollIntoView(false);
+        }
+    }
+
+    antiScrollListener() {
+        if (this.scrollListenerActive) return;
+        window.addEventListener('wheel', this.handleScrollEvent);
+        this.scrollListenerActive = true;
+        this.shouldScroll = true;
+    }
+
+    handleScrollEvent(event) {
+        if (this.shouldScroll && event.scrollY < 0) {
+            this.shouldScroll = false;
+            window.removeEventListener('wheel', this.handleScrollEvent);
+            this.scrollListenerActive = false;
+        }
+    }
+}
+
+
 const ChatRoleDict = { user: "You", assistant: "Assistant", system: "System" };
 const RoleEnum = { system: "system", user: "user", assistant: "assistant" };
 
@@ -33,6 +287,7 @@ const MaxTemp = {
 let settings = {};
 let messages = [];
 let pending_message = {};
+let chatManager = new ChatManager();
 
 
 document.addEventListener('DOMContentLoaded', init);
@@ -62,7 +317,7 @@ function setup_message_listeners() {
 
 function when_new_selection(text, url) {
     remove_added_paragraphs();
-    append_to_chat_html(text, RoleEnum.system, "Selected text");
+    chatManager.createMessageBlock(RoleEnum.system, text, "Selected text");
     init_prompt({mode: "selection", text: text, url: url}).then(() => {
         get_mode(function(current_mode) {
             if (current_mode === ModeEnum.InstantPromptMode) {
@@ -89,6 +344,9 @@ function update_settings(changes, namespace) {
         if (key in settings && key !== "lifetime_tokens" && key !== "mode") {
             settings[key] = newValue;
         }
+        if (key === "arena_mode" && newValue === false) {
+            chatManager.isArenaMode = false;
+        }
     }
 }
 
@@ -100,17 +358,21 @@ function remove_added_paragraphs() {
 
 
 function api_call(model) {
+    chatManager.antiScrollListener();
     if (settings.arena_mode) {
         if (ARENA_MODELS.length < 2) {
             post_error_message_in_chat("Arena mode", "Not enough models enabled for Arena mode.");
             return;
         }
         let [model1, model2] = get_random_arena_models();
+        chatManager.initArenaMode();
+        chatManager.initMessageBlock(RoleEnum.assistant);
         api_call_single(model1);
         api_call_single(model2);
     }
     else {
         model = model || settings.model;
+        chatManager.initMessageBlock(RoleEnum.assistant);
         api_call_single(model);
     }
 }
@@ -260,14 +522,14 @@ function get_gemini_safety_settings() {
 
 function get_reponse_no_stream(response, model) {
     response.json().then(data => {
-        let [contentDiv, conversationDiv] = append_to_chat_html("", RoleEnum.assistant);
-        let streamWriter = new StreamWriterSimple(contentDiv, conversationDiv);
+        let contentDiv = chatManager.getContentDiv();
+        let streamWriter = new StreamWriterSimple(contentDiv, chatManager.scrollIntoView);
 
         let [response_text, input_tokens, output_tokens] = get_response_data_no_stream(data, model);
         streamWriter.processContent(response_text);
-        streamWriter.addFooter(input_tokens, output_tokens, regenerate_response.bind(null, model));
+        const add_to_pending_with_model = (msg) => add_to_pending(msg, model);
+        streamWriter.addFooter(input_tokens, output_tokens, regenerate_response.bind(null, model), add_to_pending_with_model);
 
-        add_to_pending(response_text, RoleEnum.assistant, model);
         set_lifetime_tokens(input_tokens, output_tokens);
     });
 }
@@ -299,10 +561,10 @@ function get_response_data_no_stream(data, model) {
 // "stolen" from https://umaar.com/dev-tips/269-web-streams-openai/ and https://www.builder.io/blog/stream-ai-javascript
 async function response_stream(response_stream, model) {
     // right now you can't "stop generating", too lazy lol
-    let [contentDiv, conversationDiv] = append_to_chat_html("", RoleEnum.assistant);
+    let contentDiv = chatManager.getContentDiv();
     let api_provider = get_provider_for_model(model);
     let tokenCounter = new TokenCounter(api_provider);
-    let streamWriter = api_provider === "gemini" ? new StreamWriter(contentDiv, conversationDiv, 2000) : new StreamWriterSimple(contentDiv, conversationDiv);
+    let streamWriter = api_provider === "gemini" ? new StreamWriter(contentDiv, chatManager.scrollIntoView, 2000) : new StreamWriterSimple(contentDiv, chatManager.scrollIntoView);
 
     const reader = response_stream.body.getReader();
     const decoder = new TextDecoder("utf-8");
@@ -329,12 +591,14 @@ async function response_stream(response_stream, model) {
         post_error_message_in_chat("API request error (likely incorrect key)", error.message);
     }
     tokenCounter.updateLifetimeTokens();
-    streamWriter.addFooter(tokenCounter.inputTokens, tokenCounter.outputTokens, regenerate_response.bind(null, model));
-    add_to_pending(streamWriter.message.join(''), RoleEnum.assistant, model);
+    const add_to_pending_with_model = (msg) => add_to_pending(msg, model);
+    streamWriter.addFooter(tokenCounter.inputTokens, tokenCounter.outputTokens, regenerate_response.bind(null, model), add_to_pending_with_model);
 }
 
 
-function regenerate_response(model) {
+function regenerate_response(model, contentDiv) {
+    chatManager.onRegenerate(contentDiv);
+    chatManager.antiScrollListener();
     api_call_single(model);
 }
 
@@ -454,13 +718,14 @@ function append_context(message, role) {
 }
 
 
-function add_to_pending(message, role, model) {
+function add_to_pending(message, model) {
     // this is neat because we can only have one "latest" message per model, so if we regenerate many times we just overwrite.
-    pending_message[model] = {role: role, content: message};
+    pending_message[model] = {role: RoleEnum.assistant, content: message};
+    chatManager.updatePendingResponses();
 }
 
 
-function resolve_pending(model) {
+function resolve_pending(model = null) {
     // because of possible weirdness with toggling arena mode on or off while there are pending messages, we prioritize messages like this:
     // "function parameter: model" -> "settings.model" -> "random" message that is pending (potentially multiple if arena mode was on).
     // We care about this at all because the convo is actually supposed to be useful, and we want to pass the best output to continue.
@@ -479,39 +744,13 @@ function resolve_pending(model) {
 }
 
 
-function append_to_chat_html(text, role, roleString = null) {
-    let targetDiv = document.getElementById('conversation');
-    let inputField = document.getElementById('textInput');
-
-    let newParagraph = document.createElement('p');
-    newParagraph.classList.add(role + "-message");
-
-    // Create and style the prefix span
-    let prefixSpan = document.createElement('span');
-    prefixSpan.classList.add('message-prefix', role + '-prefix');
-    prefixSpan.textContent = roleString || ChatRoleDict[role];
-    newParagraph.appendChild(prefixSpan);
-
-    // Create a container for the message content
-    let contentDiv = document.createElement('div');
-    // this is nice, we don't have to bother with the <br>s now, much simpler
-    contentDiv.style.whiteSpace = 'pre-wrap';
-    contentDiv.classList.add('message-content', role + '-content');
-    contentDiv.textContent = text;
-    newParagraph.appendChild(contentDiv);
-  
-    targetDiv.insertBefore(newParagraph, inputField);
-    targetDiv.scrollIntoView(false);
-    return [contentDiv, targetDiv];
-}
-
-
 function post_error_message_in_chat(error_occurred, error_message) {
-    return append_to_chat_html("Error occurred here: " + error_occurred +  "\nHere is the error message:\n" + error_message, RoleEnum.system);
+    return chatManager.createMessageBlock(RoleEnum.system, "Error occurred here: " + error_occurred +  "\nHere is the error message:\n" + error_message);
 }
+
 
 function post_warning_in_chat(warning_message) {
-    return append_to_chat_html("Warning: " + warning_message, RoleEnum.system);
+    return chatManager.createMessageBlock(RoleEnum.system, "Warning: " + warning_message);
 }
 
 
@@ -524,7 +763,8 @@ function input_listener() {
             event.preventDefault();
             let inputText = inputField.value;
             if (inputText.trim().length !== 0) {
-                append_to_chat_html(inputText, RoleEnum.user);
+                chatManager.createMessageBlock(RoleEnum.user, inputText);
+                resolve_pending();
                 append_context(inputText, RoleEnum.user);
                 handle_input(inputText);
             }
@@ -558,7 +798,6 @@ function handle_input(inputText) {
         });
     } else {
         remove_regenerate_buttons();
-        resolve_pending();
         api_call();
     }
 }

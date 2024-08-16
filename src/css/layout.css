@@ -137,6 +137,38 @@ p {
   color: #ffffff;
 }
 
+.arena-full-container {
+
+}
+
+.arena-wrapper {
+  display: flex;
+  flex-direction: row;
+}
+
+.arena-footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 1em;
+  margin-left: 1em;
+  transition: all 0.4s ease;
+}
+
+.arena-footer.slide-left {
+  margin-left: 0;
+  opacity: 0;
+  transform: translateX(-100%);
+}
+
+.arena-footer.slide-up {
+  margin-top: 0;
+  transform: translateX(-100%) translateY(-100%);
+}
+
+.message-wrapper {
+  width: fit-content;
+}
+
 .message-content {
   color: #ffffff;
   margin-left: 1em;
@@ -241,6 +273,36 @@ p {
   background: #98c379;
   margin-bottom: 0;
   margin-left: auto;
+}
+
+.arena-button {
+  padding: 1px 6px;
+  background: #98c379;
+  margin-bottom: 0;
+  transform: translateX(50%);
+  font-size: 0.8em;
+  transition: background 0.4s ease;
+  /* a bit of a crude fix for the height/width changing when i change the "choice" button's text to X and back to checkmark, specific for font size 0.8em... */
+  width: 30px;
+  height: 17px;
+}
+
+.arena-button.no-choice {
+  transform: none;
+  background: #ef596f;
+}
+
+.arena-button.draw {
+  background: #61afef;
+}
+
+.arena-button.hovered {
+  background: #abb2bf;
+}
+
+.arena-button.choice-not-hovered {
+  background: #ef596f;
+
 }
 
 .no-bottom-margin {

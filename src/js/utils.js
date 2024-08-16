@@ -114,19 +114,19 @@ export class TokenCounter {
 
 
 export class StreamWriterSimple {
-    constructor(contentDiv, conversationDiv) {
+    constructor(contentDiv, scrollFunc) {
         this.contentDiv = contentDiv;
-        this.conversationDiv = conversationDiv;
+        this.scrollFunc = scrollFunc;
         this.message = [];
     }
 
     processContent(content) {
         this.message.push(content);
         this.contentDiv.textContent += content;
-        this.conversationDiv.scrollIntoView(false);
+        this.scrollFunc();
     }
 
-    addFooter(inputTokens, outputTokens, action_onclick) {
+    addFooter(inputTokens, outputTokens, action_onclick, add_pending) {
         let footerDiv = document.createElement("div");
         footerDiv.classList.add("message-footer");
         // need span to be able to calculate the width of the text in css for the centering animation
@@ -140,18 +140,19 @@ export class StreamWriterSimple {
         regerateButton.addEventListener('click', () => {
             regerateButton.remove();
             footerDiv.classList.add('centered');
-            action_onclick();
+            action_onclick(this.contentDiv);
         });
         footerDiv.appendChild(regerateButton);
         this.contentDiv.appendChild(footerDiv);
-        this.conversationDiv.scrollIntoView(false);
+        this.scrollFunc();
+        add_pending(this.message.join(''));
     }
 }
 
 
 export class StreamWriter extends StreamWriterSimple {
-    constructor(contentDiv, conversationDiv, wordsPerMinute = 200) {
-        super(contentDiv, conversationDiv);
+    constructor(contentDiv, scrollFunc, wordsPerMinute = 200) {
+        super(contentDiv, scrollFunc);
         this.contentQueue = [];
         this.isProcessing = false;
         this.delay = 12000 / wordsPerMinute;    // wpm to ms per char conversion
@@ -182,26 +183,26 @@ export class StreamWriter extends StreamWriterSimple {
                 const chunk = this.contentQueue.splice(0, charsToProcess);
 
                 this.contentDiv.textContent += chunk.join('');
-                this.conversationDiv.scrollIntoView(false);
+                this.scrollFunc();
 
                 this.lastFrameTime = currentTime;
                 this.processCharacters();
             } else {
                 this.isProcessing = false;
                 if (this.pendingFooter) {
-                    const {inputTokens, outputTokens, action_onclick} = this.pendingFooter;
-                    this.addFooter(inputTokens, outputTokens, action_onclick);
+                    const {inputTokens, outputTokens, action_onclick, add_pending} = this.pendingFooter;
+                    this.addFooter(inputTokens, outputTokens, action_onclick, add_pending);
                     this.pendingFooter = null;
                 }
             }
         });
     }
 
-    addFooter(inputTokens, outputTokens, action_onclick) {
+    addFooter(inputTokens, outputTokens, action_onclick, add_pending) {
         if (this.isProcessing) {
-            this.pendingFooter = {inputTokens, outputTokens, action_onclick};
+            this.pendingFooter = {inputTokens, outputTokens, action_onclick, add_pending};
         } else {
-            super.addFooter(inputTokens, outputTokens, action_onclick);
+            super.addFooter(inputTokens, outputTokens, action_onclick, add_pending);
         }
     }
 }
