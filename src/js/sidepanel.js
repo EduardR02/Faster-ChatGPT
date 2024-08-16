@@ -239,17 +239,16 @@ class ChatManager {
     }
 
     antiScrollListener() {
-        if (this.scrollListenerActive) return;
-        window.addEventListener('wheel', this.handleScrollEvent);
+        if (!this.scrollListenerActive) {
+            window.addEventListener('wheel', this.handleScrollEvent.bind(this));
+        }
         this.scrollListenerActive = true;
         this.shouldScroll = true;
     }
 
     handleScrollEvent(event) {
-        if (this.shouldScroll && event.scrollY < 0) {
+        if (this.shouldScroll && event.deltaY < 0) {
             this.shouldScroll = false;
-            window.removeEventListener('wheel', this.handleScrollEvent);
-            this.scrollListenerActive = false;
         }
     }
 }
@@ -523,7 +522,7 @@ function get_gemini_safety_settings() {
 function get_reponse_no_stream(response, model) {
     response.json().then(data => {
         let contentDiv = chatManager.getContentDiv();
-        let streamWriter = new StreamWriterSimple(contentDiv, chatManager.scrollIntoView);
+        let streamWriter = new StreamWriterSimple(contentDiv, chatManager.scrollIntoView.bind(chatManager));
 
         let [response_text, input_tokens, output_tokens] = get_response_data_no_stream(data, model);
         streamWriter.processContent(response_text);
@@ -564,7 +563,7 @@ async function response_stream(response_stream, model) {
     let contentDiv = chatManager.getContentDiv();
     let api_provider = get_provider_for_model(model);
     let tokenCounter = new TokenCounter(api_provider);
-    let streamWriter = api_provider === "gemini" ? new StreamWriter(contentDiv, chatManager.scrollIntoView, 2000) : new StreamWriterSimple(contentDiv, chatManager.scrollIntoView);
+    let streamWriter = api_provider === "gemini" ? new StreamWriter(contentDiv, chatManager.scrollIntoView.bind(chatManager), 2000) : new StreamWriterSimple(contentDiv, chatManager.scrollIntoView.bind(chatManager));
 
     const reader = response_stream.body.getReader();
     const decoder = new TextDecoder("utf-8");
