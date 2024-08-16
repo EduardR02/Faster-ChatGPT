@@ -126,7 +126,7 @@ export class StreamWriterSimple {
         this.scrollFunc();
     }
 
-    addFooter(inputTokens, outputTokens, action_onclick, add_pending) {
+    addFooter(inputTokens, outputTokens, regenerate_response, add_pending) {
         let footerDiv = document.createElement("div");
         footerDiv.classList.add("message-footer");
         // need span to be able to calculate the width of the text in css for the centering animation
@@ -138,9 +138,16 @@ export class StreamWriterSimple {
         regerateButton.textContent = '\u{21BB}'; // refresh symbol
         regerateButton.classList.add("button", "regenerate-button");
         regerateButton.addEventListener('click', () => {
-            regerateButton.remove();
-            footerDiv.classList.add('centered');
-            action_onclick(this.contentDiv);
+            regenerate_response(this.contentDiv);
+            regerateButton.classList.add('fade-out');
+            const handleTransitionEnd = (event) => {
+                if (event.propertyName === 'opacity') {
+                    regerateButton.remove();
+                    footerDiv.classList.add('centered');
+                }
+            };
+        
+            regerateButton.addEventListener('transitionend', handleTransitionEnd);
         });
         footerDiv.appendChild(regerateButton);
         this.contentDiv.appendChild(footerDiv);
@@ -190,19 +197,19 @@ export class StreamWriter extends StreamWriterSimple {
             } else {
                 this.isProcessing = false;
                 if (this.pendingFooter) {
-                    const {inputTokens, outputTokens, action_onclick, add_pending} = this.pendingFooter;
-                    this.addFooter(inputTokens, outputTokens, action_onclick, add_pending);
+                    const {inputTokens, outputTokens, regenerate_response, add_pending} = this.pendingFooter;
+                    this.addFooter(inputTokens, outputTokens, regenerate_response, add_pending);
                     this.pendingFooter = null;
                 }
             }
         });
     }
 
-    addFooter(inputTokens, outputTokens, action_onclick, add_pending) {
+    addFooter(inputTokens, outputTokens, regenerate_response, add_pending) {
         if (this.isProcessing) {
-            this.pendingFooter = {inputTokens, outputTokens, action_onclick, add_pending};
+            this.pendingFooter = {inputTokens, outputTokens, regenerate_response, add_pending};
         } else {
-            super.addFooter(inputTokens, outputTokens, action_onclick, add_pending);
+            super.addFooter(inputTokens, outputTokens, regenerate_response, add_pending);
         }
     }
 }

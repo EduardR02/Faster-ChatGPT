@@ -275,6 +275,11 @@ p {
   margin-left: auto;
 }
 
+.regenerate-button.fade-out {
+  transition: opacity 0.3s ease;
+  opacity: 0;
+}
+
 .arena-button {
   padding: 1px 6px;
   background: #98c379;
