@@ -178,6 +178,7 @@ class ChatManager {
             } else if (event.propertyName === 'margin-top') {
                 footer.removeEventListener('transitionend', handleTransitionEnd);
                 footer.remove();
+                this.arenaFooter = null;
             }
         };
     
@@ -240,30 +241,47 @@ class ChatManager {
 
     handleArenaChoiceDefault() {
         if ((this.arenaDivs.length > 0 || this.arenaButtons.length > 0)) {
-            this.handleArenaChoice('no_choice');
+            // treated like a draw (one path chosen randomly), without updating the ranking
+            this.handleArenaChoice('ignored');
         }
     }
 
     handleArenaChoice(choice) {
         this.deleteArenaFooter();
         remove_regenerate_buttons();
-        let winnderIndex, loserIndex;
+        let winnderIndex;
         if (choice === 'A' || choice === 'B') {
             winnderIndex = choice === 'A' ? 0 : 1;
             // update ranking here
         }
-        if (choice === 'draw' || choice === 'no_choice') {
+        else if (choice === 'draw' || choice === 'ignored') {
             winnderIndex = Math.floor(Math.random() * 2);
             if (choice === 'draw') {
                 // update ranking here
             }
         }
-        loserIndex = 1 - winnderIndex;
-        this.arenaResultUIUpdate(this.arenaDivs[winnderIndex], 'arena-winner');
-        this.arenaResultUIUpdate(this.arenaDivs[loserIndex], 'arena-loser');
-        resolve_pending(this.arenaDivs[winnderIndex].model);
+        let isNoChoice = choice === 'no_choice';
+        if (isNoChoice) {
+            resolve_pending(null, true);
+            this.arenaDivs.forEach(item => this.arenaResultUIUpdate(item, 'arena-loser'));
+        }
+        else {
+            let loserIndex = 1 - winnderIndex;
+            resolve_pending(this.arenaDivs[winnderIndex].model);
+            this.arenaResultUIUpdate(this.arenaDivs[winnderIndex], 'arena-winner');
+            this.arenaResultUIUpdate(this.arenaDivs[loserIndex], 'arena-loser');
+        }
+        
         this.arenaDivs = [];
         this.isArenaMode = false;
+        this.arenaContainer = null;
+        if (isNoChoice) {
+            // because we thought both models are bad, we don't want to use either response, so start a new arena block with new models for the last user prompt
+            // probably not the best way to handle this because that might not always be desired user behaviour, but ok for now,
+            // esp. because I don't know yet what would make sense here, maybe changing the last user prompt and redoing it with the same models makes sense
+            // we will see...
+            api_call();
+        }
     }
 
     arenaResultUIUpdate(arenaItem, classString) {
@@ -404,7 +422,7 @@ function remove_added_paragraphs() {
 }
 
 
-function api_call(model) {
+function api_call(model = null) {
     chatManager.antiScrollListener();
     if (settings.arena_mode) {
         if (ARENA_MODELS.length < 2) {
@@ -772,10 +790,11 @@ function add_to_pending(message, model) {
 }
 
 
-function resolve_pending(model = null) {
+function resolve_pending(model = null, discard = false) {
     // because of possible weirdness with toggling arena mode on or off while there are pending messages, we prioritize messages like this:
     // "function parameter: model" -> "settings.model" -> "random" message that is pending (potentially multiple if arena mode was on).
     // We care about this at all because the convo is actually supposed to be useful, and we want to pass the best output to continue.
+    if (discard) pending_message = {};
     if (Object.keys(pending_message).length === 0) return;
     if (model && model in pending_message) {
         messages.push(pending_message[model]);
