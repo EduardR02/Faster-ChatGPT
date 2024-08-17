@@ -204,6 +204,16 @@ p {
   color: #61afef;
 }
 
+.arena-winner {
+  transition: color 0.4s ease;
+  color: #c1e1c1;
+}
+
+.arena-loser {
+  transition: color 0.4s ease;
+  color: #fdaaaa;
+}
+
 .message-footer {
   display: flex;
   align-items: center;

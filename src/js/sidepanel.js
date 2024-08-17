@@ -91,7 +91,7 @@ class ChatManager {
 
             for (let i = 0; i < 2; i++) {
                 let contentDiv = this.createMessageDiv(arenaDiv, role);
-                this.arenaDivs.push(contentDiv);
+                this.arenaDivs.push({ model: null, contentDiv: contentDiv });
             }
 
             fullDiv.appendChild(arenaDiv);
@@ -102,10 +102,20 @@ class ChatManager {
         }
     }
 
-    getContentDiv() {
+    getContentDivAndSetModel(model) {
         if (this.contentDivs.length === 0) {
             post_error_message_in_chat("Content divs", "No content divs available.");
             return null;
+        }
+        if (this.isArenaMode) {
+            // return random content div to avoid bias (one model api could always be faster for some reason, and would therefore always get the first div)
+            const index = Math.floor(Math.random() * this.contentDivs.length);
+            // if a response gets regenerated, the find condition won't be met, which we want because we already know the models
+            const item = this.arenaDivs.find(item => item.contentDiv.isSameNode(this.contentDivs[index]));
+            if (item) {
+                item.model = model;
+            }
+            return this.contentDivs.splice(index, 1)[0];
         }
         return this.contentDivs.shift();
     }
@@ -227,9 +237,46 @@ class ChatManager {
         }
     }
 
+    handleArenaChoiceDefault() {
+        if ((this.arenaDivs.length > 0 || this.arenaButtons.length > 0)) {
+            this.handleArenaChoice('no_choice');
+        }
+    }
+
     handleArenaChoice(choice) {
         this.deleteArenaFooter();
-        this.arenaContainer = null;
+        remove_regenerate_buttons();
+        let winnderIndex, loserIndex;
+        if (choice === 'A' || choice === 'B') {
+            winnderIndex = choice === 'A' ? 0 : 1;
+            // update ranking here
+        }
+        if (choice === 'draw' || choice === 'no_choice') {
+            winnderIndex = Math.floor(Math.random() * 2);
+            if (choice === 'draw') {
+                // update ranking here
+            }
+        }
+        loserIndex = 1 - winnderIndex;
+        this.arenaResultUIUpdate(this.arenaDivs[winnderIndex], 'arena-winner');
+        this.arenaResultUIUpdate(this.arenaDivs[loserIndex], 'arena-loser');
+        resolve_pending(this.arenaDivs[winnderIndex].model);
+        this.arenaDivs = [];
+        this.isArenaMode = false;
+    }
+
+    arenaResultUIUpdate(arenaItem, classString) {
+        const parent = arenaItem.contentDiv.parentElement;
+        const prefixes = parent.querySelectorAll('.message-prefix');
+        const contentDivs = parent.querySelectorAll('.message-content');
+        const tokenFooters = parent.querySelectorAll('.message-footer');
+        const api_provider = get_provider_for_model(arenaItem.model);
+        prefixes.forEach(prefix => prefix.textContent = prefix.textContent.replace(ChatRoleDict.assistant, MODELS[api_provider][arenaItem.model]));
+        contentDivs.forEach(contentDiv => contentDiv.classList.add(classString));
+        tokenFooters.forEach(footer => {
+            const span = footer.querySelector('span');
+            span.textContent = span.textContent.replace('~', footer.getAttribute('input-tokens'))
+        });
     }
 
     scrollIntoView() {
@@ -521,13 +568,13 @@ function get_gemini_safety_settings() {
 
 function get_reponse_no_stream(response, model) {
     response.json().then(data => {
-        let contentDiv = chatManager.getContentDiv();
+        let contentDiv = chatManager.getContentDivAndSetModel(model);
         let streamWriter = new StreamWriterSimple(contentDiv, chatManager.scrollIntoView.bind(chatManager));
 
         let [response_text, input_tokens, output_tokens] = get_response_data_no_stream(data, model);
         streamWriter.processContent(response_text);
         const add_to_pending_with_model = (msg) => add_to_pending(msg, model);
-        streamWriter.addFooter(input_tokens, output_tokens, regenerate_response.bind(null, model), add_to_pending_with_model);
+        streamWriter.addFooter(input_tokens, output_tokens, chatManager.isArenaMode, regenerate_response.bind(null, model), add_to_pending_with_model);
 
         set_lifetime_tokens(input_tokens, output_tokens);
     });
@@ -560,7 +607,7 @@ function get_response_data_no_stream(data, model) {
 // "stolen" from https://umaar.com/dev-tips/269-web-streams-openai/ and https://www.builder.io/blog/stream-ai-javascript
 async function response_stream(response_stream, model) {
     // right now you can't "stop generating", too lazy lol
-    let contentDiv = chatManager.getContentDiv();
+    let contentDiv = chatManager.getContentDivAndSetModel(model);
     let api_provider = get_provider_for_model(model);
     let tokenCounter = new TokenCounter(api_provider);
     let streamWriter = api_provider === "gemini" ? new StreamWriter(contentDiv, chatManager.scrollIntoView.bind(chatManager), 2000) : new StreamWriterSimple(contentDiv, chatManager.scrollIntoView.bind(chatManager));
@@ -591,7 +638,7 @@ async function response_stream(response_stream, model) {
     }
     tokenCounter.updateLifetimeTokens();
     const add_to_pending_with_model = (msg) => add_to_pending(msg, model);
-    streamWriter.addFooter(tokenCounter.inputTokens, tokenCounter.outputTokens, regenerate_response.bind(null, model), add_to_pending_with_model);
+    streamWriter.addFooter(tokenCounter.inputTokens, tokenCounter.outputTokens, chatManager.isArenaMode, regenerate_response.bind(null, model), add_to_pending_with_model);
 }
 
 
@@ -797,6 +844,7 @@ function handle_input(inputText) {
         });
     } else {
         remove_regenerate_buttons();
+        chatManager.handleArenaChoiceDefault();
         api_call();
     }
 }
