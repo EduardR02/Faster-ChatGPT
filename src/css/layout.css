@@ -166,7 +166,7 @@ p {
 }
 
 .message-wrapper {
-  width: fit-content;
+  flex: 1;
 }
 
 .message-content {

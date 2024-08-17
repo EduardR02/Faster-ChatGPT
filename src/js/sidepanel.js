@@ -157,6 +157,7 @@ class ChatManager {
         });
         this.arenaContainer.appendChild(footer);
         this.arenaFooter = footer;
+        this.scrollIntoView();
     }
 
     deleteArenaFooter() {
