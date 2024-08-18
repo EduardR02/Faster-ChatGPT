@@ -98,13 +98,11 @@ a:visited {
   border: 1px solid #abb2bf;
   cursor: pointer;
   margin-right: 10px;
-  vertical-align: center;
   margin-top: 8px;
 }
 
 .dummy {
   display: flex;
-  align-items: left;
   width: fit-content;
 }
 
@@ -121,6 +119,11 @@ a:visited {
 
 .other-checkbox-align {
   margin-top: -10px;
+}
+
+.checkbox.arena-checkbox {
+  margin-left: 0;
+  margin-top: 0;
 }
 
 .checkbox:checked {
@@ -288,6 +291,17 @@ p {
 .regenerate-button.fade-out {
   transition: opacity 0.3s ease;
   opacity: 0;
+}
+
+.button.delete-arena {
+  padding-top: 1px;
+  padding-bottom: 1px;
+  margin-left: auto;
+  background: #fdaaaa;
+}
+
+.delete-arena.confirm {
+  background: #ef596f;
 }
 
 .arena-button {

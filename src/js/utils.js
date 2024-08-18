@@ -223,10 +223,10 @@ export class ArenaRatingManager {
         this.ratingsCacheKey = ratingsCacheKey;
         this.db = null;
         this.cachedRatings = {};
-        this.initDB(); // Initialize the database immediately
     }
 
     initDB() {
+        // have to do this manually every time (once per arenamanager) so you can actually chain onto it
         return new Promise((resolve, reject) => {
             const request = indexedDB.open(this.dbName, 1);
 
@@ -380,7 +380,10 @@ export class ArenaRatingManager {
             const request = objectStore.clear();
     
             request.onerror = (event) => reject(`Error clearing IndexedDB: ${event.target.error}`);
-            request.onsuccess = () => resolve();
+            request.onsuccess = () => {
+                console.log("Match history successfully deleted and rating has been reset.");
+                resolve();
+            };
         });
     }
 

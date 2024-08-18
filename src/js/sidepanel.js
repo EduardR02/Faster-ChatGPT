@@ -27,7 +27,7 @@ class ChatManager {
         this.arenaButtons = [];
         this.contentDivs = [];
         this.pendingResponses = 2;
-        if (!arenaRatingManager) arenaRatingManager = new ArenaRatingManager();
+        if (!arenaRatingManager) arenaRatingManager = initArenaRatingManager();
     }
 
     updatePendingResponses() {
@@ -438,6 +438,18 @@ function when_new_chat() {
         }
         init_prompt({mode: "chat"});
     });
+}
+
+
+function initArenaRatingManager(print_history = false) {
+    let arenaManager = new ArenaRatingManager();
+    // eh, should probably delete this and do a proper thing
+    arenaManager.initDB().then(() => {
+        if (print_history) {
+            arenaManager.printMatchHistory();
+        }
+    });
+    return arenaManager;
 }
 
 

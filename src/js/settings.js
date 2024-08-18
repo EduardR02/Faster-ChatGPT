@@ -1,4 +1,4 @@
-import {auto_resize_textfield_listener, update_textfield_height} from "./utils.js";
+import {ArenaRatingManager, auto_resize_textfield_listener, update_textfield_height} from "./utils.js";
 
 
 let existing_settings = {};
@@ -33,6 +33,31 @@ function init() {
             }
         });
     });
+
+    let button = document.querySelector('#button-delete-arena');
+    button.addEventListener('click', arenaDeleteConfirm);
+}
+
+
+function arenaDeleteConfirm(event) {
+    const button = event.target;
+    button.classList.add('confirm');
+    button.textContent = 'Are you sure? This is irreversable. ';
+    
+    button.removeEventListener('click', arenaDeleteConfirm);
+    button.addEventListener('click', arenaDeleteHistory);
+}
+
+
+function arenaDeleteHistory(event) {
+    const arenaRatingManager = new ArenaRatingManager();
+    arenaRatingManager.initDB().then(() => arenaRatingManager.wipeStoredCacheAndDB());
+    const button = event.target;
+    button.classList.remove('confirm');
+    button.textContent = 'Reset Arena Matches ';
+    
+    button.removeEventListener('click', arenaDeleteHistory);
+    button.addEventListener('click', arenaDeleteConfirm);
 }
 
 
