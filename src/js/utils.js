@@ -216,4 +216,197 @@ export class StreamWriter extends StreamWriterSimple {
 }
 
 
+export class ArenaRatingManager {
+    constructor(dbName = "MatchesDB", storeName = "matches", ratingsCacheKey = "elo_ratings") {
+        this.dbName = dbName;
+        this.storeName = storeName;
+        this.ratingsCacheKey = ratingsCacheKey;
+        this.db = null;
+        this.cachedRatings = {};
+        this.initDB(); // Initialize the database immediately
+    }
+
+    initDB() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open(this.dbName, 1);
+
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                if (!db.objectStoreNames.contains(this.storeName)) {
+                    db.createObjectStore(this.storeName, { keyPath: "id", autoIncrement: true });
+                }
+            };
+
+            request.onsuccess = (event) => {
+                this.db = event.target.result;
+                this.loadLatestRatings(); // Load cached ratings after DB initialization
+                resolve(this.db);
+            };
+
+            request.onerror = (event) => {
+                reject(event.target.errorCode);
+            };
+        });
+    }
+
+    saveMatch(modelA, modelB, result) {
+        const validResults = ["model_a", "model_b", "draw", "draw(bothbad)", "ignored"];
+        if (!validResults.includes(result)) {
+            throw new Error(`Attempted to save invalid result to DB: ${result}`);
+        }
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction([this.storeName], "readwrite");
+            const store = transaction.objectStore(this.storeName);
+
+            const match = { model_a: modelA, model_b: modelB, result: result };
+            const request = store.add(match);
+
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    getMatchHistory() {
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction([this.storeName], "readonly");
+            const store = transaction.objectStore(this.storeName);
+
+            const request = store.getAll();
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    expectedScore(ratingA, ratingB, BASE, SCALE) {
+        return 1 / (1 + Math.pow(BASE, (ratingB - ratingA) / SCALE));
+    }
+
+    calculateElo(matches, K = 40, SCALE = 400, BASE = 10, INIT_RATING = 1000) {
+        /* We'll use the chess default of K = 40, and because this is a local arena and our sample size will be low.
+        Chatbot arena uses K = 4 because of high sample size. We'll also reduce K to 20 when a model passes 30 matches.*/
+        let ratings = this.cachedRatings || {};
+
+        // Initialize ratings for any new models
+        matches.forEach(match => {
+            const modelA = match.model_a;
+            const modelB = match.model_b;
+
+            if (!ratings[modelA]) ratings[modelA] = { rating: INIT_RATING, matches_count: 0 };
+            if (!ratings[modelB]) ratings[modelB] = { rating: INIT_RATING, matches_count: 0 };
+        });
+
+        // Calculate Elo ratings
+        matches.forEach(match => {
+            const modelA = match.model_a;
+            const modelB = match.model_b;
+            const winner = match.result;
+
+            let scoreA;
+            switch (winner) {
+                case "model_a":
+                    scoreA = 1;
+                    break;
+                case "model_b":
+                    scoreA = 0;
+                    break;
+                case "draw":
+                    scoreA = 0.5;
+                    break;
+                case "draw(bothbad)":
+                case "ignored":
+                    // only want to save these just in case, but not use them for the ratings, bothbad is more supposed to be a "cancel/this sucks" than a draw
+                    return;
+                default:
+                    throw new Error(`Unexpected result: ${winner}`);
+            }
+
+            const ratingA = ratings[modelA].rating;
+            const ratingB = ratings[modelB].rating;
+
+            const expectedA = this.expectedScore(ratingA, ratingB, BASE, SCALE);
+            const expectedB = 1.0 - expectedA;
+
+            const kMatchesThreshold = 30;
+            const kFactorA = ratings[modelA].matches_count >= kMatchesThreshold ? 20 : K;
+            const kFactorB = ratings[modelB].matches_count >= kMatchesThreshold ? 20 : K;
+
+            ratings[modelA].rating += kFactorA * (scoreA - expectedA);
+            ratings[modelB].rating += kFactorB * ((1 - scoreA) - expectedB);
+
+            ratings[modelA].matches_count++;
+            ratings[modelB].matches_count++;
+        });
+        // chatbot arena also anchors the rating 800 to llama13b.
+        this.cachedRatings = ratings;
+        this.saveLatestRatings(ratings);
+
+        return ratings;
+    }
+
+    saveLatestRatings() {
+        return new Promise((resolve) => {
+            chrome.storage.local.set({ [this.ratingsCacheKey]: this.cachedRatings }, resolve);
+        });
+    }
+
+    loadLatestRatings() {
+        return new Promise((resolve) => {
+            chrome.storage.local.get([this.ratingsCacheKey], (result) => {
+                this.cachedRatings = result[this.ratingsCacheKey] || {};
+                resolve(this.cachedRatings);
+            });
+        });
+    }
+
+    addMatchAndUpdate(modelA, modelB, result) {
+        this.saveMatch(modelA, modelB, result);
+        const updatedRatings = this.calculateElo([{ model_a: modelA, model_b: modelB, result: result }]);
+        return updatedRatings;
+    }
+
+    async recalculateRatingsFromHistory() {
+        const matches = await this.getMatchHistory();
+        this.cachedRatings = {};
+        return this.calculateElo(matches);
+    }
+
+    wipeStoredCacheAndDB() {
+        this.cachedRatings = {};
+        chrome.storage.local.remove(this.ratingsCacheKey);
+
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction([this.storeName], 'readwrite');
+            const objectStore = transaction.objectStore(this.storeName);
+            const request = objectStore.clear();
+    
+            request.onerror = (event) => reject(`Error clearing IndexedDB: ${event.target.error}`);
+            request.onsuccess = () => resolve();
+        });
+    }
+
+    async printMatchHistory() {
+        try {
+            const matchHistory = await this.getMatchHistory();
+            console.log('Match History:');
+            matchHistory.forEach((match) => {
+                console.log(`Match id:${match.id}:`);
+                console.log(`  Model A: ${match.model_a}`);
+                console.log(`  Model B: ${match.model_b}`);
+                console.log(`  Result: ${match.result}`);
+                console.log('---');
+            });
+            console.log(`Total matches: ${matchHistory.length}`);
+    
+            // Also print current ratings
+            console.log('Current Ratings:');
+            Object.entries(this.cachedRatings).forEach(([model, data]) => {
+                console.log(`  ${model}: Rating ${data.rating}, Matches ${data.matches_count}`);
+            });
+        } catch (error) {
+            console.error('Error retrieving match history:', error);
+        }
+    }
+}
+
+
 export const ModeEnum = {"InstantPromptMode": 0, "PromptMode": 1, "Off": 2};

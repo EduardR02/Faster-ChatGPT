@@ -1,4 +1,4 @@
-import { StreamWriter, StreamWriterSimple, TokenCounter, ModeEnum, get_mode, set_lifetime_tokens,
+import { ArenaRatingManager, StreamWriter, StreamWriterSimple, TokenCounter, ModeEnum, get_mode, set_lifetime_tokens,
     auto_resize_textfield_listener, update_textfield_height, is_on } from "./utils.js";
 
 
@@ -27,6 +27,7 @@ class ChatManager {
         this.arenaButtons = [];
         this.contentDivs = [];
         this.pendingResponses = 2;
+        if (!arenaRatingManager) arenaRatingManager = new ArenaRatingManager();
     }
 
     updatePendingResponses() {
@@ -125,17 +126,17 @@ class ChatManager {
         footer.classList.add('arena-footer');
 
         const buttons = [
-            { text: '\u{2713}', choice: 'A' },
+            { text: '\u{2713}', choice: 'model_a' },
             { text: '==', choice: 'draw' },
-            { text: '\u{2713}', choice: 'B' },
-            { text: 'X', choice: 'no_choice' }
+            { text: '\u{2713}', choice: 'model_b' },
+            { text: 'X', choice: 'no_choice(bothbad)' }
         ];
         // add empty div to center the buttons
         footer.appendChild(document.createElement('div'));
         buttons.forEach(btn => {
             const button = document.createElement('button');
             button.classList.add('button', 'arena-button');
-            if (btn.choice === 'no_choice') {
+            if (btn.choice === 'no_choice(bothbad)') {
                 button.classList.add('no-choice');
             }
             else if (btn.choice === 'draw') {
@@ -249,28 +250,26 @@ class ChatManager {
     handleArenaChoice(choice) {
         this.deleteArenaFooter();
         remove_regenerate_buttons();
-        let winnderIndex;
-        if (choice === 'A' || choice === 'B') {
-            winnderIndex = choice === 'A' ? 0 : 1;
-            // update ranking here
+        let winnerIndex = 0;
+        if (choice === 'model_a' || choice === 'model_b') {
+            winnerIndex = choice === 'model_a' ? 0 : 1;
         }
         else if (choice === 'draw' || choice === 'ignored') {
-            winnderIndex = Math.floor(Math.random() * 2);
-            if (choice === 'draw') {
-                // update ranking here
-            }
+            winnerIndex = Math.floor(Math.random() * 2);
         }
-        let isNoChoice = choice === 'no_choice';
+        let isNoChoice = choice === 'no_choice(bothbad)';
+        let loserIndex = 1 - winnerIndex;
         if (isNoChoice) {
             resolve_pending(null, true);
             this.arenaDivs.forEach(item => this.arenaResultUIUpdate(item, 'arena-loser'));
         }
         else {
-            let loserIndex = 1 - winnderIndex;
-            resolve_pending(this.arenaDivs[winnderIndex].model);
-            this.arenaResultUIUpdate(this.arenaDivs[winnderIndex], 'arena-winner');
+            resolve_pending(this.arenaDivs[winnerIndex].model);
+            this.arenaResultUIUpdate(this.arenaDivs[winnerIndex], 'arena-winner');
             this.arenaResultUIUpdate(this.arenaDivs[loserIndex], 'arena-loser');
         }
+        let resultString = isNoChoice ? 'draw(bothbad)' : resultString;
+        arenaRatingManager.addMatchAndUpdate(this.arenaDivs[winnerIndex].model, this.arenaDivs[loserIndex].model, resultString);
         
         this.arenaDivs = [];
         this.isArenaMode = false;
@@ -284,13 +283,51 @@ class ChatManager {
         }
     }
 
-    arenaResultUIUpdate(arenaItem, classString) {
+    handleArenaChoice(choice) {
+        this.deleteArenaFooter();
+        remove_regenerate_buttons();
+    
+        const isNoChoice = choice === 'no_choice(bothbad)';
+        const resultString = isNoChoice ? 'draw(bothbad)' : choice;
+    
+        const [model1, model2] = this.arenaDivs.map(item => get_full_model_name(item.model));
+    
+        let winnerIndex = 0
+        if (choice === 'draw' || choice === 'ignored') {
+            // this is for UI purposes, to highlight which output was chosen to continue the conversation, this doesn't modify the actual rating
+            winnerIndex = Math.floor(Math.random() * 2);
+        } else if (choice === 'model_a' || choice === 'model_b') {
+            winnerIndex = choice === 'model_a' ? 0 : 1;
+        }
+        const loserIndex = 1 - winnerIndex;
+    
+        // Update ratings
+        const updatedRatings = arenaRatingManager.addMatchAndUpdate(model1, model2, resultString);
+    
+        if (isNoChoice) {
+            this.arenaDivs.forEach(item => this.arenaResultUIUpdate(item, 'arena-loser', updatedRatings[get_full_model_name(item.model)].rating));
+            resolve_pending(null, true);
+        } else {
+            this.arenaResultUIUpdate(this.arenaDivs[winnerIndex], 'arena-winner', updatedRatings[get_full_model_name(this.arenaDivs[winnerIndex].model)].rating);
+            this.arenaResultUIUpdate(this.arenaDivs[loserIndex], 'arena-loser', updatedRatings[get_full_model_name(this.arenaDivs[loserIndex].model)].rating);
+            resolve_pending(this.arenaDivs[winnerIndex].model);
+        }
+    
+        this.arenaDivs = [];
+        this.isArenaMode = false;
+        this.arenaContainer = null;
+        if (isNoChoice) {
+            api_call();
+        }
+    }
+
+    arenaResultUIUpdate(arenaItem, classString, elo_rating) {
         const parent = arenaItem.contentDiv.parentElement;
         const prefixes = parent.querySelectorAll('.message-prefix');
         const contentDivs = parent.querySelectorAll('.message-content');
         const tokenFooters = parent.querySelectorAll('.message-footer');
-        const api_provider = get_provider_for_model(arenaItem.model);
-        prefixes.forEach(prefix => prefix.textContent = prefix.textContent.replace(ChatRoleDict.assistant, MODELS[api_provider][arenaItem.model]));
+        const full_model_name = get_full_model_name(arenaItem.model);
+        prefixes.forEach(prefix => prefix.textContent = `${prefix.textContent.replace(ChatRoleDict.assistant, full_model_name)} (ELO: ${elo_rating})`);
         contentDivs.forEach(contentDiv => contentDiv.classList.add(classString));
         tokenFooters.forEach(footer => {
             const span = footer.querySelector('span');
@@ -340,8 +377,8 @@ const MODELS = {
     }
 };
 
-// const ARENA_MODELS = ["sonnet-3.5", "gpt-4o", "gemini-1.5-pro-exp"];
-const ARENA_MODELS = ["gpt-4o-mini", "gemini-1.5-pro-exp"]; // for testing
+const ARENA_MODELS = ["sonnet-3.5", "gpt-4o", "gemini-1.5-pro-exp"];
+// const ARENA_MODELS = ["gpt-4o-mini", "gemini-1.5-pro-exp"]; // for testing
 
 const MaxTemp = {
     openai: 2.0,
@@ -353,6 +390,7 @@ let settings = {};
 let messages = [];
 let pending_message = {};
 let chatManager = new ChatManager();
+let arenaRatingManager = null;
 
 
 document.addEventListener('DOMContentLoaded', init);
@@ -489,6 +527,12 @@ function get_provider_for_model(model) {
         if (model in models) return provider;
     }
     return null;
+}
+
+
+function get_full_model_name(model) {
+    const provider = get_provider_for_model(model);
+    return MODELS[provider][model];
 }
 
 
