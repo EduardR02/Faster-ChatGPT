@@ -259,6 +259,12 @@ p {
   text-align: center;
 }
 
+.textarea-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
 .std-input {
   padding: 10px;
   box-sizing: border-box;
@@ -274,6 +280,10 @@ p {
 .std-input:focus {
   outline: none;
   border-color: #ef596f;
+}
+
+.std-input.padding-for-button {
+  padding-right: 48px; /* pretty terrible, just manual calc of the button size, with even padding on both sides, so 10 - 28 - 10*/
 }
 
 :root {
@@ -330,6 +340,30 @@ p {
   /* a bit of a crude fix for the height/width changing when i change the "choice" button's text to X and back to checkmark, specific for font size 0.8em... */
   width: 30px;
   height: 17px;
+}
+
+.arena-toggle-button {
+  transition: background 0.3s ease, color 0.2s ease;
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  margin-bottom: 0;
+  padding: 1px 6px;
+  font-size: 1.4em;
+  background: #abb2bf;
+  /* this is so the icons / text are centered inside the button, as we want to keep it fixed size, but need to adjust content size*/
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.arena-toggle-button.arena-mode-on {
+  font-size: 1.8em;
+  background: #ef596f;
+  color: #ffffff;
 }
 
 .arena-button.no-choice {
@@ -401,6 +435,15 @@ p {
   margin: 0;
   opacity: 1;
   transition: 0s
+}
+
+.arena-toggle-button.button span,
+.arena-toggle-button.button span:after,
+.arena-toggle-button.button:hover span,
+.arena-toggle-button.button:hover span:after,
+.arena-toggle-button.button:after,
+.arena-toggle-button.button:active:after {
+  all: unset;
 }
 
 .clearfix {

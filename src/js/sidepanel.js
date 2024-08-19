@@ -5,7 +5,7 @@ import { ArenaRatingManager, StreamWriter, StreamWriterSimple, TokenCounter, Mod
 class ChatManager {
     constructor() {
         this.conversationDiv = document.getElementById('conversation');
-        this.inputField = document.getElementById('textInput');
+        this.inputFieldWrapper = document.querySelector('.textarea-wrapper');
         this.isArenaMode = false;
         this.arenaDivs = [];
         this.arenaButtons = [];
@@ -42,7 +42,7 @@ class ChatManager {
     initParagraph(role) {
         let paragraph = document.createElement('p');
         paragraph.classList.add(role + "-message");
-        this.conversationDiv.insertBefore(paragraph, this.inputField);
+        this.conversationDiv.insertBefore(paragraph, this.inputFieldWrapper);
         return paragraph;
     }
 
@@ -376,6 +376,7 @@ function init() {
     // and other functionality here.
     input_listener();
     init_settings();
+    init_arena_toggle_button_listener();
     auto_resize_textfield_listener("textInput");
     setup_message_listeners();
     chrome.runtime.sendMessage({ type : "sidepanel_ready"});
@@ -433,9 +434,9 @@ function update_settings(changes, namespace) {
     for (let [key, { newValue }] of Object.entries(changes)) {
         if (key in settings && key !== "lifetime_tokens" && key !== "mode") {
             settings[key] = newValue;
-        }
-        if (key === "arena_mode" && newValue === false) {
-            chatManager.isArenaMode = false;
+            if (key === "arena_mode") {
+                arena_toggle_button_update();
+            }
         }
     }
 }
@@ -880,6 +881,26 @@ function input_listener() {
             update_textfield_height(inputField);
         }
     });
+}
+
+
+function init_arena_toggle_button_listener() {
+    const button = document.querySelector('.arena-toggle-button');
+    // update button correctly on init
+    arena_toggle_button_update();
+
+    button.addEventListener('click', () => {
+        settings.arena_mode = !settings.arena_mode;
+        arena_toggle_button_update();
+    });
+}
+
+
+function arena_toggle_button_update() {
+    const button = document.querySelector('.arena-toggle-button');
+    button.textContent = settings.arena_mode ? '\u{2694}' : '\u{1F916}';
+    if (settings.arena_mode) button.classList.add('arena-mode-on');
+    else button.classList.remove('arena-mode-on');
 }
 
 
