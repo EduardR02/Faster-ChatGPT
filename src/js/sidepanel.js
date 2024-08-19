@@ -250,42 +250,6 @@ class ChatManager {
     handleArenaChoice(choice) {
         this.deleteArenaFooter();
         remove_regenerate_buttons();
-        let winnerIndex = 0;
-        if (choice === 'model_a' || choice === 'model_b') {
-            winnerIndex = choice === 'model_a' ? 0 : 1;
-        }
-        else if (choice === 'draw' || choice === 'ignored') {
-            winnerIndex = Math.floor(Math.random() * 2);
-        }
-        let isNoChoice = choice === 'no_choice(bothbad)';
-        let loserIndex = 1 - winnerIndex;
-        if (isNoChoice) {
-            resolve_pending(null, true);
-            this.arenaDivs.forEach(item => this.arenaResultUIUpdate(item, 'arena-loser'));
-        }
-        else {
-            resolve_pending(this.arenaDivs[winnerIndex].model);
-            this.arenaResultUIUpdate(this.arenaDivs[winnerIndex], 'arena-winner');
-            this.arenaResultUIUpdate(this.arenaDivs[loserIndex], 'arena-loser');
-        }
-        let resultString = isNoChoice ? 'draw(bothbad)' : resultString;
-        arenaRatingManager.addMatchAndUpdate(this.arenaDivs[winnerIndex].model, this.arenaDivs[loserIndex].model, resultString);
-        
-        this.arenaDivs = [];
-        this.isArenaMode = false;
-        this.arenaContainer = null;
-        if (isNoChoice) {
-            // because we thought both models are bad, we don't want to use either response, so start a new arena block with new models for the last user prompt
-            // probably not the best way to handle this because that might not always be desired user behaviour, but ok for now,
-            // esp. because I don't know yet what would make sense here, maybe changing the last user prompt and redoing it with the same models makes sense
-            // we will see...
-            api_call();
-        }
-    }
-
-    handleArenaChoice(choice) {
-        this.deleteArenaFooter();
-        remove_regenerate_buttons();
     
         const isNoChoice = choice === 'no_choice(bothbad)';
         const resultString = isNoChoice ? 'draw(bothbad)' : choice;
