@@ -325,6 +325,8 @@ p {
 
 .arena-button.reveal {
   background: #56b6c2;
+  font-size: 1.3em;
+  line-height: calc(1em - 2px);
 }
 
 .arena-button.hovered {

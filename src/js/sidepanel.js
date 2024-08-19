@@ -662,6 +662,7 @@ async function response_stream(response_stream, model) {
     const writerSpeed = chatManager.isArenaMode ? 1500 : 2000;
     // problem is that stream speed and how "clunky" it is is a dead giveaway in arena mode for which model/provider it is, so we try to even it out by fixing the speed.
     // unfortunately currently gemini stream still "stutters" for the first few seconds, so it's obvious, but for the other models you can't tell anymore
+    // might make sense to add random startup delay, like 2-3 sec
     if (api_provider === "gemini" || chatManager.isArenaMode) {
         streamWriter = new StreamWriter(contentDiv, chatManager.scrollIntoView.bind(chatManager), writerSpeed);
     }
