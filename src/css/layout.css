@@ -132,6 +132,24 @@ a:visited {
   outline:none;
 }
 
+.checkbox.arena-models:checked {
+  border-color: #56b6c2;
+  background-color:#56b6c2;
+  outline:none;
+}
+
+@keyframes wiggle {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+
+.settings-error {
+  transition: color 0.4s ease;
+  color: #fdaaaa;
+  animation: wiggle 0.1s ease-in-out 2;
+}
+
 h1 {
   color: #61afef;
 }

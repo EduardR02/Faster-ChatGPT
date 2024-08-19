@@ -34,6 +34,9 @@ function init() {
         });
     });
 
+    let arenaModeRadio = document.getElementById('arena-mode');
+    arenaModeRadio.addEventListener('change', toggle_model_checkboxes);
+
     let button = document.querySelector('#button-delete-arena');
     button.addEventListener('click', arenaDeleteConfirm);
 }
@@ -108,10 +111,10 @@ function save_settings() {
     let settings = {};
     settings.max_tokens = parseInt(document.getElementById('max-tokens').value.trim());
     settings.temperature = parseFloat(document.getElementById('temperature').value.trim());
-    settings.model = document.querySelector('input[name="model-select"]:checked').value;
     settings.close_on_deselect = document.getElementById('close-on-deselect').checked;
     settings.stream_response = document.getElementById('stream-response').checked;
     settings.arena_mode = document.getElementById('arena-mode').checked;
+    save_model_or_arena_models(settings, settings.arena_mode);
     for (let key in settings) {
         if (settings[key] === existing_settings[key] || settings[key] === undefined ||
             settings[key] === NaN || settings[key] === "") {
@@ -125,19 +128,64 @@ function save_settings() {
 }
 
 
+function save_model_or_arena_models(settings, arena_mode) {
+    const models_label = document.getElementById('models-label');
+    const arena_models = document.querySelectorAll('input[name="model-select"]:checked');
+    if (arena_mode) {
+        if (arena_models.length < 2) {
+            models_label.classList.remove('settings-error');
+            // sucks but whatever
+            setTimeout(() => models_label.classList.add('settings-error'), 10);
+        }
+        else {
+            settings.arena_models = Array.from(arena_models).map(checkbox => checkbox.id);
+            models_label.classList.remove('settings-error');
+        }
+    }
+    else {
+        settings.model = arena_models[0].value;
+        models_label.classList.remove('settings-error');
+    }
+}
+
+
 function init_values() {
-    chrome.storage.sync.get(['api_keys', 'max_tokens', 'temperature', 'model', 'close_on_deselect', 'stream_response', 'arena_mode'], function(res) {
+    chrome.storage.sync.get(['api_keys', 'max_tokens', 'temperature', 'model', 'close_on_deselect', 'stream_response', 'arena_mode', 'arena_models'], function(res) {
         document.getElementById('max-tokens').value = res.max_tokens;
         document.getElementById('temperature').value = res.temperature;
-        document.getElementById(res.model).checked = true;
         document.getElementById('close-on-deselect').checked = res.close_on_deselect;
         document.getElementById('stream-response').checked = res.stream_response;
         document.getElementById('arena-mode').checked = res.arena_mode || false;
+        res.arena_models = res.arena_models || [];
         res.api_keys = res.api_keys || {};
         existing_settings = res;
         set_api_label();
+        toggle_model_checkboxes();
     });
     textarea_setup();
+}
+
+
+function toggle_model_checkboxes() {
+    const model_checkboxes = document.getElementsByName('model-select');
+    const arena_mode_val = document.getElementById('arena-mode').checked;
+    const models_label = document.getElementById('models-label');
+    const swapToType = arena_mode_val ? 'checkbox' : 'radio';
+    models_label.innerText = arena_mode_val ? 'Arena Models:' : 'Model:';
+    models_label.classList.remove('settings-error');
+    model_checkboxes.forEach(input => {
+        input.type = swapToType;
+        if (swapToType === 'checkbox') {
+            input.classList.add('arena-models');
+            input.checked = existing_settings.arena_models.includes(input.id);
+        }
+        else {
+            input.classList.remove('arena-models');
+        }
+    });
+    if (!arena_mode_val) {
+        document.getElementById(existing_settings.model).checked = true;
+    }
 }
 
 

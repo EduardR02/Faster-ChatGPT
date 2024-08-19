@@ -277,11 +277,11 @@ class ChatManager {
         }
     
         if (isNoChoice) {
-            this.arenaDivs.forEach(item => this.arenaResultUIUpdate(item, 'arena-loser', updatedRatings[get_full_model_name(item.model)].rating));
+            this.arenaDivs.forEach(item => this.arenaResultUIUpdate(item, 'arena-loser', this.getModelRating(get_full_model_name(item.model), updatedRatings)));
             resolve_pending(null, true);
         } else {
-            this.arenaResultUIUpdate(this.arenaDivs[winnerIndex], 'arena-winner', updatedRatings[get_full_model_name(this.arenaDivs[winnerIndex].model)].rating);
-            this.arenaResultUIUpdate(this.arenaDivs[loserIndex], 'arena-loser', updatedRatings[get_full_model_name(this.arenaDivs[loserIndex].model)].rating);
+            this.arenaResultUIUpdate(this.arenaDivs[winnerIndex], 'arena-winner', this.getModelRating(get_full_model_name(this.arenaDivs[winnerIndex].model), updatedRatings));
+            this.arenaResultUIUpdate(this.arenaDivs[loserIndex], 'arena-loser', this.getModelRating(get_full_model_name(this.arenaDivs[loserIndex].model), updatedRatings));
             resolve_pending(this.arenaDivs[winnerIndex].model);
         }
     
@@ -291,6 +291,11 @@ class ChatManager {
         if (isNoChoice) {
             api_call();
         }
+    }
+
+    getModelRating(model, ratingsDict) {
+        if (ratingsDict[model]) return ratingsDict[model].rating;
+        return 1000;
     }
 
     arenaResultUIUpdate(arenaItem, classString, elo_rating) {
@@ -349,9 +354,6 @@ const MODELS = {
         "gemini-1.5-pro": "gemini-1.5-pro"
     }
 };
-
-const ARENA_MODELS = ["sonnet-3.5", "gpt-4o", "gemini-1.5-pro-exp"];
-// const ARENA_MODELS = ["gpt-4o-mini", "gemini-1.5-pro-exp"]; // for testing
 
 const MaxTemp = {
     openai: 2.0,
@@ -448,7 +450,7 @@ function remove_added_paragraphs() {
 function api_call(model = null) {
     chatManager.antiScrollListener();
     if (settings.arena_mode) {
-        if (ARENA_MODELS.length < 2) {
+        if (settings.arena_models.length < 2) {
             post_error_message_in_chat("Arena mode", "Not enough models enabled for Arena mode.");
             return;
         }
@@ -470,7 +472,7 @@ function get_random_arena_models() {
     // ok fk it, by doing it with calculating random indices it seems to be hard to avoid bias, and doing a while loop is stupid
     // so we'll just do shuffle and pick first, ran this in python for 50 mil iterations on 5 length array, seems unbiased
     function shuffleArray() {
-        let array = ARENA_MODELS.slice();
+        let array = settings.arena_models.slice();
         for (let i = array.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [array[i], array[j]] = [array[j], array[i]];
@@ -798,7 +800,7 @@ function init_prompt(context) {
 
 
 function init_settings() {
-    chrome.storage.sync.get(['api_keys', 'max_tokens', 'temperature', 'model', 'stream_response', 'arena_mode'])
+    chrome.storage.sync.get(['api_keys', 'max_tokens', 'temperature', 'model', 'stream_response', 'arena_mode', 'arena_models'])
     .then(res => {
         settings = {
             api_keys: res.api_keys || {},
@@ -806,7 +808,8 @@ function init_settings() {
             temperature: res.temperature,
             model: res.model,
             stream_response: res.stream_response,
-            arena_mode: res.arena_mode
+            arena_mode: res.arena_mode,
+            arena_models: res.arena_models || []
         };
         chrome.storage.onChanged.addListener(update_settings);
         if (Object.keys(settings.api_keys).length === 0) {
