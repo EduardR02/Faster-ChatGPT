@@ -658,7 +658,16 @@ async function response_stream(response_stream, model) {
     let contentDiv = chatManager.getContentDivAndSetModel(model);
     let api_provider = get_provider_for_model(model);
     let tokenCounter = new TokenCounter(api_provider);
-    let streamWriter = api_provider === "gemini" ? new StreamWriter(contentDiv, chatManager.scrollIntoView.bind(chatManager), 2000) : new StreamWriterSimple(contentDiv, chatManager.scrollIntoView.bind(chatManager));
+    let streamWriter;
+    const writerSpeed = chatManager.isArenaMode ? 1500 : 2000;
+    // problem is that stream speed and how "clunky" it is is a dead giveaway in arena mode for which model/provider it is, so we try to even it out by fixing the speed.
+    // unfortunately currently gemini stream still "stutters" for the first few seconds, so it's obvious, but for the other models you can't tell anymore
+    if (api_provider === "gemini" || chatManager.isArenaMode) {
+        streamWriter = new StreamWriter(contentDiv, chatManager.scrollIntoView.bind(chatManager), writerSpeed);
+    }
+    else {
+        streamWriter = new StreamWriterSimple(contentDiv, chatManager.scrollIntoView.bind(chatManager));
+    }
 
     const reader = response_stream.body.getReader();
     const decoder = new TextDecoder("utf-8");
