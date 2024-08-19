@@ -126,13 +126,12 @@ class ChatManager {
         footer.classList.add('arena-footer');
 
         const buttons = [
+            { text: '\u{1F441}', choice: 'reveal' },
             { text: '\u{2713}', choice: 'model_a' },
             { text: '==', choice: 'draw' },
             { text: '\u{2713}', choice: 'model_b' },
             { text: 'X', choice: 'no_choice(bothbad)' }
         ];
-        // add empty div to center the buttons
-        footer.appendChild(document.createElement('div'));
         buttons.forEach(btn => {
             const button = document.createElement('button');
             button.classList.add('button', 'arena-button');
@@ -141,6 +140,9 @@ class ChatManager {
             }
             else if (btn.choice === 'draw') {
                 button.classList.add('draw');
+            }
+            else if (btn.choice === 'reveal') {
+                button.classList.add('reveal');
             }
             else {
                 button.classList.add('choice');
@@ -257,7 +259,7 @@ class ChatManager {
         const [model1, model2] = this.arenaDivs.map(item => get_full_model_name(item.model));
     
         let winnerIndex = 0
-        if (choice === 'draw' || choice === 'ignored') {
+        if (['draw', 'reveal', 'ignored'].includes(choice)) {
             // this is for UI purposes, to highlight which output was chosen to continue the conversation, this doesn't modify the actual rating
             winnerIndex = Math.floor(Math.random() * 2);
         } else if (choice === 'model_a' || choice === 'model_b') {
@@ -265,8 +267,14 @@ class ChatManager {
         }
         const loserIndex = 1 - winnerIndex;
     
-        // Update ratings
-        const updatedRatings = arenaRatingManager.addMatchAndUpdate(model1, model2, resultString);
+        // Update ratings, don't think it makes sense to save the "ignored"/"reveal" category
+        let updatedRatings;
+        if (choice === 'ignored' || choice === 'reveal') {
+            updatedRatings = arenaRatingManager.cachedRatings;
+        }
+        else {
+            updatedRatings = arenaRatingManager.addMatchAndUpdate(model1, model2, resultString);
+        }
     
         if (isNoChoice) {
             this.arenaDivs.forEach(item => this.arenaResultUIUpdate(item, 'arena-loser', updatedRatings[get_full_model_name(item.model)].rating));
@@ -291,7 +299,8 @@ class ChatManager {
         const contentDivs = parent.querySelectorAll('.message-content');
         const tokenFooters = parent.querySelectorAll('.message-footer');
         const full_model_name = get_full_model_name(arenaItem.model);
-        prefixes.forEach(prefix => prefix.textContent = `${prefix.textContent.replace(ChatRoleDict.assistant, full_model_name)} (ELO: ${elo_rating})`);
+        const elo_rounded = Math.round(elo_rating * 10) / 10;   // round to one decimal place
+        prefixes.forEach(prefix => prefix.textContent = `${prefix.textContent.replace(ChatRoleDict.assistant, full_model_name)} (ELO: ${elo_rounded})`);
         contentDivs.forEach(contentDiv => contentDiv.classList.add(classString));
         tokenFooters.forEach(footer => {
             const span = footer.querySelector('span');

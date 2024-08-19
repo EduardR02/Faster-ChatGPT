@@ -250,7 +250,7 @@ export class ArenaRatingManager {
     }
 
     saveMatch(modelA, modelB, result) {
-        const validResults = ["model_a", "model_b", "draw", "draw(bothbad)", "ignored"];
+        const validResults = ["model_a", "model_b", "draw", "draw(bothbad)"];
         if (!validResults.includes(result)) {
             throw new Error(`Attempted to save invalid result to DB: ${result}`);
         }
@@ -314,6 +314,7 @@ export class ArenaRatingManager {
                     break;
                 case "draw(bothbad)":
                 case "ignored":
+                case "reveal":
                     // only want to save these just in case, but not use them for the ratings, bothbad is more supposed to be a "cancel/this sucks" than a draw
                     return;
                 default:

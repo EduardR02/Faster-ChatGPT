@@ -153,7 +153,6 @@ p {
   display: flex;
   justify-content: space-between;
   margin-top: 1em;
-  margin-left: 1em;
   transition: all 0.4s ease;
 }
 
@@ -308,7 +307,6 @@ p {
   padding: 1px 6px;
   background: #98c379;
   margin-bottom: 0;
-  transform: translateX(50%);
   font-size: 0.8em;
   transition: background 0.4s ease;
   /* a bit of a crude fix for the height/width changing when i change the "choice" button's text to X and back to checkmark, specific for font size 0.8em... */
@@ -325,13 +323,16 @@ p {
   background: #61afef;
 }
 
+.arena-button.reveal {
+  background: #56b6c2;
+}
+
 .arena-button.hovered {
   background: #abb2bf;
 }
 
 .arena-button.choice-not-hovered {
   background: #ef596f;
-
 }
 
 .no-bottom-margin {
