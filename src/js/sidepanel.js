@@ -448,7 +448,7 @@ function remove_added_paragraphs() {
 }
 
 
-function api_call(model = null) {
+function api_call() {
     chatManager.antiScrollListener();
     if (settings.arena_mode) {
         if (settings.arena_models.length < 2) {
@@ -462,9 +462,8 @@ function api_call(model = null) {
         api_call_single(model2);
     }
     else {
-        model = model || settings.model;
         chatManager.initMessageBlock(RoleEnum.assistant);
-        api_call_single(model);
+        api_call_single(settings.model);
     }
 }
 
@@ -706,6 +705,7 @@ async function response_stream(response_stream, model) {
 function regenerate_response(model, contentDiv) {
     chatManager.onRegenerate(contentDiv);
     chatManager.antiScrollListener();
+    if (!chatManager.isArenaMode) model = settings.model;
     api_call_single(model);
 }
 
