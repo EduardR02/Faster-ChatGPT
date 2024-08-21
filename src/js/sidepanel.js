@@ -785,6 +785,7 @@ function init_prompt(context) {
         chrome.storage.local.get(prompt_string)
             .then(res => {
                 messages = [];
+                pending_message = {};
                 let prompt = res[prompt_string];
                 if (context.mode === "selection") {
                     prompt += `\n"""[${context.url}]"""\n"""[${context.text}]"""`;
