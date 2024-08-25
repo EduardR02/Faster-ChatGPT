@@ -802,7 +802,7 @@ function init_prompt(context) {
 
 
 function init_settings() {
-    chrome.storage.sync.get(['api_keys', 'max_tokens', 'temperature', 'model', 'stream_response', 'arena_mode', 'arena_models'])
+    chrome.storage.local.get(['api_keys', 'max_tokens', 'temperature', 'model', 'stream_response', 'arena_mode', 'arena_models'])
     .then(res => {
         settings = {
             api_keys: res.api_keys || {},

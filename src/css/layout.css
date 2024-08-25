@@ -14,15 +14,6 @@ body {
   margin-bottom: 20px;
 }
 
-.setting_container_old {
-  display: flex;
-  margin-left: auto;
-  box-sizing: border-box;
-  flex-direction: column;
-  width: 260px;
-  padding: 5px;
-}
-
 .block_div {
   width: 260px;
   display: flex;

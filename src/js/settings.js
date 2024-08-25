@@ -11,7 +11,7 @@ const apiDisplayNames = {
 
 let currentApiIndex = 0;
 
-init()
+init();
 
 
 function init() {
@@ -102,7 +102,7 @@ function save_api_key() {
     if (key !== "" && key !== existing_settings.api_keys[apiProviders[currentApiIndex]]) {
         let api_keys = existing_settings.api_keys;
         api_keys[apiProviders[currentApiIndex]] = key;
-        chrome.storage.sync.set({api_keys: api_keys});
+        chrome.storage.local.set({api_keys: api_keys});
     }
 }
 
@@ -124,7 +124,7 @@ function save_settings() {
             existing_settings[key] = settings[key];
         }
     }
-    chrome.storage.sync.set(settings);
+    chrome.storage.local.set(settings);
 }
 
 
@@ -150,7 +150,7 @@ function save_model_or_arena_models(settings, arena_mode) {
 
 
 function init_values() {
-    chrome.storage.sync.get(['api_keys', 'max_tokens', 'temperature', 'model', 'close_on_deselect', 'stream_response', 'arena_mode', 'arena_models'], function(res) {
+    chrome.storage.local.get(['api_keys', 'max_tokens', 'temperature', 'model', 'close_on_deselect', 'stream_response', 'arena_mode', 'arena_models'], function(res) {
         document.getElementById('max-tokens').value = res.max_tokens;
         document.getElementById('temperature').value = res.temperature;
         document.getElementById('close-on-deselect').checked = res.close_on_deselect;

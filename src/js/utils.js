@@ -1,12 +1,12 @@
 export function get_mode(callback) {
-	chrome.storage.sync.get('mode', function(res) {
+	chrome.storage.local.get('mode', function(res) {
 		callback(res.mode);
 	});
 }
 
 
 export function set_mode(new_mode) {
-    chrome.storage.sync.set({mode: new_mode});
+    chrome.storage.local.set({mode: new_mode});
 }
 
 
@@ -16,7 +16,7 @@ export function is_on(mode) {
 
 
 export function get_lifetime_tokens(callback) {
-    chrome.storage.sync.get(['lifetime_input_tokens', 'lifetime_output_tokens'], function(res) {
+    chrome.storage.local.get(['lifetime_input_tokens', 'lifetime_output_tokens'], function(res) {
         callback({
             input: res.lifetime_input_tokens || 0,
             output: res.lifetime_output_tokens || 0
@@ -26,7 +26,7 @@ export function get_lifetime_tokens(callback) {
 
 export function set_lifetime_tokens(newInputTokens, newOutputTokens) {
     get_lifetime_tokens(function(currentTokens) {
-        chrome.storage.sync.set({
+        chrome.storage.local.set({
             lifetime_input_tokens: currentTokens.input + newInputTokens,
             lifetime_output_tokens: currentTokens.output + newOutputTokens
         });
@@ -76,7 +76,7 @@ export function set_defaults() {
         stream_response: true,
         arena_mode: false
     }
-    chrome.storage.sync.set(settings);
+    chrome.storage.local.set(settings);
     // for some reason relative path does not work, only full path.
     // possibly because function is called on startup in background worker, and maybe the context is the base dir then.
     loadTextFromFile("src/prompts/prompt.txt").then((text) => {

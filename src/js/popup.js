@@ -51,7 +51,7 @@ function open_side_panel() {
 }
 
 function toggle_mode(callback) {
-	chrome.storage.sync.get('mode', function(res) {
+	chrome.storage.local.get('mode', function(res) {
 		let new_mode = ModeEnum.Off;
 		if (res.mode !== undefined) {
 			// increment mode
