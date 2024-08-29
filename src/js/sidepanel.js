@@ -430,7 +430,7 @@ function initArenaRatingManager(print_history = false) {
 
 
 function update_settings(changes, namespace) {
-    if (namespace !== "sync") return;
+    if (namespace !== "local") return;
     for (let [key, { newValue }] of Object.entries(changes)) {
         if (key in settings && key !== "lifetime_tokens" && key !== "mode") {
             settings[key] = newValue;
