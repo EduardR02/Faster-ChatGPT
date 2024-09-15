@@ -374,6 +374,7 @@ const MODELS = {
     },
     gemini: {
         "gemini-1.5-pro-exp": "gemini-1.5-pro-exp-0801",
+        "gemini-1.5-pro-exp-2": "gemini-1.5-pro-exp-0827",
         "gemini-1.5-pro": "gemini-1.5-pro"
     }
 };
