@@ -24,6 +24,10 @@
                 <input type="number" id="temperature" class="std-input small setting-input">
             </div>
             <div class="setting">
+                <label for="loop-threshold" class="setting-label">Max thinking loops:</label>
+                <input type="number" id="loop-threshold" class="std-input small setting-input">
+            </div>
+            <div class="setting">
                 <label for="close-on-deselect" class="setting-label">Close Sidepanel on Deselect:</label>
                 <div class="dummy">
                     <input type="checkbox" id="close-on-deselect" class="checkbox other-checkbox-align">
@@ -75,6 +79,10 @@
                     <label class="setting-label">Selection Prompt</label>
                     <input type="radio" id="chat-prompt" name="prompt-select" value="chat_prompt" class="checkbox">
                     <label class="setting-label">Chat Prompt</label>
+                    <input type="radio" id="thinking-prompt" name="prompt-select" value="thinking_prompt" class="checkbox">
+                    <label class="setting-label">Thinking Prompt</label>
+                    <input type="radio" id="solver-prompt" name="prompt-select" value="solver_prompt" class="checkbox">
+                    <label class="setting-label">Solver Prompt</label>
                 </div>
             </div>
         </div>

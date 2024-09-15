@@ -44,7 +44,9 @@ export function auto_resize_textfield_listener(element_id) {
 
 export function update_textfield_height(inputField) {
     inputField.style.height = 'auto';
-    inputField.style.height = (inputField.scrollHeight) + 'px';
+    let buttonArea = document.querySelector('.chatbox-button-container');
+    let buttonAreaHeight = buttonArea ? buttonArea.offsetHeight : 0;
+    inputField.style.height = (Math.max(inputField.scrollHeight, buttonAreaHeight)) + 'px';
 }
 
 
@@ -70,6 +72,7 @@ export function set_defaults() {
         lifetime_output_tokens: 0,
         max_tokens: 500,
         temperature: 1.2,
+        loop_threshold: 3,
         model : "gpt-4o-mini",
         api_keys: {},
         close_on_deselect: true,
@@ -112,33 +115,38 @@ export class TokenCounter {
 }
 
 
-export class StreamWriterSimple {
-    constructor(contentDiv, scrollFunc) {
-        this.contentDiv = contentDiv;
-        this.scrollFunc = scrollFunc;
-        this.message = [];
+export class Footer {
+    constructor(inputTokens, outputTokens, isArenaMode, thoughtProcessState, regenerate_response) {
+        this.inputTokens = inputTokens;
+        this.outputTokens = outputTokens;
+        this.isArenaMode = isArenaMode;
+        this.thoughtProcessState = thoughtProcessState;
+        this.regenerate_response = regenerate_response;
     }
 
-    processContent(content) {
-        this.message.push(content);
-        this.contentDiv.textContent += content;
-        this.scrollFunc();
-    }
-
-    addFooter(inputTokens, outputTokens, isArenaMode, regenerate_response, add_pending) {
+    create(contentDiv) {
         let footerDiv = document.createElement("div");
         footerDiv.classList.add("message-footer");
         // need span to be able to calculate the width of the text in css for the centering animation
         let tokensSpan = document.createElement('span');
-        tokensSpan.textContent = `${ isArenaMode ? "~": inputTokens} | ${outputTokens}`;
-        footerDiv.setAttribute('input-tokens', inputTokens);
+        tokensSpan.textContent = `${ this.isArenaMode ? "~": this.inputTokens} | ${this.outputTokens}`;
+        footerDiv.setAttribute('input-tokens', this.inputTokens);
         footerDiv.appendChild(tokensSpan);
+        if (this.thoughtProcessState !== "thinking") {
+            this.createRegenerateButton(footerDiv, contentDiv);
+        }
+        else {
+            footerDiv.classList.add('centered');
+        }
+        contentDiv.appendChild(footerDiv);
+    }
 
+    createRegenerateButton(footerDiv, contentDiv) {
         let regerateButton = document.createElement("button");
         regerateButton.textContent = '\u{21BB}'; // refresh symbol
         regerateButton.classList.add("button", "regenerate-button");
         regerateButton.addEventListener('click', () => {
-            regenerate_response(this.contentDiv);
+            this.regenerate_response(contentDiv);
             regerateButton.classList.add('fade-out');
             const handleTransitionEnd = (event) => {
                 if (event.propertyName === 'opacity') {
@@ -150,9 +158,31 @@ export class StreamWriterSimple {
             regerateButton.addEventListener('transitionend', handleTransitionEnd);
         });
         footerDiv.appendChild(regerateButton);
-        this.contentDiv.appendChild(footerDiv);
+    }   
+}
+
+
+export class StreamWriterSimple {
+    constructor(contentDiv, scrollFunc) {
+        this.contentDiv = contentDiv;
+        this.scrollFunc = scrollFunc;
+        this.message = [];
+        this.fullMessage = "";
+    }
+
+    processContent(content) {
+        this.message.push(content);
+        this.contentDiv.textContent += content;
         this.scrollFunc();
-        add_pending(this.message.join(''));
+    }
+
+    addFooter(footer, add_pending) {
+        footer.create(this.contentDiv);
+        this.scrollFunc();
+        this.fullMessage = this.message.join('');
+        const done = footer.thoughtProcessState !== "thinking";
+        add_pending(this.fullMessage, done);
+        return new Promise((resolve) => resolve());
     }
 }
 
@@ -197,19 +227,21 @@ export class StreamWriter extends StreamWriterSimple {
             } else {
                 this.isProcessing = false;
                 if (this.pendingFooter) {
-                    const {inputTokens, outputTokens, isArenaMode, regenerate_response, add_pending} = this.pendingFooter;
-                    this.addFooter(inputTokens, outputTokens, isArenaMode, regenerate_response, add_pending);
+                    const {footer, add_pending, resolve} = this.pendingFooter;
+                    super.addFooter(footer, add_pending).then(resolve);  // Resolve the promise after processing the footer
                     this.pendingFooter = null;
                 }
             }
         });
     }
 
-    addFooter(inputTokens, outputTokens, isArenaMode, regenerate_response, add_pending) {
+    addFooter(footer, add_pending) {
         if (this.isProcessing) {
-            this.pendingFooter = {inputTokens, outputTokens, isArenaMode, regenerate_response, add_pending};
+            return new Promise((resolve) => {
+                this.pendingFooter = {footer, add_pending, resolve}; // Save the resolve function to call later
+            });
         } else {
-            super.addFooter(inputTokens, outputTokens, isArenaMode, regenerate_response, add_pending);
+            return super.addFooter(footer, add_pending);
         }
     }
 }

@@ -1,4 +1,4 @@
-import { ArenaRatingManager, StreamWriter, StreamWriterSimple, TokenCounter, ModeEnum, get_mode, set_lifetime_tokens,
+import { ArenaRatingManager, StreamWriter, StreamWriterSimple, Footer, TokenCounter, ModeEnum, get_mode, set_lifetime_tokens,
     auto_resize_textfield_listener, update_textfield_height, is_on } from "./utils.js";
 
 
@@ -17,6 +17,7 @@ class ChatManager {
         this.pendingResponses = 0;
         this.shouldScroll = true;
         this.scrollListenerActive = false;
+        this.thinkingModeActive = false;
     }
 
     initArenaMode() {
@@ -46,20 +47,37 @@ class ChatManager {
         return paragraph;
     }
 
-    onRegenerate(contentDiv) {
+    onRegenerate(contentDiv, thinkingProcess) {
         let parentDiv = contentDiv.parentElement;
         let roleString = ChatRoleDict[RoleEnum.assistant] + ' \u{27F3}';
-        this.createMessageDiv(parentDiv, RoleEnum.assistant, '', roleString);
+        this.createMessageDiv(parentDiv, RoleEnum.assistant, thinkingProcess, '', roleString);
     }
 
-    createMessageDiv(parentElement, role, text = '', roleString = null) {
+    onContinue(contentDiv, thinkingProcess) {
+        let parentDiv = contentDiv.parentElement;
+        this.createMessageDiv(parentDiv, RoleEnum.assistant, thinkingProcess);
+    }
+
+    createMessageDiv(parentElement, role, thinkingProcess = "none", text = '', roleString = null) {
         // unfortunately need this guy in case we want to regenerate a response in arena mode
         let messageWrapper = document.createElement('div');
         messageWrapper.classList.add('message-wrapper');
 
         let prefixSpan = document.createElement('span');
         prefixSpan.classList.add('message-prefix', role + '-prefix');
-        prefixSpan.textContent = roleString || ChatRoleDict[role];
+
+        let thinkingModeString = "";
+        if (role === RoleEnum.assistant) {
+            if (thinkingProcess === "thinking") thinkingModeString = " 🧠";
+            else if (thinkingProcess === "solver") thinkingModeString = " 💡";
+
+            // prepend the regenerate symbol to the thinking process string if it's present in the previous prefix span
+            if (!roleString && parentElement.hasChildNodes() && parentElement.querySelector('.message-prefix').textContent.includes('\u{27F3}')) {
+                thinkingModeString = ' \u{27F3}' + thinkingModeString
+            }
+        }
+
+        prefixSpan.textContent = (roleString || ChatRoleDict[role]) + thinkingModeString;
         messageWrapper.appendChild(prefixSpan);
 
         let contentDiv = document.createElement('div');
@@ -75,11 +93,11 @@ class ChatManager {
         return contentDiv;
     }
 
-    initMessageBlock(role, roleString = null) {
-        this.createMessageBlock(role, '', roleString);
+    initMessageBlock(role, thinkingProcess = "none", roleString = null) {
+        this.createMessageBlock(role, '', thinkingProcess, roleString);
     }
 
-    createMessageBlock(role, text, roleString = null) {
+    createMessageBlock(role, text, thinkingProcess = "none", roleString = null) {
         let paragraph = this.initParagraph(role);
 
         if (this.isArenaMode && role === RoleEnum.assistant) {
@@ -91,7 +109,7 @@ class ChatManager {
             arenaDiv.classList.add('arena-wrapper');
 
             for (let i = 0; i < 2; i++) {
-                let contentDiv = this.createMessageDiv(arenaDiv, role);
+                let contentDiv = this.createMessageDiv(arenaDiv, role, thinkingProcess);
                 this.arenaDivs.push({ model: null, contentDiv: contentDiv });
             }
 
@@ -99,7 +117,7 @@ class ChatManager {
             paragraph.appendChild(fullDiv);
         }
         else {
-            this.createMessageDiv(paragraph, role, text, roleString);
+            this.createMessageDiv(paragraph, role, thinkingProcess, text, roleString);
         }
     }
 
@@ -119,6 +137,11 @@ class ChatManager {
             return this.contentDivs.splice(index, 1)[0];
         }
         return this.contentDivs.shift();
+    }
+
+    getContentDivIndex(model) {
+        if (!this.isArenaMode) return 0;
+        return this.arenaDivs.findIndex(item => item.model === model);
     }
 
     addArenaFooter() {
@@ -278,7 +301,7 @@ class ChatManager {
     
         if (isNoChoice) {
             this.arenaDivs.forEach(item => this.arenaResultUIUpdate(item, 'arena-loser', this.getModelRating(get_full_model_name(item.model), updatedRatings)));
-            resolve_pending(null, true);
+            discard_pending(null);
         } else {
             this.arenaResultUIUpdate(this.arenaDivs[winnerIndex], 'arena-winner', this.getModelRating(get_full_model_name(this.arenaDivs[winnerIndex].model), updatedRatings));
             this.arenaResultUIUpdate(this.arenaDivs[loserIndex], 'arena-loser', this.getModelRating(get_full_model_name(this.arenaDivs[loserIndex].model), updatedRatings));
@@ -363,9 +386,12 @@ const MaxTemp = {
 
 let settings = {};
 let messages = [];
+let initial_prompt = "";
 let pending_message = {};
 let chatManager = new ChatManager();
 let arenaRatingManager = null;
+let thinkingMode = false;
+let thoughtLoops = [0, 0];
 
 
 document.addEventListener('DOMContentLoaded', init);
@@ -377,6 +403,7 @@ function init() {
     input_listener();
     init_settings();
     init_arena_toggle_button_listener();
+    init_thinking_mode_button();
     auto_resize_textfield_listener("textInput");
     setup_message_listeners();
     chrome.runtime.sendMessage({ type : "sidepanel_ready"});
@@ -397,6 +424,7 @@ function setup_message_listeners() {
 function when_new_selection(text, url) {
     remove_added_paragraphs();
     chatManager.createMessageBlock(RoleEnum.system, text, "Selected text");
+    thoughtLoops = [0, 0];
     init_prompt({mode: "selection", text: text, url: url}).then(() => {
         get_mode(function(current_mode) {
             if (current_mode === ModeEnum.InstantPromptMode) {
@@ -450,6 +478,9 @@ function remove_added_paragraphs() {
 
 function api_call() {
     chatManager.antiScrollListener();
+    const thinkingModeString = thinkingMode ? "thinking" : "none";
+    chatManager.thinkingModeActive = thinkingMode;
+    thoughtLoops = [0, 0];
     if (settings.arena_mode) {
         if (settings.arena_models.length < 2) {
             post_error_message_in_chat("Arena mode", "Not enough models enabled for Arena mode.");
@@ -457,13 +488,13 @@ function api_call() {
         }
         let [model1, model2] = get_random_arena_models();
         chatManager.initArenaMode();
-        chatManager.initMessageBlock(RoleEnum.assistant);
-        api_call_single(model1);
-        api_call_single(model2);
+        chatManager.initMessageBlock(RoleEnum.assistant, thinkingModeString);
+        api_call_single(model1, thinkingModeString);
+        api_call_single(model2, thinkingModeString);
     }
     else {
-        chatManager.initMessageBlock(RoleEnum.assistant);
-        api_call_single(settings.model);
+        chatManager.initMessageBlock(RoleEnum.assistant, thinkingModeString);
+        api_call_single(settings.model, thinkingModeString);
     }
 }
 
@@ -485,23 +516,24 @@ function get_random_arena_models() {
 }
 
 
-function api_call_single(model) {
+function api_call_single(model, thoughtProcessState = "none") {
     const [api_link, requestOptions] = create_api_request(model);
     fetch(api_link, requestOptions)
-        .then(response => settings.stream_response ? response_stream(response, model) : get_reponse_no_stream(response, model))
+        .then(response => settings.stream_response ? response_stream(response, model, thoughtProcessState) : get_reponse_no_stream(response, model, thoughtProcessState))
         .catch(error => post_error_message_in_chat("api request (likely incorrect key)", error.message));
 }
 
 
 function create_api_request(model) {
     const provider = get_provider_for_model(model);
+    const messages_temp = messages.concat(resolve_pending_handler(model));
     switch (provider) {
         case 'openai':
-            return create_openai_request(model);
+            return create_openai_request(model, messages_temp);
         case 'anthropic':
-            return create_anthropic_request(model);
+            return create_anthropic_request(model, messages_temp);
         case 'gemini':
-            return create_gemini_request(model);
+            return create_gemini_request(model, messages_temp);
         default:
             post_error_message_in_chat("model", "Model not found");
             return [null, null];
@@ -523,7 +555,7 @@ function get_full_model_name(model) {
 }
 
 
-function create_anthropic_request(model) {
+function create_anthropic_request(model, msgs) {
     check_api_key('anthropic');
     const requestOptions = {
         method: 'POST',
@@ -531,12 +563,13 @@ function create_anthropic_request(model) {
         headers: {
             'Content-Type': 'application/json',
             'x-api-key': settings.api_keys.anthropic,
-            'anthropic-version': '2023-06-01'
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true'
         },
         body: JSON.stringify({
             model: MODELS.anthropic[model],
-            system: messages[0].content,
-            messages: messages.slice(1),
+            system: msgs[0].content,
+            messages: msgs.slice(1),
             max_tokens: settings.max_tokens,
             temperature: settings.temperature > MaxTemp.anthropic ? MaxTemp.anthropic : settings.temperature,
             stream: settings.stream_response
@@ -546,7 +579,7 @@ function create_anthropic_request(model) {
 }
 
 
-function create_openai_request(model) {
+function create_openai_request(model, msgs) {
     check_api_key('openai');
     const requestOptions = {
         method: 'POST',
@@ -557,7 +590,7 @@ function create_openai_request(model) {
         },
         body: JSON.stringify({
             model: MODELS.openai[model],
-            messages: messages,
+            messages: msgs,
             max_tokens: settings.max_tokens,
             temperature: settings.temperature > MaxTemp.openai ? MaxTemp.openai : settings.temperature,
             stream: settings.stream_response,
@@ -570,10 +603,10 @@ function create_openai_request(model) {
 }
 
 
-function create_gemini_request(model) {
+function create_gemini_request(model, msgs) {
     check_api_key("gemini");
     // gemini either has "model" or "user", even the system prompt is classified as "user"
-    const mapped_messages = messages.map(message => ({
+    const mapped_messages = msgs.map(message => ({
         role: message.role === "assistant" ? "model" : "user",
         parts: [{ text: message.content }]
     }));
@@ -616,16 +649,24 @@ function get_gemini_safety_settings() {
 }
 
 
-function get_reponse_no_stream(response, model) {
+function get_reponse_no_stream(response, model, thoughtProcessState) {
     response.json().then(data => {
         let contentDiv = chatManager.getContentDivAndSetModel(model);
         let streamWriter = new StreamWriterSimple(contentDiv, chatManager.scrollIntoView.bind(chatManager));
-
-        let [response_text, input_tokens, output_tokens] = get_response_data_no_stream(data, model);
+        let response_text, input_tokens, output_tokens;
+        try {
+            [response_text, input_tokens, output_tokens] = get_response_data_no_stream(data, model);
+        }
+        catch (error) {
+            post_error_message_in_chat("API request error (likely incorrect key)", error.message);
+            hadError = true;
+        }
         streamWriter.processContent(response_text);
-        const add_to_pending_with_model = (msg) => add_to_pending(msg, model);
-        streamWriter.addFooter(input_tokens, output_tokens, chatManager.isArenaMode, regenerate_response.bind(null, model), add_to_pending_with_model);
-
+        let msgFooter = new Footer(input_tokens, output_tokens, chatManager.isArenaMode, thoughtProcessState, regenerate_response.bind(null, model));
+        const add_to_pending_with_model = (msg, done) => add_to_pending(msg, model, done);
+        streamWriter.addFooter(msgFooter, add_to_pending_with_model).then(() => {
+            if (!hadError) handleThinkingMode(streamWriter.fullMessage, thoughtProcessState, model, contentDiv);
+        });
         set_lifetime_tokens(input_tokens, output_tokens);
     });
 }
@@ -633,31 +674,25 @@ function get_reponse_no_stream(response, model) {
 
 function get_response_data_no_stream(data, model) {
     const provider = get_provider_for_model(model);
-    try {
-        switch (provider) {
-            case 'openai':
-                return [data.choices[0].message.content, data.usage.prompt_tokens, data.usage.completion_tokens];
-            case 'anthropic':
-                return [data.content[0].text, data.usage.input_tokens, data.usage.output_tokens];
-            case 'gemini':
-                return [data.candidates[0].content.parts[0].text,
-                        data.usageMetadata.promptTokenCount,
-                        data.usageMetadata.candidatesTokenCount];
-            default:
-                return ['', 0, 0];
-        }
-    }
-    catch (error) {
-        post_error_message_in_chat("API response parsing", error.message);
-        return ['', 0, 0];
+    switch (provider) {
+        case 'openai':
+            return [data.choices[0].message.content, data.usage.prompt_tokens, data.usage.completion_tokens];
+        case 'anthropic':
+            return [data.content[0].text, data.usage.input_tokens, data.usage.output_tokens];
+        case 'gemini':
+            return [data.candidates[0].content.parts[0].text,
+                    data.usageMetadata.promptTokenCount,
+                    data.usageMetadata.candidatesTokenCount];
+        default:
+            return ['', 0, 0];
     }
 }
 
 
 // "stolen" from https://umaar.com/dev-tips/269-web-streams-openai/ and https://www.builder.io/blog/stream-ai-javascript
-async function response_stream(response_stream, model) {
+async function response_stream(response_stream, model, thoughtProcessState) {
     // right now you can't "stop generating", too lazy lol
-    let contentDiv = chatManager.getContentDivAndSetModel(model);
+    let contentDiv= chatManager.getContentDivAndSetModel(model);
     let api_provider = get_provider_for_model(model);
     let tokenCounter = new TokenCounter(api_provider);
     let streamWriter;
@@ -674,6 +709,7 @@ async function response_stream(response_stream, model) {
 
     const reader = response_stream.body.getReader();
     const decoder = new TextDecoder("utf-8");
+    let hadError = false;
 
     try {
         let buffer = '';
@@ -695,18 +731,67 @@ async function response_stream(response_stream, model) {
         }
     } catch (error) {
         post_error_message_in_chat("API request error (likely incorrect key)", error.message);
+        hadError = true;
     }
     tokenCounter.updateLifetimeTokens();
-    const add_to_pending_with_model = (msg) => add_to_pending(msg, model);
-    streamWriter.addFooter(tokenCounter.inputTokens, tokenCounter.outputTokens, chatManager.isArenaMode, regenerate_response.bind(null, model), add_to_pending_with_model);
+    let msgFooter = new Footer(tokenCounter.inputTokens, tokenCounter.outputTokens, chatManager.isArenaMode, thoughtProcessState, regenerate_response.bind(null, model));
+    const add_to_pending_with_model = (msg, done) => add_to_pending(msg, model, done);
+    streamWriter.addFooter(msgFooter, add_to_pending_with_model).then(() => {
+        if (!hadError) handleThinkingMode(streamWriter.fullMessage, thoughtProcessState, model, contentDiv);
+    });
 }
 
 
 function regenerate_response(model, contentDiv) {
-    chatManager.onRegenerate(contentDiv);
+    const thinkingProcessString = thinkingMode ? "thinking" : "none";
+    chatManager.thinkingModeActive = thinkingMode;
+    thoughtLoops[chatManager.getContentDivIndex(model)] = 0;
+    chatManager.onRegenerate(contentDiv, thinkingProcessString);
+    discard_pending(model);
     chatManager.antiScrollListener();
     if (!chatManager.isArenaMode) model = settings.model;
-    api_call_single(model);
+    togglePrompt(thinkingProcessString);
+    api_call_single(model, thinkingProcessString);
+}
+
+
+function handleThinkingMode(msg, thoughtProcessState, model, contentDiv) {
+    if (thoughtProcessState !== "thinking") return;
+    const idx = chatManager.getContentDivIndex(model);
+    thoughtLoops[idx]++;
+    let thinkMore = msg.includes("*continue*");
+    let thinkingProcessString = thinkMore ? "thinking" : "solver";
+    const maxItersReached = thoughtLoops[idx] >= settings.loop_threshold;
+    if (thoughtLoops[idx] >= settings.loop_threshold) {
+        thinkingProcessString = "solver";
+        thinkMore = false;
+        thoughtLoops[idx] = 0;
+    }
+    if (thinkMore) {
+        add_to_pending("*System message: continue thinking*", model, false, RoleEnum.user);
+    }
+    else {
+        const system_message = maxItersReached ? "*System message: max iterations reached, solve now*" : "*System message: solve now*";
+        add_to_pending(system_message, model, false, RoleEnum.user);
+        togglePrompt("solver");
+    }
+    chatManager.onContinue(contentDiv, thinkingProcessString);
+    api_call_single(model, thinkingProcessString);
+}
+
+
+function togglePrompt(promptType = "none") {
+    if (messages.length === 0) return;
+    switch (promptType) {
+        case "thinking":
+            messages[0].content = initial_prompt + "\n\n" + settings.thinking_prompt;
+            break;
+        case "solver":
+            messages[0].content = initial_prompt + "\n\n" + settings.solver_prompt;
+            break;
+        case "none":
+            messages[0].content = initial_prompt;
+    }
 }
 
 
@@ -782,15 +867,21 @@ function init_prompt(context) {
     let prompt_string = context.mode + "_prompt";
 
     return new Promise((resolve, reject) => {
-        chrome.storage.local.get(prompt_string)
+        chrome.storage.local.get([prompt_string, 'thinking_prompt', 'solver_prompt'])
             .then(res => {
+                if (!res['thinking_prompt'] || !res['solver_prompt']) {
+                    post_warning_in_chat("Thinking or solver prompt is empty. If you're not planning to use thinking mode ignore this.");
+                }
                 messages = [];
                 pending_message = {};
                 let prompt = res[prompt_string];
+                settings.thinking_prompt = res['thinking_prompt'] || "";
+                settings.solver_prompt = res['solver_prompt'] || "";
                 if (context.mode === "selection") {
                     prompt += `\n"""[${context.url}]"""\n"""[${context.text}]"""`;
                 }
                 append_context(prompt, RoleEnum.system);
+                initial_prompt = prompt;
                 resolve();
             })
             .catch(error => {
@@ -802,12 +893,13 @@ function init_prompt(context) {
 
 
 function init_settings() {
-    chrome.storage.local.get(['api_keys', 'max_tokens', 'temperature', 'model', 'stream_response', 'arena_mode', 'arena_models'])
+    chrome.storage.local.get(['api_keys', 'max_tokens', 'loop_threshold', 'temperature', 'model', 'stream_response', 'arena_mode', 'arena_models'])
     .then(res => {
         settings = {
             api_keys: res.api_keys || {},
             max_tokens: res.max_tokens,
             temperature: res.temperature,
+            loop_threshold: res.loop_threshold,
             model: res.model,
             stream_response: res.stream_response,
             arena_mode: res.arena_mode,
@@ -827,30 +919,100 @@ function append_context(message, role) {
 }
 
 
-function add_to_pending(message, model) {
+function add_to_pending(message, model, done = true, role = RoleEnum.assistant) {
     // this is neat because we can only have one "latest" message per model, so if we regenerate many times we just overwrite.
-    pending_message[model] = {role: RoleEnum.assistant, content: message};
-    chatManager.updatePendingResponses();
+    if (pending_message[model]) {
+        pending_message[model].push({role: role, content: message});
+    }
+    else {
+        pending_message[model] = [{role: role, content: message}];
+    }
+    if (done) chatManager.updatePendingResponses();
 }
 
 
-function resolve_pending(model = null, discard = false) {
+function resolve_pending(model = null) {
     // because of possible weirdness with toggling arena mode on or off while there are pending messages, we prioritize messages like this:
     // "function parameter: model" -> "settings.model" -> "random" message that is pending (potentially multiple if arena mode was on).
     // We care about this at all because the convo is actually supposed to be useful, and we want to pass the best output to continue.
-    if (discard) pending_message = {};
-    if (Object.keys(pending_message).length === 0) return;
+    messages.push(...resolve_pending_handler(model));
+    pending_message = {};
+}
+
+
+function discard_pending(model = null) {
     if (model && model in pending_message) {
-        messages.push(pending_message[model]);
+        delete pending_message[model];
+    }
+    else if (model === null) {
+        pending_message = {};
+    }
+}
+
+
+function resolve_pending_handler(model = null) {
+    if (Object.keys(pending_message).length === 0) return [];
+    if (model && model in pending_message) {
+        return pending_message[model];
+    }
+    else if (model && chatManager.isArenaMode) {
+        // case for regenerating, you don't want to accidentally include the other models context
+        return [];
     }
     else if (settings.model in pending_message) {
-        messages.push(pending_message[settings.model]);
+        return pending_message[settings.model];
     }
-    else {
-        messages.push(pending_message[Object.keys(pending_message)[0]]);
+    return pending_message[Object.keys(pending_message)[0]];
+}
+
+
+function adjust_thought_structure(pending_messages) {
+    // this actually seems to make it worse, just keep the original convo it's better...
+    if (!chatManager.thinkingModeActive || pending_messages.length === 0) {
+        return pending_messages;
+    }
+    let thoughts = [];
+    let solution = "";
+    let currentState = "thinking";
+    let lastUserMessage = "";
+
+    for (let i = 0; i < pending_messages.length; i++) {
+        const message = pending_messages[i];
+        
+        if (message.role === RoleEnum.assistant) {
+            if (message.content.includes("*continue*")) {
+                thoughts.push(message.content.trim());
+            } else if (currentState === "thinking") {
+                thoughts.push(message.content);
+                currentState = "pre_solution";
+            } else {
+                solution = message.content;
+                currentState = "post_solution";
+            }
+        }
+        else if (message.role === RoleEnum.user) {
+            lastUserMessage = message.content;
+        }
     }
 
-    pending_message = {};
+    let formattedContent = "";
+    if (thoughts.length > 0) {
+        formattedContent += "Internal Thoughts (user can't see this):\n" + thoughts.join("\n\n") + "\n\n";
+    }
+    if (solution) {
+        formattedContent += "Solution (user can see this):\n" + solution;
+    }
+    let result =  [{
+        role: RoleEnum.assistant,
+        content: formattedContent.trim()
+    }];
+    if (currentState !== "post_solution" && lastUserMessage) {
+        result.push({
+            role: RoleEnum.user,
+            content: lastUserMessage
+        });
+    }
+    return result;
 }
 
 
@@ -897,6 +1059,16 @@ function init_arena_toggle_button_listener() {
 }
 
 
+function init_thinking_mode_button() {
+    const button = document.querySelector('.thinking-mode');
+    button.addEventListener('click', () => {
+        thinkingMode = !thinkingMode;
+        if (thinkingMode) button.classList.add('thinking-mode-on');
+        else button.classList.remove('thinking-mode-on');
+    });
+}
+
+
 function arena_toggle_button_update() {
     const button = document.querySelector('.arena-toggle-button');
     button.textContent = settings.arena_mode ? '\u{2694}' : '\u{1F916}';
@@ -929,6 +1101,8 @@ function handle_input(inputText) {
     } else {
         remove_regenerate_buttons();
         chatManager.handleArenaChoiceDefault();
+        const lockedThinkingMode = thinkingMode ? "thinking" : "none";
+        togglePrompt(lockedThinkingMode);
         api_call();
     }
 }

@@ -111,6 +111,7 @@ function save_settings() {
     let settings = {};
     settings.max_tokens = parseInt(document.getElementById('max-tokens').value.trim());
     settings.temperature = parseFloat(document.getElementById('temperature').value.trim());
+    settings.loop_threshold = parseInt(document.getElementById('loop-threshold').value.trim());
     settings.close_on_deselect = document.getElementById('close-on-deselect').checked;
     settings.stream_response = document.getElementById('stream-response').checked;
     settings.arena_mode = document.getElementById('arena-mode').checked;
@@ -150,9 +151,10 @@ function save_model_or_arena_models(settings, arena_mode) {
 
 
 function init_values() {
-    chrome.storage.local.get(['api_keys', 'max_tokens', 'temperature', 'model', 'close_on_deselect', 'stream_response', 'arena_mode', 'arena_models'], function(res) {
+    chrome.storage.local.get(['api_keys', 'max_tokens', 'temperature', 'loop_threshold', 'model', 'close_on_deselect', 'stream_response', 'arena_mode', 'arena_models'], function(res) {
         document.getElementById('max-tokens').value = res.max_tokens;
         document.getElementById('temperature').value = res.temperature;
+        document.getElementById('loop-threshold').value = res.loop_threshold || 1;
         document.getElementById('close-on-deselect').checked = res.close_on_deselect;
         document.getElementById('stream-response').checked = res.stream_response;
         document.getElementById('arena-mode').checked = res.arena_mode || false;
@@ -191,6 +193,7 @@ function toggle_model_checkboxes() {
 
 function textarea_update(prompt_string) {
     let textarea = document.getElementById('customize-prompt');
+    set_text_area_placeholder(textarea, prompt_string);
     chrome.storage.local.get(prompt_string).then((result) => {
         let text = result[prompt_string] || '';
         textarea.value = text;
@@ -198,6 +201,18 @@ function textarea_update(prompt_string) {
         existing_settings.prompt = text;
     });
 }
+
+
+function set_text_area_placeholder(textarea, prompt_string) {
+    textarea.placeholder = "Type your prompt here...";
+    if (prompt_string === "thinking_prompt") {
+        textarea.placeholder = "Type your prompt here... (You must indicate that if the model wants to continue thinking, it must include *continue* in it's output. This prompt will be appended to the system prompt)";
+    }
+    else if (prompt_string === "solver_prompt") {
+        textarea.placeholder = "Type your prompt here... (You should make it clear that the model should use the previously generated thinking to now solve the problem. This prompt will be appended to the system prompt)";
+    }
+}
+
 
 function textarea_setup() {
     let selection_radio = document.getElementById("selection-prompt");
