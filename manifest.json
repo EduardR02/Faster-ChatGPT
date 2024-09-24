@@ -1,5 +1,5 @@
 {
-	"name": "Faster ChatGPT",
+	"name": "Sidepanel Gnome",
 	"version": "1.0.0",
 	"manifest_version": 3,
 	"content_scripts": [
@@ -14,7 +14,7 @@
 	"action": {
 		"default_icon": "src/icons/icon16.png",
 		"default_popup": "src/html/popup.html",
-		"default_title": "Faster ChatGPT"	
+		"default_title": "Sidepanel Gnome"	
 	},
 	"permissions": [
 		"storage",
