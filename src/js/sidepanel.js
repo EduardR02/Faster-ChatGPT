@@ -429,6 +429,7 @@ function when_new_selection(text, url) {
     init_prompt({mode: "selection", text: text, url: url}).then(() => {
         get_mode(function(current_mode) {
             if (current_mode === ModeEnum.InstantPromptMode) {
+                append_context("Please explain!", RoleEnum.user);
                 api_call();
             }
         });
