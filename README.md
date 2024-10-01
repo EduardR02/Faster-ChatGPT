@@ -1,12 +1,16 @@
 # Faster ChatGPT Chrome Extension
 
-Faster ChatGPT is a Chrome Extension that \*wraps\* the OpenAI/Anthropic API to enable 1 click answers.  
+Faster ChatGPT is a Chrome Extension that \*wraps\* the OpenAI/Anthropic/Gemini API to enable 1 click answers.  
 ## Why is this useful?
 - Whenever I browse the web, questions or unclarities arise **constantly**. Now instead of ignoring them, I can learn.
 - You get an answer (with a tailored prompt) in 3 seconds instead of 30, or never even bothering in the first place.  
 - Googling, or copying and pasting into ChatGPT/Claude, and then making a good prompt takes way too long. 
+- Having a custom prompt and temperature control makes refusals much less likely and the answers much better.
 
 ## Installation Guide
+You can install this extension from the Chrome Web Store [here](https://chromewebstore.google.com/detail/sidepanel-gnome/nlpcdeggdeeopcpeeopbjmmkeahojaod)
+
+## Manual Installation
 1. Download this repo as a ZIP.
 2. Unzip and put it somewhere, where it will stay (don't delete it).
 3. Go to the extensions page in Chrome and enable Developer options.
@@ -34,6 +38,13 @@ Faster ChatGPT is a Chrome Extension that \*wraps\* the OpenAI/Anthropic API to 
 - After a choice the conversation (for now) continues with newly chosen random models.
 - You can individually regenerate responses!
 
+## Thinking Mode
+- Inspired by o1 release, we let the model run in a while loop so it can "think" longer
+- We append an additional prompt to the system prompt, which tells the model that it either:
+    - Should exclusively do the thinking. You **must** make it clear to the model that it must append "\*\*continue\*\*" to its response if it wants to "think" more.
+    - Should use the thought process to generate the final response - the solution.
+- Regenerating works nicely with this, you can toggle thinking mode on and off, and also change the model if you don't like the output.
+
 ## Arena TODO
 - LMSYS does not use the standard elo algorithm because it is biased towards later results, even though LLMs are "supposed to be" static. Might implement that. The problem is that for the local use case you have very low sample size, so might not matter that much.
 - Maybe should add setting that fixes the models for a single arena session, but just shuffles left right (already does that anyway).
@@ -45,7 +56,6 @@ Your API keys will be visible in the browser, including places like the Network 
 ## Notes
 - Right now, only Chrome from version 116 is supported, as that is the first version with which you can open the side panel programmatically (0 clicks).
 - Doesn't work on some things like pdfs, or (very rarely) some sites with weird text selection because you can't get access to the selection. Might fix...
-- I might add this to the Chrome extension store at some point, but for now, just install it this way.
 
 ## TLDR features
 - Regenerate response as many times as you like
@@ -53,6 +63,7 @@ Your API keys will be visible in the browser, including places like the Network 
 - Arena Mode personal ranking for your exact use cases.
 - Can switch between Arena and normal mode between responses.
 - Chat mode, opened through popup (with different prompt).
+- Thinking mode to let the model plan.
 
 ## Contribute
 I got what I wanted from this project, which is faster useful information access.  
