@@ -6,7 +6,9 @@ let sidepanel_path = "src/html/sidepanel.html";
 chrome.runtime.onInstalled.addListener(function(details) {
     // set default
     if (details.reason === chrome.runtime.OnInstalledReason.INSTALL) {
-        set_defaults();
+        set_defaults().then(() => {
+            chrome.runtime.openOptionsPage();
+        });
     }
 });
 

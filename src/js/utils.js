@@ -71,23 +71,26 @@ export function set_defaults() {
         lifetime_input_tokens: 0,
         lifetime_output_tokens: 0,
         max_tokens: 500,
-        temperature: 1.2,
+        temperature: 1.0,
         loop_threshold: 3,
-        model : "gpt-4o-mini",
+        model: "sonnet-3.5",
         api_keys: {},
-        close_on_deselect: true,
+        close_on_deselect: false,
         stream_response: true,
         arena_mode: false
-    }
-    chrome.storage.local.set(settings);
-    // for some reason relative path does not work, only full path.
-    // possibly because function is called on startup in background worker, and maybe the context is the base dir then.
-    loadTextFromFile("src/prompts/prompt.txt").then((text) => {
-        chrome.storage.local.set({selection_prompt: text.trim()})
-    });
-    loadTextFromFile("src/prompts/chat_prompt.txt").then((text) => {
-        chrome.storage.local.set({chat_prompt: text.trim()})
-    });
+    };
+
+    return Promise.all([
+        new Promise((resolve) => chrome.storage.local.set(settings, resolve)),
+        // for some reason relative path does not work, only full path.
+        // possibly because function is called on startup in background worker, and maybe the context is the base dir then.
+        loadTextFromFile("src/prompts/prompt.txt").then((text) => 
+            new Promise((resolve) => chrome.storage.local.set({selection_prompt: text.trim()}, resolve))
+        ),
+        loadTextFromFile("src/prompts/chat_prompt.txt").then((text) => 
+            new Promise((resolve) => chrome.storage.local.set({chat_prompt: text.trim()}, resolve))
+        )
+    ]);
 }
 
 
