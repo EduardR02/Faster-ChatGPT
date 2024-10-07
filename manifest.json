@@ -1,5 +1,5 @@
 {
-	"name": "Sidepanel Gnome",
+	"name": "Sidekick LLM",
 	"version": "1.0.1",
 	"manifest_version": 3,
 	"content_scripts": [
@@ -14,7 +14,7 @@
 	"action": {
 		"default_icon": "src/icons/icon16.png",
 		"default_popup": "src/html/popup.html",
-		"default_title": "Sidepanel Gnome"	
+		"default_title": "Sidekick LLM"	
 	},
 	"permissions": [
 		"storage",
