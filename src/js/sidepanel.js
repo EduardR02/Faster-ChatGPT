@@ -370,7 +370,8 @@ const MODELS = {
         "gpt-4o-mini": "gpt-4o-mini"
     },
     anthropic: {
-        "sonnet-3.5": "claude-3-5-sonnet-20240620"
+        "sonnet-3.5": "claude-3-5-sonnet-20240620",
+        "sonnet-3.5-new": "claude-3-5-sonnet-20241022"
     },
     gemini: {
         "gemini-1.5-pro-exp": "gemini-1.5-pro-exp-0801",
