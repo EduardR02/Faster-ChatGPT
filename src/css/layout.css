@@ -256,6 +256,17 @@ p {
   flex-direction: column;
 }
 
+.image-content {
+  margin-left: 1em;
+  margin-bottom: 0.5em;
+}
+
+.image-content img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
 .std-input {
   padding: 10px;
   box-sizing: border-box;
@@ -271,6 +282,10 @@ p {
 .std-input:focus {
   outline: none;
   border-color: #ef596f;
+}
+
+.std-input.dragging {
+  border-color: #98c379;
 }
 
 .std-input.padding-for-button {

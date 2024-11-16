@@ -6,6 +6,8 @@ class ChatManager {
     constructor() {
         this.conversationDiv = document.getElementById('conversation');
         this.inputFieldWrapper = document.querySelector('.textarea-wrapper');
+        this.pendingImageDiv = null;
+        this.pendingImages = [];
         this.isArenaMode = false;
         this.arenaDivs = [];
         this.arenaButtons = [];
@@ -45,6 +47,28 @@ class ChatManager {
         paragraph.classList.add(role + "-message");
         this.conversationDiv.insertBefore(paragraph, this.inputFieldWrapper);
         return paragraph;
+    }
+
+    initPendingImageDiv() {
+        if (this.pendingImageDiv) return;
+        this.pendingImageDiv = this.initParagraph(RoleEnum.user);
+        this.createMessageDiv(this.pendingImageDiv, RoleEnum.user);
+        this.pendingImages = [];
+    }
+
+    appendToPendingImageDiv(imagebase64) {
+        if (!this.pendingImageDiv) this.initPendingImageDiv();
+
+        const img = document.createElement('img');
+        img.src = imagebase64;
+
+        const imgWrapper = this.pendingImageDiv.querySelector('.message-wrapper');
+        const insertBeforeDiv = imgWrapper.querySelector('.message-content');
+        const imgContainer = document.createElement('div');
+        imgContainer.classList.add('image-content', 'user-content');
+        imgContainer.appendChild(img);
+        imgWrapper.insertBefore(imgContainer, insertBeforeDiv);
+        this.pendingImages.push(imagebase64);
     }
 
     onRegenerate(contentDiv, thinkingProcess) {
@@ -98,6 +122,11 @@ class ChatManager {
     }
 
     createMessageBlock(role, text, thinkingProcess = "none", roleString = null) {
+        if (role === RoleEnum.user && this.pendingImageDiv) {
+            this.pendingImageDiv.querySelector('.message-content').textContent = text;
+            this.pendingImageDiv = null;
+            return;
+        }
         let paragraph = this.initParagraph(role);
 
         if (this.isArenaMode && role === RoleEnum.assistant) {
@@ -407,6 +436,7 @@ function init() {
     init_arena_toggle_button_listener();
     init_thinking_mode_button();
     auto_resize_textfield_listener("textInput");
+    init_textarea_image_drag_and_drop();
     setup_message_listeners();
     chrome.runtime.sendMessage({ type : "sidepanel_ready"});
 }
@@ -560,6 +590,7 @@ function get_full_model_name(model) {
 
 function create_anthropic_request(model, msgs) {
     check_api_key('anthropic');
+    msgs = map_msges_to_anthropic_format(msgs);
     const requestOptions = {
         method: 'POST',
         credentials: 'omit',
@@ -584,6 +615,7 @@ function create_anthropic_request(model, msgs) {
 
 function create_openai_request(model, msgs) {
     check_api_key('openai');
+    msgs = map_msges_to_openai_format(msgs);
     const requestOptions = {
         method: 'POST',
         credentials: 'omit',
@@ -613,6 +645,7 @@ function create_gemini_request(model, msgs) {
         role: message.role === "assistant" ? "model" : "user",
         parts: [{ text: message.content }]
     }));
+    // to use images with gemini we need to use file api and im too lazy for that rn, i use sonnet anyway so whatever
     const requestOptions = {
         method: 'POST',
         credentials: 'omit',
@@ -632,6 +665,39 @@ function create_gemini_request(model, msgs) {
     const streamParam = settings.stream_response ? "alt=sse&" : "";
     const requestLink = `https://generativelanguage.googleapis.com/v1beta/models/${MODELS.gemini[model]}:${responseType}?${streamParam}key=${settings.api_keys.gemini}`;
     return [requestLink, requestOptions];
+}
+
+
+function map_msges_to_anthropic_format(msgs) {
+    return msgs.map(msg => {
+        if (msg.role === RoleEnum.user && 'images' in msg) {
+            let img_dict = msg.images.map(img => ({ type: 'image', source: 
+                {type: 'base64', media_type: get_base64_media_type(img), data: simple_base64_splitter(img)}}));
+            return { role: msg.role, content: [{type: 'text', text: msg.content}, ...img_dict] };
+        }
+        return { role: msg.role, content: msg.content };
+    });
+}
+
+
+function map_msges_to_openai_format(msgs) {
+    return msgs.map(msg => {
+        if (msg.role === RoleEnum.user && 'images' in msg) {
+            let img_dict = msg.images.map(img => ({ type: 'image_url', image_url: {url: img}}));
+            return { role: msg.role, content: [{type: 'text', text: msg.content}, ...img_dict] };
+        }
+        return { role: msg.role, content: msg.content };
+    });
+}
+
+
+function simple_base64_splitter(base64_string) {
+    return base64_string.split('base64,')[1];
+}
+
+
+function get_base64_media_type(base64_string) {
+    return base64_string.split(':')[1].split(';')[0];
 }
 
 
@@ -919,6 +985,10 @@ function init_settings() {
 function append_context(message, role) {
     // allowed roles are 'user', 'assistant' or system. System is only on init for the prompt.
     messages.push({role: role, content: message});
+    if (role === RoleEnum.user && chatManager.pendingImages.length > 0) {
+        messages[messages.length - 1].images = chatManager.pendingImages;
+        chatManager.pendingImages = [];
+    }
 }
 
 
@@ -1048,6 +1118,85 @@ function input_listener() {
         }
     });
 }
+
+
+function init_textarea_image_drag_and_drop() {
+    const textarea = document.getElementById('textInput');
+ 
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        textarea.addEventListener(eventName, e => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (eventName === 'dragover' || eventName === 'dragenter') {
+                textarea.classList.add('dragging');
+            } 
+            else {
+                textarea.classList.remove('dragging');
+            }
+        }, false);
+    });
+ 
+    async function urlToBase64(url) {
+        try {
+            const blob = await (await fetch(url)).blob();
+            return new Promise(resolve => {
+                const reader = new FileReader();
+                reader.onload = e => resolve(e.target.result);
+                reader.readAsDataURL(blob);
+            });
+        } catch (error) {
+            post_error_message_in_chat(error, 'Error converting image to base64');
+            return null;
+        }
+    }
+
+    textarea.addEventListener('paste', async function(e) {
+        const items = e.clipboardData.items;
+        const imageItem = Array.from(items).find(item => item.type.startsWith('image/'));
+        
+        if (imageItem) {
+            e.preventDefault();
+            const file = imageItem.getAsFile();
+            const reader = new FileReader();
+            reader.onload = e => chatManager.appendToPendingImageDiv(e.target.result);
+            reader.readAsDataURL(file);
+        }
+        // If no image found, let default paste behavior happen
+    });
+ 
+    textarea.addEventListener('drop', async function(e) {
+        // Handle local file drops
+        if (e.dataTransfer.files.length > 0) {
+            const file = e.dataTransfer.files[0];
+            if (file.type.match('image.*')) {
+                const reader = new FileReader();
+                reader.onload = e => chatManager.appendToPendingImageDiv(e.target.result);
+                reader.readAsDataURL(file);
+                return;
+            }
+        }
+ 
+        // Handle web image drops
+        const imgSrc = new DOMParser()
+            .parseFromString(e.dataTransfer.getData('text/html'), 'text/html')
+            .querySelector('img')?.src;
+            
+        if (imgSrc) {
+            const base64String = await urlToBase64(imgSrc);
+            if (base64String) {
+                chatManager.appendToPendingImageDiv(base64String);
+                return;
+            }
+        }
+ 
+        // Handle text drops
+        const text = e.dataTransfer.getData('text');
+        if (text) {
+            const start = this.selectionStart;
+            this.value = this.value.slice(0, start) + text + this.value.slice(this.selectionEnd);
+        }
+    });
+ }
 
 
 function init_arena_toggle_button_listener() {
