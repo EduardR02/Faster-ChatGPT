@@ -3,17 +3,17 @@
 Faster ChatGPT is a Chrome Extension that \*wraps\* the OpenAI/Anthropic/Gemini API to enable 1 click answers.  
 
 ## Basic Chat Example
-![Basic chat example](images\Start_Panel.PNG)  
+![Basic chat example](images/Start_Panel.PNG)  
 
-![Basic regenerate example](images\regenerate.PNG)
+![Basic regenerate example](images/regenerate.PNG)
 
 ## Arena Mode Example
-![Arena mode example](images\strawberry_arena.PNG)
+![Arena mode example](images/strawberry_arena.PNG)
 
-![Arena mode resolved](images\Arena_resolved.PNG)
+![Arena mode resolved](images/Arena_resolved.PNG)
 
 ## Basic Selection with Instant Prompt Example
-![Basic selection example](images\InstantPrompt.PNG)
+![Basic selection example](images/InstantPrompt.PNG)
 
 ## Why is this useful?
 - Whenever I browse the web, questions or unclarities arise **constantly**. Now instead of ignoring them, I can learn.
