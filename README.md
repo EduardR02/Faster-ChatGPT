@@ -1,6 +1,20 @@
 # Faster ChatGPT Chrome Extension
 
 Faster ChatGPT is a Chrome Extension that \*wraps\* the OpenAI/Anthropic/Gemini API to enable 1 click answers.  
+
+## Basic Chat Example
+![Basic chat example](images\Start_Panel.PNG)  
+
+![Basic regenerate example](images\regenerate.PNG)
+
+## Arena Mode Example
+![Arena mode example](images\strawberry_arena.PNG)
+
+![Arena mode resolved](images\Arena_resolved.PNG)
+
+## Basic Selection with Instant Prompt Example
+![Basic selection example](images\InstantPrompt.PNG)
+
 ## Why is this useful?
 - Whenever I browse the web, questions or unclarities arise **constantly**. Now instead of ignoring them, I can learn.
 - You get an answer (with a tailored prompt) in 3 seconds instead of 30, or never even bothering in the first place.  
@@ -8,7 +22,16 @@ Faster ChatGPT is a Chrome Extension that \*wraps\* the OpenAI/Anthropic/Gemini 
 - Having a custom prompt and temperature control makes refusals much less likely and the answers much better.
 
 ## Installation Guide
-You can install this extension from the Chrome Web Store [here](https://chromewebstore.google.com/detail/sidepanel-gnome/nlpcdeggdeeopcpeeopbjmmkeahojaod)
+You can install this extension from the Chrome Web Store [here](https://chromewebstore.google.com/detail/sidekick-llm/nlpcdeggdeeopcpeeopbjmmkeahojaod)
+
+## TLDR features
+- Now also supports images, and even multiple images per message (drag and drop or paste, so far only Claude and OpenAI, Gemini will just ignore them).
+- Regenerate response as many times as you like
+- Switch model mid conversation, you can even switch to regenerate a response with a new model.
+- Arena Mode personal ranking for your exact use cases.
+- Can switch between Arena and normal mode between responses.
+- Chat mode, opened through popup (with different prompt).
+- Thinking mode to let the model plan.
 
 ## Manual Installation
 1. Download this repo as a ZIP.
@@ -19,6 +42,7 @@ You can install this extension from the Chrome Web Store [here](https://chromewe
 
 ## How to use
 - To select text of interest, hold **CTRL** while selecting, the Side Panel will pop up once you release your mouse. To close, just click away to remove the selection.
+- If you want to use images in your prompt, simply drag and drop or copy paste them into the prompt box. You can also use multiple images per message.
 - You can specify (in the popup) if you want to get a response instantly, or if you want to add a prompt first.
 - Customize your Prompt! I have included a default one, but I'm sure you can get better results by adding profile information or other tailored instructions.
 - For anything to work, you will need to specify your API keys.
@@ -51,19 +75,11 @@ You can install this extension from the Chrome Web Store [here](https://chromewe
 - Because gemini streaming is different (and much slower) it's a giveaway (also it often uses double spaces often for some reason and ends with double new line sometimes), so either nerf the other models' streaming or idk, does not bother me that much tbh.
 
 # Security Notice
-Your API keys will be visible in the browser, including places like the Network tab of the developer console during API requests or within JavaScript variables at runtime. I never have access to your API key, but if you have concerns about its visibility, please refrain from using this extension. If you have suggestions for improving this, kindly submit a pull request with your proposed changes.
+Your API keys will be visible in the browser, including places like the Network tab of the developer console during API requests or within JavaScript variables at runtime. I never have access to your API key, but if you have concerns about its visibility, please refrain from using this extension (or use API keys with little credits which you are not afraid to lose). If you have suggestions for improving this, kindly submit a pull request with your proposed changes.
 
 ## Notes
 - Right now, only Chrome from version 116 is supported, as that is the first version with which you can open the side panel programmatically (0 clicks).
 - Doesn't work on some things like pdfs, or (very rarely) some sites with weird text selection because you can't get access to the selection. Might fix...
-
-## TLDR features
-- Regenerate response as many times as you like
-- Switch model mid conversation, you can even switch to regenerate a response with a new model.
-- Arena Mode personal ranking for your exact use cases.
-- Can switch between Arena and normal mode between responses.
-- Chat mode, opened through popup (with different prompt).
-- Thinking mode to let the model plan.
 
 ## Contribute
 I got what I wanted from this project, which is faster useful information access.  
