@@ -45,6 +45,7 @@ body {
   display: contents;
 }
 
+.model-label,
 .setting-label {
   text-align: left;
   margin-right: 10px;
@@ -92,6 +93,7 @@ a:visited {
   margin-top: 8px;
 }
 
+.models-dummy,
 .dummy {
   display: flex;
   width: fit-content;
@@ -101,6 +103,13 @@ a:visited {
   display: flex;
   align-items: center;
   width: auto;
+}
+
+.add-model-row-align {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
 }
 
 .api-button {
@@ -457,6 +466,25 @@ p {
   margin: 0;
   opacity: 1;
   transition: 0s
+}
+
+.add-model-row-align .button {
+  white-space: nowrap;
+  min-width: min-content;
+}
+
+.button.add-model {
+  background: #98c379;
+}
+
+.button.provider-select {
+  background: #61afef;
+}
+
+.add-model-row-align .button span,
+.add-model-row-align .button span:after,
+.add-model-row-align .button:hover * {
+  all: unset;
 }
 
 .arena-toggle-button.button span,

@@ -24,11 +24,57 @@ export function get_lifetime_tokens(callback) {
     });
 }
 
+
 export function set_lifetime_tokens(newInputTokens, newOutputTokens) {
     get_lifetime_tokens(function(currentTokens) {
         chrome.storage.local.set({
             lifetime_input_tokens: currentTokens.input + newInputTokens,
             lifetime_output_tokens: currentTokens.output + newOutputTokens
+        });
+    });
+}
+
+
+export function get_stored_models() {
+    return new Promise((resolve) => {
+        chrome.storage.local.get(['models'], function(result) {
+            resolve(result.models || {});
+        });
+    });
+}
+
+
+export function add_model_to_storage(provider, apiString, displayName) {
+    return new Promise((resolve) => {
+        get_stored_models().then(models => {
+            if (!models[provider]) {
+                models[provider] = {};
+            }
+            models[provider][apiString] = displayName;
+            chrome.storage.local.set({ models: models }, () => {
+                resolve(models);
+            });
+        });
+    });
+}
+
+
+export function remove_model_from_storage(apiString) {
+    return new Promise((resolve) => {
+        get_stored_models().then(models => {
+            for (const provider in models) {
+                if (models[provider][apiString]) {
+                    delete models[provider][apiString];
+                    if (Object.keys(models[provider]).length === 0) {
+                        delete models[provider];
+                    }
+                    chrome.storage.local.set({ models: models }, () => {
+                        resolve(models);
+                    });
+                    return;
+                }
+            }
+            resolve(models); // Model not found
         });
     });
 }
@@ -66,6 +112,23 @@ export function loadTextFromFile(filePath) {
 
 
 export function set_defaults() {
+    const MODELS = {
+        openai: {
+            "gpt-4": "GPT-4",
+            "gpt-4-turbo-preview": "GPT-4 Turbo",
+            "chatgpt-4o-latest": "GPT-4o latest",
+            "gpt-4o-mini": "GPT-4o mini"
+        },
+        anthropic: {
+            "claude-3-5-sonnet-20240620": "Sonnet 3.5",
+            "claude-3-5-sonnet-20241022": "Sonnet 3.5 new"
+        },
+        gemini: {
+            "gemini-exp-1206": "Gemini Exp 1206",
+            "gemini-2.0-flash-exp": "Gemini Flash 2.0",
+        }
+    };
+    const anthropic_models = Object.keys(MODELS.anthropic);
     let settings = {
         mode: ModeEnum.InstantPromptMode,
         lifetime_input_tokens: 0,
@@ -73,7 +136,8 @@ export function set_defaults() {
         max_tokens: 500,
         temperature: 1.0,
         loop_threshold: 3,
-        model: "sonnet-3.5",
+        current_model: anthropic_models[anthropic_models.length - 1],
+        models: MODELS,
         api_keys: {},
         close_on_deselect: false,
         stream_response: true,
@@ -214,6 +278,9 @@ export class StreamWriter extends StreamWriterSimple {
     processCharacters() {
         requestAnimationFrame((currentTime) => {
             if (this.contentQueue.length > 0) {
+                if (this.lastFrameTime === 0) {
+                    this.lastFrameTime = currentTime;
+                }
                 const elapsed = currentTime - this.lastFrameTime;
 
                 this.accumulatedChars += elapsed / this.delay;

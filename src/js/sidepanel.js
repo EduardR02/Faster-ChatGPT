@@ -308,7 +308,7 @@ class ChatManager {
         const isNoChoice = choice === 'no_choice(bothbad)';
         const resultString = isNoChoice ? 'draw(bothbad)' : choice;
     
-        const [model1, model2] = this.arenaDivs.map(item => get_full_model_name(item.model));
+        const [model1, model2] = this.arenaDivs.map(item => item.model);
     
         let winnerIndex = 0
         if (['draw', 'reveal', 'ignored'].includes(choice)) {
@@ -329,11 +329,11 @@ class ChatManager {
         }
     
         if (isNoChoice) {
-            this.arenaDivs.forEach(item => this.arenaResultUIUpdate(item, 'arena-loser', this.getModelRating(get_full_model_name(item.model), updatedRatings)));
+            this.arenaDivs.forEach(item => this.arenaResultUIUpdate(item, 'arena-loser', this.getModelRating(item.model, updatedRatings)));
             discard_pending(null);
         } else {
-            this.arenaResultUIUpdate(this.arenaDivs[winnerIndex], 'arena-winner', this.getModelRating(get_full_model_name(this.arenaDivs[winnerIndex].model), updatedRatings));
-            this.arenaResultUIUpdate(this.arenaDivs[loserIndex], 'arena-loser', this.getModelRating(get_full_model_name(this.arenaDivs[loserIndex].model), updatedRatings));
+            this.arenaResultUIUpdate(this.arenaDivs[winnerIndex], 'arena-winner', this.getModelRating(this.arenaDivs[winnerIndex].model, updatedRatings));
+            this.arenaResultUIUpdate(this.arenaDivs[loserIndex], 'arena-loser', this.getModelRating(this.arenaDivs[loserIndex].model, updatedRatings));
             resolve_pending(this.arenaDivs[winnerIndex].model);
         }
     
@@ -355,7 +355,7 @@ class ChatManager {
         const prefixes = parent.querySelectorAll('.message-prefix');
         const contentDivs = parent.querySelectorAll('.message-content');
         const tokenFooters = parent.querySelectorAll('.message-footer');
-        const full_model_name = get_full_model_name(arenaItem.model);
+        const full_model_name = arenaItem.model;
         const elo_rounded = Math.round(elo_rating * 10) / 10;   // round to one decimal place
         prefixes.forEach(prefix => prefix.textContent = `${prefix.textContent.replace(ChatRoleDict.assistant, full_model_name)} (ELO: ${elo_rounded})`);
         contentDivs.forEach(contentDiv => contentDiv.classList.add(classString));
@@ -389,25 +389,6 @@ class ChatManager {
 
 const ChatRoleDict = { user: "You", assistant: "Assistant", system: "System" };
 const RoleEnum = { system: "system", user: "user", assistant: "assistant" };
-
-const MODELS = {
-    openai: {
-        "gpt-3.5-turbo": "gpt-3.5-turbo",
-        "gpt-4": "gpt-4",
-        "gpt-4-turbo": "gpt-4-turbo-preview",
-        "gpt-4o": "chatgpt-4o-latest",
-        "gpt-4o-mini": "gpt-4o-mini"
-    },
-    anthropic: {
-        "sonnet-3.5": "claude-3-5-sonnet-20240620",
-        "sonnet-3.5-new": "claude-3-5-sonnet-20241022"
-    },
-    gemini: {
-        "gemini-1.5-pro-exp-2": "gemini-1.5-pro-exp-0827",
-        "gemini-1.5-pro-exp-1114": "gemini-exp-1114",
-        "gemini-1.5-pro": "gemini-1.5-pro"
-    }
-};
 
 const MaxTemp = {
     openai: 2.0,
@@ -527,7 +508,7 @@ function api_call() {
     }
     else {
         chatManager.initMessageBlock(RoleEnum.assistant, thinkingModeString);
-        api_call_single(settings.model, thinkingModeString);
+        api_call_single(settings.current_model, thinkingModeString);
     }
 }
 
@@ -575,16 +556,10 @@ function create_api_request(model) {
 
 
 function get_provider_for_model(model) {
-    for (const [provider, models] of Object.entries(MODELS)) {
+    for (const [provider, models] of Object.entries(settings.models)) {
         if (model in models) return provider;
     }
     return null;
-}
-
-
-function get_full_model_name(model) {
-    const provider = get_provider_for_model(model);
-    return MODELS[provider][model];
 }
 
 
@@ -601,7 +576,7 @@ function create_anthropic_request(model, msgs) {
             'anthropic-dangerous-direct-browser-access': 'true'
         },
         body: JSON.stringify({
-            model: MODELS.anthropic[model],
+            model: model,
             system: msgs[0].content,
             messages: msgs.slice(1),
             max_tokens: settings.max_tokens,
@@ -624,7 +599,7 @@ function create_openai_request(model, msgs) {
             'Authorization': 'Bearer ' + settings.api_keys.openai
         },
         body: JSON.stringify({
-            model: MODELS.openai[model],
+            model: model,
             messages: msgs,
             max_tokens: settings.max_tokens,
             temperature: settings.temperature > MaxTemp.openai ? MaxTemp.openai : settings.temperature,
@@ -663,7 +638,7 @@ function create_gemini_request(model, msgs) {
     };
     const responseType = settings.stream_response ? "streamGenerateContent" : "generateContent";
     const streamParam = settings.stream_response ? "alt=sse&" : "";
-    const requestLink = `https://generativelanguage.googleapis.com/v1beta/models/${MODELS.gemini[model]}:${responseType}?${streamParam}key=${settings.api_keys.gemini}`;
+    const requestLink = `https://generativelanguage.googleapis.com/v1beta/models/${model}:${responseType}?${streamParam}key=${settings.api_keys.gemini}`;
     return [requestLink, requestOptions];
 }
 
@@ -769,7 +744,7 @@ async function response_stream(response_stream, model, thoughtProcessState) {
     // problem is that stream speed and how "clunky" it is is a dead giveaway in arena mode for which model/provider it is, so we try to even it out by fixing the speed.
     // unfortunately currently gemini stream still "stutters" for the first few seconds, so it's obvious, but for the other models you can't tell anymore
     // might make sense to add random startup delay, like 2-3 sec
-    if (api_provider === "gemini" || chatManager.isArenaMode) {
+    if (api_provider.trim() === "gemini" || chatManager.isArenaMode) {
         streamWriter = new StreamWriter(contentDiv, chatManager.scrollIntoView.bind(chatManager), writerSpeed);
     }
     else {
@@ -818,7 +793,7 @@ function regenerate_response(model, contentDiv) {
     chatManager.onRegenerate(contentDiv, thinkingProcessString);
     discard_pending(model);
     chatManager.antiScrollListener();
-    if (!chatManager.isArenaMode) model = settings.model;
+    if (!chatManager.isArenaMode) model = settings.current_model;
     togglePrompt(thinkingProcessString);
     api_call_single(model, thinkingProcessString);
 }
@@ -962,17 +937,18 @@ function init_prompt(context) {
 
 
 function init_settings() {
-    chrome.storage.local.get(['api_keys', 'max_tokens', 'loop_threshold', 'temperature', 'model', 'stream_response', 'arena_mode', 'arena_models'])
+    chrome.storage.local.get(['api_keys', 'max_tokens', 'loop_threshold', 'temperature', 'current_model', 'stream_response', 'arena_mode', 'arena_models', 'models'])
     .then(res => {
         settings = {
             api_keys: res.api_keys || {},
             max_tokens: res.max_tokens,
             temperature: res.temperature,
             loop_threshold: res.loop_threshold,
-            model: res.model,
+            current_model: res.current_model,
             stream_response: res.stream_response,
             arena_mode: res.arena_mode,
-            arena_models: res.arena_models || []
+            arena_models: res.arena_models || [],
+            models: res.models || {}
         };
         chrome.storage.onChanged.addListener(update_settings);
         if (Object.keys(settings.api_keys).length === 0) {
@@ -1006,7 +982,7 @@ function add_to_pending(message, model, done = true, role = RoleEnum.assistant) 
 
 function resolve_pending(model = null) {
     // because of possible weirdness with toggling arena mode on or off while there are pending messages, we prioritize messages like this:
-    // "function parameter: model" -> "settings.model" -> "random" message that is pending (potentially multiple if arena mode was on).
+    // "function parameter: model" -> "settings.current_model" -> "random" message that is pending (potentially multiple if arena mode was on).
     // We care about this at all because the convo is actually supposed to be useful, and we want to pass the best output to continue.
     messages.push(...resolve_pending_handler(model));
     pending_message = {};
@@ -1032,8 +1008,8 @@ function resolve_pending_handler(model = null) {
         // case for regenerating, you don't want to accidentally include the other models context
         return [];
     }
-    else if (settings.model in pending_message) {
-        return pending_message[settings.model];
+    else if (settings.current_model in pending_message) {
+        return pending_message[settings.current_model];
     }
     return pending_message[Object.keys(pending_message)[0]];
 }

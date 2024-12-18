@@ -48,42 +48,17 @@
             </div>
             <div class="setting">
                 <label class="setting-label" id="models-label">Model:</label>
-                <div class="dummy">
-                    <input type="radio" id="gpt-3.5-turbo" name="model-select" value="gpt-3.5-turbo", class="checkbox">
-                    <label class="setting-label">GPT-3.5-turbo</label>
-                    <input type="radio" id="gpt-4" name="model-select" value="gpt-4" class="checkbox">
-                    <label class="setting-label">GPT-4</label>
-                    <input type="radio" id="gpt-4-turbo" name="model-select" value="gpt-4-turbo" class="checkbox">
-                    <label class="setting-label">GPT-4-turbo</label>
-                    <input type="radio" id="gpt-4o" name="model-select" value="gpt-4o" class="checkbox">
-                    <label class="setting-label">GPT-4o latest</label>
-                    <input type="radio" id="gpt-4o-mini" name="model-select" value="gpt-4o-mini" class="checkbox">
-                    <label class="setting-label">GPT-4o mini</label>
-                </div>
-            </div>
-            <div class="setting">
-                <label class="setting-label"></label>
-                <div class="dummy">
-                    <input type="radio" id="sonnet-3.5" name="model-select" value="sonnet-3.5" class="checkbox">
-                    <label class="setting-label">Sonnet 3.5</label>
-                    <input type="radio" id="sonnet-3.5-new" name="model-select" value="sonnet-3.5-new" class="checkbox">
-                    <label class="setting-label">Sonnet 3.5 new</label>
-                </div>
-            </div>
-            <div class="setting">
-                <label class="setting-label"></label>
-                <div class="dummy">
-                    <input type="radio" id="gemini-1.5-pro" name="model-select" value="gemini-1.5-pro" class="checkbox">
-                    <label class="setting-label">Gemini 1.5 Pro</label>
-                    <input type="radio" id="gemini-1.5-pro-exp-2" name="model-select" value="gemini-1.5-pro-exp-2" class="checkbox">
-                    <label class="setting-label">Gemini Pro Exp 0827</label>
-                    <input type="radio" id="gemini-1.5-pro-exp-1114" name="model-select" value="gemini-1.5-pro-exp-1114" class="checkbox">
-                    <label class="setting-label">Gemini Pro Exp 1114</label>
+                <div class="add-model-row-align">
+                    <input type="text" id="model-display-name-input" class="std-input setting-input" placeholder="Enter Model Display name here...">
+                    <input type="text" id="model-api-name-input" class="std-input setting-input" placeholder="Enter Model API name here...">
+                    <button id="button-model-provider-select" class="button delete-arena provider-select"><span>Anthropic &#x27F3</span></button>
+                    <button id="button-add-model" class="button delete-arena add-model"><span>Add </span></button>
+                    <button id="button-remove-models" class="button delete-arena"><span>Remove </span></button>
                 </div>
             </div>
             <div class="setting">
                 <label for="customize-prompt" class="setting-label">Customize your prompt:</label>
-                <div class="dummy">
+                <div class="models-dummy">
                     <input type="radio" id="selection-prompt" name="prompt-select" value="selection_prompt", class="checkbox">
                     <label class="setting-label">Selection Prompt</label>
                     <input type="radio" id="chat-prompt" name="prompt-select" value="chat_prompt" class="checkbox">

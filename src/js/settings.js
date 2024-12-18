@@ -1,4 +1,4 @@
-import {ArenaRatingManager, auto_resize_textfield_listener, update_textfield_height} from "./utils.js";
+import {ArenaRatingManager, auto_resize_textfield_listener, update_textfield_height, remove_model_from_storage, add_model_to_storage} from "./utils.js";
 
 
 let existing_settings = {};
@@ -23,6 +23,18 @@ function init() {
     let apiCycleButton = document.getElementById('button-api-cycle');
     apiCycleButton.addEventListener('click', function() {
         cycle_api_key_input();
+    });
+    let modelProviderButton = document.getElementById('button-model-provider-select');
+    modelProviderButton.addEventListener('click', function() {
+        set_model_provider_button(modelProviderButton);
+    });
+    let addModelButton = document.getElementById('button-add-model');
+    addModelButton.addEventListener('click', function() {
+        add_model();
+    });
+    let removeModelButton = document.getElementById('button-remove-models');
+    removeModelButton.addEventListener('click', function() {
+        remove_model();
     });
     let promptSelectButtons = document.querySelectorAll('input[name="prompt-select"]');
     promptSelectButtons.forEach(radio => {
@@ -64,6 +76,124 @@ function arenaDeleteHistory(event) {
 }
 
 
+function add_model() {
+    const model_api_name = document.getElementById('model-api-name-input').value.trim();
+    const model_display_name = document.getElementById('model-display-name-input').value.trim();
+    const model_provider = document.getElementById('button-model-provider-select').textContent.split(' ')[0].toLowerCase();
+    if (model_api_name === "" || model_display_name === "") 
+        return;
+    const already_exists = document.getElementById(model_api_name) !== null || Array.from(document.getElementsByClassName('model-label')).find(label => label.textContent.trim() === model_display_name) !== undefined;
+    if (!already_exists) {
+        add_model_to_html(model_api_name, model_display_name);
+    }
+    add_model_to_storage(model_provider, model_api_name, model_display_name);
+}
+
+
+function add_model_to_html(model_api_name, model_display_name) {
+    // Create new model elements
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.id = model_api_name;
+    radio.name = 'model-select';
+    radio.value = model_api_name;
+    radio.className = 'checkbox';
+    
+    const label = document.createElement('label');
+    label.className = 'model-label';
+    label.textContent = model_display_name;
+
+    // Get all dummy divs (rows)
+    const dummyDivs = document.getElementsByClassName('models-dummy');
+    let lastRow = dummyDivs[dummyDivs.length - 1];
+    const insertBefore = lastRow.parentElement;
+    let needsNewRow = true;
+    if (dummyDivs.length > 1) {
+        lastRow = dummyDivs[dummyDivs.length - 2];
+        needsNewRow = shouldCreateNewRow(lastRow, radio, label);
+    }
+
+    if (needsNewRow) {
+        // Create new row
+        const newSetting = document.createElement('div');
+        newSetting.className = 'setting';
+        
+        const dummyLabel = document.createElement('label');
+        dummyLabel.className = 'setting-label';
+        
+        const newDummy = document.createElement('div');
+        newDummy.className = 'models-dummy';
+        
+        newSetting.appendChild(dummyLabel);
+        newSetting.appendChild(newDummy);
+        lastRow.parentElement.parentElement.insertBefore(newSetting, insertBefore);
+        
+        // Add new model to new row
+        newDummy.appendChild(radio);
+        newDummy.appendChild(label);
+    } else {
+        // Add to existing row
+        lastRow.appendChild(radio);
+        lastRow.appendChild(label);
+    }
+}
+
+function shouldCreateNewRow(row, radio, label) {
+    const originalRowHeight = row.offsetHeight;
+    // Add temporarily to measure
+    row.appendChild(radio);
+    row.appendChild(label);
+    
+    const newRowWidth = row.scrollWidth;  // Use scrollWidth to get full content width
+    const newRowHeight = row.offsetHeight;
+    
+    row.removeChild(radio);
+    row.removeChild(label);
+    // get width of arena mode row which is "max width" for the current window size because of its css
+    const maxWidthElement = document.getElementsByClassName('api-row-align');
+    const maxWidth = maxWidthElement[maxWidthElement.length - 1].offsetWidth;
+    // 2. If height increased (means wrapping occurred)
+    return (
+        newRowWidth > maxWidth ||
+        newRowHeight > originalRowHeight
+    );
+}
+
+function remove_model() {
+    // Get both the api_name and display_name
+    const display_name_input = document.getElementById('model-display-name-input').value.trim();
+    if (display_name_input === "") return;
+    // Get all labels with class 'setting-label'
+    const labels = document.getElementsByClassName('model-label');
+    
+    // Convert to array and find the label with matching text
+    const labelArray = Array.from(labels);
+    const targetLabel = labelArray.find(label => label.textContent.trim() === display_name_input);
+    
+    if (!targetLabel) return;
+    
+    // Get the associated radio button (previous sibling)
+    const radio = targetLabel.previousElementSibling;
+    const api_name = radio.id;
+    const row = targetLabel.parentElement; // the dummy div
+    
+    // Remove both the radio and label
+    row.removeChild(radio);
+    row.removeChild(targetLabel);
+    
+    if (row.children.length === 0) {
+        row.parentElement.remove();
+    }
+    remove_model_from_storage(api_name);
+    if (existing_settings.current_model === api_name) {
+        let new_model = document.getElementsByName('model-select')[0];
+        existing_settings.current_model = new_model.value;
+        new_model.checked = true;
+        chrome.storage.local.set({current_model: existing_settings.current_model});
+    }
+}
+
+
 function save() {
     save_settings();
     save_api_key();
@@ -84,6 +214,13 @@ function set_api_label() {
     let placeholder = existing_settings.api_keys[apiProviders[currentApiIndex]] ? "Existing key (hidden)" : "Enter your API key here";
     input_field.placeholder = placeholder;
     input_field.value = "";
+}
+
+function set_model_provider_button(provider_button) {
+    let text = provider_button.textContent.split(' ');
+    let provider_list = Object.values(apiDisplayNames);
+    let index = provider_list.indexOf(text[0]);
+    provider_button.textContent = provider_list[(index + 1) % provider_list.length] + " " + text[1];
 }
 
 
@@ -144,14 +281,14 @@ function save_model_or_arena_models(settings, arena_mode) {
         }
     }
     else {
-        settings.model = arena_models[0].value;
+        settings.current_model = arena_models[0].value;
         models_label.classList.remove('settings-error');
     }
 }
 
 
 function init_values() {
-    chrome.storage.local.get(['api_keys', 'max_tokens', 'temperature', 'loop_threshold', 'model', 'close_on_deselect', 'stream_response', 'arena_mode', 'arena_models'], function(res) {
+    chrome.storage.local.get(['api_keys', 'max_tokens', 'temperature', 'loop_threshold', 'current_model', 'close_on_deselect', 'stream_response', 'arena_mode', 'arena_models', 'models'], function(res) {
         document.getElementById('max-tokens').value = res.max_tokens;
         document.getElementById('temperature').value = res.temperature;
         document.getElementById('loop-threshold').value = res.loop_threshold || 1;
@@ -160,11 +297,22 @@ function init_values() {
         document.getElementById('arena-mode').checked = res.arena_mode || false;
         res.arena_models = res.arena_models || [];
         res.api_keys = res.api_keys || {};
+        init_models(res.models || {});
+        delete res.models;
         existing_settings = res;
         set_api_label();
         toggle_model_checkboxes();
     });
     textarea_setup();
+}
+
+
+function init_models(model_dict) {
+    Object.entries(model_dict).forEach(([provider, models]) => {
+        Object.entries(models).forEach(([apiString, displayName]) => {
+            add_model_to_html(apiString, displayName);
+        });
+    });
 }
 
 
@@ -186,7 +334,7 @@ function toggle_model_checkboxes() {
         }
     });
     if (!arena_mode_val) {
-        document.getElementById(existing_settings.model).checked = true;
+        document.getElementById(existing_settings.current_model || model_checkboxes[0].value).checked = true;
     }
 }
 
