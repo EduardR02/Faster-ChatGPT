@@ -271,6 +271,7 @@ export class StreamWriter extends StreamWriterSimple {
 
         if (!this.isProcessing) {
             this.isProcessing = true;
+            this.lastFrameTime = 0;
             this.processCharacters();
         }
     }
