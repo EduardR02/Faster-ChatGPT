@@ -616,18 +616,15 @@ function create_openai_request(model, msgs) {
 function create_gemini_request(model, msgs) {
     check_api_key("gemini");
     // gemini either has "model" or "user", even the system prompt is classified as "user"
-    const mapped_messages = msgs.map(message => ({
-        role: message.role === "assistant" ? "model" : "user",
-        parts: [{ text: message.content }]
-    }));
+    msgs = map_msges_to_gemini_format(msgs);
     // to use images with gemini we need to use file api and im too lazy for that rn, i use sonnet anyway so whatever
     const requestOptions = {
         method: 'POST',
         credentials: 'omit',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-            contents: mapped_messages.slice(1),
-            systemInstruction: mapped_messages[0],
+            contents: msgs.slice(1),
+            systemInstruction: msgs[0],
             safetySettings: get_gemini_safety_settings(),
             generationConfig: {
                 temperature: settings.temperature > MaxTemp.gemini ? MaxTemp.gemini : settings.temperature,
@@ -662,6 +659,35 @@ function map_msges_to_openai_format(msgs) {
             return { role: msg.role, content: [{type: 'text', text: msg.content}, ...img_dict] };
         }
         return { role: msg.role, content: msg.content };
+    });
+}
+
+
+function map_msges_to_gemini_format(msgs) {
+    return msgs.map(message => {
+        let parts = [];
+
+        // Handle text part
+        if (message.content) {
+            parts.push({ text: message.content });
+        }
+
+        // Handle image parts
+        if (message.role === RoleEnum.user && message.images) {
+            message.images.forEach(img => {
+                parts.push({
+                    inline_data: {
+                        mime_type: get_base64_media_type(img),
+                        data: simple_base64_splitter(img)
+                    }
+                });
+            });
+        }
+        
+        return {
+            role: message.role === "assistant" ? "model" : "user",
+            parts: parts
+        };
     });
 }
 

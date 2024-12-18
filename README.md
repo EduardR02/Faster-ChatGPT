@@ -25,7 +25,7 @@ Faster ChatGPT is a Chrome Extension that \*wraps\* the OpenAI/Anthropic/Gemini 
 You can install this extension from the Chrome Web Store [here](https://chromewebstore.google.com/detail/sidekick-llm/nlpcdeggdeeopcpeeopbjmmkeahojaod)
 
 ## TLDR features
-- Now also supports images, and even multiple images per message (drag and drop or paste, so far only Claude and OpenAI, Gemini will just ignore them).
+- Now also supports images, and even multiple images per message (drag and drop or paste).
 - Regenerate response as many times as you like
 - Switch model mid conversation, you can even switch to regenerate a response with a new model.
 - Arena Mode personal ranking for your exact use cases.
