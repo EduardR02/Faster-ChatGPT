@@ -244,9 +244,18 @@ export class StreamWriterSimple {
     }
 
     addFooter(footer, add_pending) {
+        this.fullMessage = this.message.join('');
+        // Process code blocks only at the end (poor man's streamed codeblock) (claude magic)
+        const codeBlockRegex = /(\n*)```(\w*)\n([\s\S]*?)```(\n*)/g;
+        this.contentDiv.innerHTML = this.fullMessage.replace(codeBlockRegex, (match, preNewlines, lang, code, postNewlines) => {
+            const paddingBack = '\n';
+            const paddingFront = paddingBack + '\n';
+            const escapedCode = new DOMParser().parseFromString(code, 'text/html').documentElement.textContent;
+            return `${paddingFront}<div class="code-style"><pre><code class="language-${lang}">${escapedCode}</code></pre></div>${paddingBack}`;
+        });
+
         footer.create(this.contentDiv);
         this.scrollFunc();
-        this.fullMessage = this.message.join('');
         const done = footer.thoughtProcessState !== "thinking";
         add_pending(this.fullMessage, done);
         return new Promise((resolve) => resolve());
