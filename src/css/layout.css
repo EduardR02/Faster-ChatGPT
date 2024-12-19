@@ -2,6 +2,8 @@ body {
   font-family: Consolas, Courier New, monospace;
   font-size: 14px;
   background-color: #282c34;
+  padding:0;
+  margin:0;
 }
 
 .code-style {
@@ -13,23 +15,55 @@ body {
 }
 
 .side-panel {
-  display: flex;
-  margin-left: auto;
   color: #ffffff;
-  padding: 10px;
+  padding: 1em;
   box-sizing: border-box;
   flex-direction: column;
-  margin-bottom: 20px;
 }
 
-.block_div {
+.history-container {
+  display: flex;
+  height: 100vh;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.chat-history-sidebar {
+  width: 280px;
+  min-width: 280px;
+  height: 100%;
+  border-right: 1px solid #fdaaaa;
+  background: #21252b;
+}
+
+.chat-display {
+  flex: 1;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.chat-list {
+  flex: 1;
+  overflow-y: scroll;
+  display: flex;
+  flex-direction: column;
+}
+
+.history-title {
+  color: #61afef;
+  font-size: 1.5em;
+  padding: 1em;
+  text-align: center;
+}
+
+.popup-container {
   width: 260px;
   display: flex;
-  margin-left: auto;
   box-sizing: border-box;
   flex-direction: column;
-  margin: 0px;
-  padding: 5px;
+  padding: 1em;
+  gap: 0.5em;
 }
 
 .container {
@@ -39,7 +73,8 @@ body {
   align-items:center;
   max-width: 1000px;
   margin: 0 auto;
-  padding: 20px;
+  padding: 1em;
+  gap: 1em;
 }
 
 .setting_container {
@@ -47,19 +82,23 @@ body {
   display: grid;
   grid-template-columns: minmax(auto, max-content) minmax(0, 1fr);
   align-items:center;
+  gap:1em;
 }
 
 .setting {
   display: contents;
 }
 
-.model-label,
-.setting-label {
+.checkbox-label,
+.model-label {
   text-align: left;
-  margin-right: 10px;
   color: #ffffff;
-  margin-bottom: 20px;
-  margin-top: 10px;
+  white-space: nowrap;
+  padding-right: 0.5em;
+}
+
+.setting-label {
+  color: #ffffff;
 }
 
 /* Chrome, Safari, Edge, Opera, removes arrows from number input*/
@@ -79,7 +118,6 @@ a:visited {
 
 .setting-input {
   width:100%;
-  margin-bottom: 10px;
 }
 
 .small {
@@ -97,41 +135,27 @@ a:visited {
   background-color: #21252b;
   border: 1px solid #abb2bf;
   cursor: pointer;
-  margin-right: 10px;
-  margin-top: 8px;
+  margin: 0.5em 0;
 }
 
 .models-dummy,
 .dummy {
   display: flex;
   width: fit-content;
-}
-
-.api-row-align {
-  display: flex;
   align-items: center;
-  width: auto;
+  column-gap: 0.5em;
 }
 
+.row-align,
 .add-model-row-align {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 0.75em;
   width: 100%;
-}
-
-.api-button {
-  margin-left: 10px;
-  min-width: max-content;
-}
-
-.other-checkbox-align {
-  margin-top: -10px;
 }
 
 .checkbox.arena-checkbox {
   margin-left: 0;
-  margin-top: 0;
 }
 
 .checkbox:checked {
@@ -248,6 +272,7 @@ p {
   font-size: 0.8em;
   color: #61afef;
   margin-top: 1em;
+  margin-bottom: 0.5em;
 }
 
 .regenerate-button {
@@ -263,7 +288,7 @@ p {
   transform: translateX(-50%);
 }
 
-.center {
+.center-text {
   text-align: center;
 }
 
@@ -306,12 +331,13 @@ p {
 }
 
 .std-input.padding-for-button {
-  padding-right: 48px; /* pretty terrible, just manual calc of the button size, with even padding on both sides, so 10 - 28 - 10*/
+  padding-right: 3em; /* pretty terrible, just manual calc of the button size, with even padding on both sides, so 10 - 28 - 10*/
 }
 
 :root {
   --check-primary: #61afef;
   --check-secondary: #ef596f;
+  color-scheme: dark;
 }
 
 .button {
@@ -328,7 +354,7 @@ p {
   transition: all 0.1s;
   cursor: pointer;
   overflow: hidden;
-  margin-bottom: 10px;
+  min-width: max-content;
 }
 
 .regenerate-button {
@@ -383,12 +409,11 @@ p {
   padding: 1px 6px;
   font-size: 1.4em;
   background: #abb2bf;
-  margin-top: 0;
-  margin-bottom: 0;
   /* this is so the icons / text are centered inside the button, as we want to keep it fixed size, but need to adjust content size*/
   display: flex;
   justify-content: center;
   align-items: center;
+  min-width: unset;
 }
 
 .arena-toggle-button.arena-mode-on {
@@ -426,10 +451,6 @@ p {
 
 .arena-button.choice-not-hovered {
   background: #ef596f;
-}
-
-.no-bottom-margin {
-  margin-bottom: 0;
 }
 
 .button span {
@@ -486,7 +507,7 @@ p {
 }
 
 .button.provider-select {
-  background: #61afef;
+  background: #abb2bf;
 }
 
 .add-model-row-align .button span,

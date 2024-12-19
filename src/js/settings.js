@@ -150,7 +150,7 @@ function shouldCreateNewRow(row, radio, label) {
     row.removeChild(radio);
     row.removeChild(label);
     // get width of arena mode row which is "max width" for the current window size because of its css
-    const maxWidthElement = document.getElementsByClassName('api-row-align');
+    const maxWidthElement = document.getElementsByClassName('add-model-row-align');
     const maxWidth = maxWidthElement[maxWidthElement.length - 1].offsetWidth;
     // 2. If height increased (means wrapping occurred)
     return (
