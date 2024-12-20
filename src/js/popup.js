@@ -20,6 +20,9 @@ function run_on_init() {
 	let button3 = document.getElementById("buttonChat");
 	button3.addEventListener("click", open_side_panel);
 
+	let historyButton = document.getElementById("buttonHistory");
+	historyButton.addEventListener("click", open_history);
+
 	let tokensValue = document.getElementById("tokensValue");
     get_lifetime_tokens(function(res) {
         tokensValue.innerText = res.input + " | " + res.output;
@@ -49,6 +52,12 @@ function open_side_panel() {
             }
         });
 }
+
+
+function open_history() {
+	chrome.tabs.create({url: chrome.runtime.getURL('src/html/history.html')});
+}
+
 
 function toggle_mode(callback) {
 	chrome.storage.local.get('mode', function(res) {

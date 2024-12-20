@@ -4,7 +4,8 @@ import { ArenaRatingManager, StreamWriter, StreamWriterSimple, Footer, TokenCoun
 
 class ChatManager {
     constructor() {
-        this.conversationDiv = document.getElementById('conversation');
+        this.conversationDiv = document.getElementById('conversation-wrapper');
+        this.scrollToElement = document.getElementById('conversation');
         this.inputFieldWrapper = document.querySelector('.textarea-wrapper');
         this.pendingImageDiv = null;
         this.pendingImages = [];
@@ -43,9 +44,9 @@ class ChatManager {
     }
 
     initParagraph(role) {
-        let paragraph = document.createElement('p');
+        let paragraph = document.createElement('div');
         paragraph.classList.add(role + "-message");
-        this.conversationDiv.insertBefore(paragraph, this.inputFieldWrapper);
+        this.conversationDiv.appendChild(paragraph);
         return paragraph;
     }
 
@@ -367,7 +368,7 @@ class ChatManager {
 
     scrollIntoView() {
         if (this.shouldScroll) {
-            this.conversationDiv.scrollIntoView(false);
+            this.scrollToElement.scrollIntoView(false);
         }
     }
 
@@ -485,8 +486,9 @@ function update_settings(changes, namespace) {
 
 
 function remove_added_paragraphs() {
-    const contentDiv = document.getElementById('conversation');
-    contentDiv.querySelectorAll('p').forEach(el => el.remove());
+    const newConversationDiv = document.createElement('div');
+    newConversationDiv.classList.add('conversation-wrapper');
+    chatManager.conversationDiv.replaceWith(newConversationDiv);
 }
 
 

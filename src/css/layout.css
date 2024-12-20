@@ -6,12 +6,31 @@ body {
   margin:0;
 }
 
+::-webkit-scrollbar {
+  width: 6px;  /* how wide the entire scrollbar is */
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 3px;  /* rounded ends */
+  background:#4b5363;
+  transition: background 0.2s ease-out;  /* smooth color transition */
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;  /* the rail it moves on */
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #5c6980;
+}
+
 .code-style {
   background: #1e1e1e;
   color: #d4d4d4;
   padding: 1em;
   border-radius: 4px;
   margin: 0;
+  overflow: auto;
 }
 
 .side-panel {
@@ -21,37 +40,98 @@ body {
   flex-direction: column;
 }
 
+.conversation-wrapper {
+  margin: 0;
+  padding: 0 1em;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.sidebar-separator {
+  width: 1px;
+  background: #fdaaaa;
+  z-index: 1;  /* ensure it's above scrollbar */
+}
+
 .history-container {
   display: flex;
   height: 100vh;
   width: 100%;
   margin: 0;
   padding: 0;
+  overflow: hidden;
+}
+
+.history-chat-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow-y: hidden;
 }
 
 .chat-history-sidebar {
-  width: 280px;
-  min-width: 280px;
-  height: 100%;
-  border-right: 1px solid #fdaaaa;
+  width: 260px;
+  min-width: 260px;
+  height: 100vh;
   background: #21252b;
-}
-
-.chat-display {
-  flex: 1;
-  height: 100%;
-  overflow-y: auto;
-}
-
-.chat-list {
-  flex: 1;
-  overflow-y: scroll;
   display: flex;
   flex-direction: column;
 }
 
+.history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 1em;
+}
+
+.history-sidebar-item {
+  color: #d4d4d4;
+  border-radius: 0.5em;
+  cursor: pointer;
+  padding: 0.5em;
+  white-space: nowrap;
+  overflow: hidden;
+  position: relative;  /* for pseudo-element positioning */
+  mask-image: linear-gradient(to right, black 85%, transparent 100%);  /* text fade */
+  transition: color 0.2s ease-out;  /* add this for smooth color transition */
+  z-index: 1;  /* make sure it's above the pseudo-element */
+}
+
+.history-sidebar-item::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #fdaaaa7a;
+  mask-image: linear-gradient(to right, black 60%, transparent 100%);
+  transform: scaleX(0);  /* starts scaled to 0 */
+  transform-origin: left;  /* scales from left side */
+  transition: transform 0.2s ease-out;  /* slower out */
+  z-index: -1;  /* behind the text */
+}
+
+.history-sidebar-item:hover::before {
+  transform: scaleX(1);  /* scales to full width */
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1); /* bouncy! */
+}
+
+.history-sidebar-item:hover {
+  color: #ffffff;  /* this will now transition smoothly */
+}
+
+.conversation-title {
+  color: #fdaaaa;
+  font-size: 2em;
+  padding: 0.5em;
+  padding-bottom: 1em;
+  text-align: center;
+}
+
 .history-title {
-  color: #61afef;
+  color: #fdaaaa;
   font-size: 1.5em;
   padding: 1em;
   text-align: center;
@@ -224,6 +304,7 @@ p {
 .message-content {
   color: #ffffff;
   margin-left: 1em;
+  margin-bottom: 1em;
 }
 
 .assistant-content {
@@ -271,8 +352,7 @@ p {
   align-items: center;
   font-size: 0.8em;
   color: #61afef;
-  margin-top: 1em;
-  margin-bottom: 0.5em;
+  margin-top: 0.5em;
 }
 
 .regenerate-button {
@@ -360,8 +440,6 @@ p {
 .regenerate-button {
   padding: 1px 6px;
   background: #98c379;
-  margin-bottom: 0;
-  margin-left: auto;
 }
 
 .regenerate-button.fade-out {
