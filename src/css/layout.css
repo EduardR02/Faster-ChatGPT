@@ -36,14 +36,16 @@ body {
 .side-panel {
   color: #ffffff;
   padding: 1em;
-  box-sizing: border-box;
+  display: flex;
   flex-direction: column;
+  gap: 0.5em;
 }
 
 .conversation-wrapper {
-  margin: 0;
-  padding: 0 1em;
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1em;
   overflow-y: auto;
 }
 
@@ -68,6 +70,8 @@ body {
   flex-direction: column;
   height: 100vh;
   overflow-y: hidden;
+  padding: 1em 2em;
+  gap: 0.5em;
 }
 
 .chat-history-sidebar {
@@ -125,8 +129,7 @@ body {
 .conversation-title {
   color: #fdaaaa;
   font-size: 2em;
-  padding: 0.5em;
-  padding-bottom: 1em;
+  padding: 0.5em 0;
   text-align: center;
 }
 
@@ -271,7 +274,6 @@ p {
 }
 
 .arena-full-container {
-
 }
 
 .arena-wrapper {
@@ -281,8 +283,8 @@ p {
 
 .arena-footer {
   display: flex;
+  margin-top: 0.5em;
   justify-content: space-between;
-  margin-top: 1em;
   transition: all 0.4s ease;
 }
 
@@ -304,7 +306,6 @@ p {
 .message-content {
   color: #ffffff;
   margin-left: 1em;
-  margin-bottom: 1em;
 }
 
 .assistant-content {
