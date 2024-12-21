@@ -1,5 +1,5 @@
 import { ArenaRatingManager, StreamWriter, StreamWriterSimple, Footer, TokenCounter, ModeEnum, get_mode, set_lifetime_tokens,
-    auto_resize_textfield_listener, update_textfield_height, is_on } from "./utils.js";
+    auto_resize_textfield_listener, update_textfield_height, is_on, ChatStorage } from "./utils.js";
 
 
 class ChatManager {
@@ -16,7 +16,7 @@ class ChatManager {
         this.hoverOffFunc = null;
         this.arenaFooter = null;
         this.arenaContainer = null;
-        this.contentDivs = [];
+        this.contentDiv = null;
         this.pendingResponses = 0;
         this.shouldScroll = true;
         this.scrollListenerActive = false;
@@ -29,7 +29,6 @@ class ChatManager {
         this.arenaFooter = null;
         this.arenaDivs = [];
         this.arenaButtons = [];
-        this.contentDivs = [];
         this.pendingResponses = 2;
         if (!arenaRatingManager) arenaRatingManager = initArenaRatingManager();
     }
@@ -72,14 +71,18 @@ class ChatManager {
         this.pendingImages.push(imagebase64);
     }
 
-    onRegenerate(contentDiv, thinkingProcess) {
-        let parentDiv = contentDiv.parentElement;
+    onRegenerate(contentDiv, model, thinkingProcess) {
+        let parentDivWrapper = contentDiv.parentElement.parentElement;
         let roleString = ChatRoleDict[RoleEnum.assistant] + ' \u{27F3}';
-        this.createMessageDiv(parentDiv, RoleEnum.assistant, thinkingProcess, '', roleString);
+        const newContentDiv = this.createMessageDiv(parentDivWrapper, RoleEnum.assistant, thinkingProcess, '', roleString);
+        // replace the content div in the arenaDivs array with the new one
+        if (this.isArenaMode) {
+            this.arenaDivs.find(item => item.model === model).contentDiv = newContentDiv;
+        }
     }
 
     onContinue(contentDiv, thinkingProcess) {
-        let parentDiv = contentDiv.parentElement;
+        let parentDiv = contentDiv.parentElement.parentElement;
         this.createMessageDiv(parentDiv, RoleEnum.assistant, thinkingProcess);
     }
 
@@ -111,7 +114,7 @@ class ChatManager {
         contentDiv.textContent = text;
         messageWrapper.appendChild(contentDiv);
         if (role === RoleEnum.assistant) {
-            this.contentDivs.push(contentDiv);
+            this.contentDiv = contentDiv;
         }
         parentElement.appendChild(messageWrapper);
         this.scrollIntoView();
@@ -135,15 +138,14 @@ class ChatManager {
             fullDiv.classList.add('arena-full-container');
             this.arenaContainer = fullDiv;
 
-            let arenaDiv = document.createElement('div');
-            arenaDiv.classList.add('arena-wrapper');
-
             for (let i = 0; i < 2; i++) {
+                let arenaDiv = document.createElement('div');
+                arenaDiv.classList.add('arena-wrapper');
                 let contentDiv = this.createMessageDiv(arenaDiv, role, thinkingProcess);
                 this.arenaDivs.push({ model: null, contentDiv: contentDiv });
+                fullDiv.appendChild(arenaDiv);
             }
 
-            fullDiv.appendChild(arenaDiv);
             paragraph.appendChild(fullDiv);
         }
         else {
@@ -151,22 +153,25 @@ class ChatManager {
         }
     }
 
-    getContentDivAndSetModel(model) {
-        if (this.contentDivs.length === 0) {
+    assignModelsToArenaDivs(modelA, modelB) {
+        // at this point the models are already shuffled, so we can just assign them in order
+        this.arenaDivs[0].model = modelA;
+        this.arenaDivs[1].model = modelB;
+        currentChat.messages.push(chatStorage.initArenaMessage(modelA, modelB));
+    }
+
+    getContentDiv(model) {
+        if (!this.isArenaMode && this.contentDiv === null || this.isArenaMode && this.arenaDivs.length !== 2) {
             post_error_message_in_chat("Content divs", "No content divs available.");
             return null;
         }
         if (this.isArenaMode) {
-            // return random content div to avoid bias (one model api could always be faster for some reason, and would therefore always get the first div)
-            const index = Math.floor(Math.random() * this.contentDivs.length);
-            // if a response gets regenerated, the find condition won't be met, which we want because we already know the models
-            const item = this.arenaDivs.find(item => item.contentDiv.isSameNode(this.contentDivs[index]));
-            if (item) {
-                item.model = model;
-            }
-            return this.contentDivs.splice(index, 1)[0];
+            // we only need the contentDiv for the singular case anyway, because we have it in the arenaDivs in this case
+            return this.arenaDivs.find(item => item.model === model).contentDiv;
         }
-        return this.contentDivs.shift();
+        const contentDiv = this.contentDiv;
+        this.contentDiv = null;
+        return contentDiv;
     }
 
     getContentDivIndex(model) {
@@ -211,7 +216,7 @@ class ChatManager {
             button.addEventListener('mouseenter', this.hoverOnFunc);
             button.addEventListener('mouseleave', this.hoverOffFunc);
         });
-        this.arenaContainer.appendChild(footer);
+        this.arenaContainer.parentElement.appendChild(footer);
         this.arenaFooter = footer;
         this.scrollIntoView();
     }
@@ -305,6 +310,7 @@ class ChatManager {
     handleArenaChoice(choice) {
         this.deleteArenaFooter();
         remove_regenerate_buttons();
+        currentChat.messages[currentChat.messages.length - 1].choice = choice;
     
         const isNoChoice = choice === 'no_choice(bothbad)';
         const resultString = isNoChoice ? 'draw(bothbad)' : choice;
@@ -330,13 +336,17 @@ class ChatManager {
         }
     
         if (isNoChoice) {
+            currentChat.messages[currentChat.messages.length - 1].continued_with = 'none';
             this.arenaDivs.forEach(item => this.arenaResultUIUpdate(item, 'arena-loser', this.getModelRating(item.model, updatedRatings)));
             discard_pending(null);
         } else {
+            currentChat.messages[currentChat.messages.length - 1].continued_with = winnerIndex === 0 ? "model_a" : "model_b";
             this.arenaResultUIUpdate(this.arenaDivs[winnerIndex], 'arena-winner', this.getModelRating(this.arenaDivs[winnerIndex].model, updatedRatings));
             this.arenaResultUIUpdate(this.arenaDivs[loserIndex], 'arena-loser', this.getModelRating(this.arenaDivs[loserIndex].model, updatedRatings));
             resolve_pending(this.arenaDivs[winnerIndex].model);
         }
+
+        chatStorage.updateArenaMessage(currentChat.id, currentChat.messages.length - 1, currentChat.messages[currentChat.messages.length - 1]);
     
         this.arenaDivs = [];
         this.isArenaMode = false;
@@ -352,7 +362,7 @@ class ChatManager {
     }
 
     arenaResultUIUpdate(arenaItem, classString, elo_rating) {
-        const parent = arenaItem.contentDiv.parentElement;
+        const parent = arenaItem.contentDiv.parentElement.parentElement;
         const prefixes = parent.querySelectorAll('.message-prefix');
         const contentDivs = parent.querySelectorAll('.message-content');
         const tokenFooters = parent.querySelectorAll('.message-footer');
@@ -406,6 +416,9 @@ let arenaRatingManager = null;
 let thinkingMode = false;
 let thoughtLoops = [0, 0];
 
+let chatStorage = new ChatStorage();
+let currentChat = null;
+
 
 document.addEventListener('DOMContentLoaded', init);
 
@@ -437,6 +450,8 @@ function setup_message_listeners() {
 
 function when_new_selection(text, url) {
     remove_added_paragraphs();
+    currentChat = chatStorage.createNewChatTracking(`Selection from ${url}`);
+
     chatManager.createMessageBlock(RoleEnum.system, text, "Selected text");
     thoughtLoops = [0, 0];
     init_prompt({mode: "selection", text: text, url: url}).then(() => {
@@ -455,6 +470,7 @@ function when_new_chat() {
         if (current_mode === ModeEnum.InstantPromptMode) {
             post_warning_in_chat("Instant prompt mode does not make sense in chat mode and will be ignored.");
         }
+        currentChat = chatStorage.createNewChatTracking("New Chat");
         init_prompt({mode: "chat"});
     });
 }
@@ -505,6 +521,8 @@ function api_call() {
         let [model1, model2] = get_random_arena_models();
         chatManager.initArenaMode();
         chatManager.initMessageBlock(RoleEnum.assistant, thinkingModeString);
+        // even if it's just two models selected for arena mode, they are still shuffled every time, meaning no bias in which side they are on
+        chatManager.assignModelsToArenaDivs(model1, model2);
         api_call_single(model1, thinkingModeString);
         api_call_single(model2, thinkingModeString);
     }
@@ -723,7 +741,7 @@ function get_gemini_safety_settings() {
 
 function get_reponse_no_stream(response, model, thoughtProcessState) {
     response.json().then(data => {
-        let contentDiv = chatManager.getContentDivAndSetModel(model);
+        let contentDiv = chatManager.getContentDiv(model);
         let streamWriter = new StreamWriterSimple(contentDiv, chatManager.scrollIntoView.bind(chatManager));
         let response_text, input_tokens, output_tokens;
         try {
@@ -764,7 +782,7 @@ function get_response_data_no_stream(data, model) {
 // "stolen" from https://umaar.com/dev-tips/269-web-streams-openai/ and https://www.builder.io/blog/stream-ai-javascript
 async function response_stream(response_stream, model, thoughtProcessState) {
     // right now you can't "stop generating", too lazy lol
-    let contentDiv= chatManager.getContentDivAndSetModel(model);
+    let contentDiv = chatManager.getContentDiv(model);
     let api_provider = get_provider_for_model(model);
     let tokenCounter = new TokenCounter(api_provider);
     let streamWriter;
@@ -818,7 +836,7 @@ function regenerate_response(model, contentDiv) {
     const thinkingProcessString = thinkingMode ? "thinking" : "none";
     chatManager.thinkingModeActive = thinkingMode;
     thoughtLoops[chatManager.getContentDivIndex(model)] = 0;
-    chatManager.onRegenerate(contentDiv, thinkingProcessString);
+    chatManager.onRegenerate(contentDiv, model, thinkingProcessString);
     discard_pending(model);
     chatManager.antiScrollListener();
     if (!chatManager.isArenaMode) model = settings.current_model;
@@ -993,10 +1011,37 @@ function append_context(message, role) {
         messages[messages.length - 1].images = chatManager.pendingImages;
         chatManager.pendingImages = [];
     }
+
+    // Save to chat history after each message, this function isn't used for assistant messages (pending does that) so we just focus on user messages
+    if (currentChat && role === RoleEnum.user) {
+        if (currentChat.id === null) {
+            currentChat.messages = [...messages];
+            chatStorage.createChatWithMessages(currentChat.title, messages).then(res => currentChat.id = res.chatId);
+        } else {
+            const newMsg = messages[messages.length - 1];
+            currentChat.messages.push(newMsg);
+            chatStorage.addMessages(currentChat.id, [newMsg], currentChat.messages.length - 1);
+        }
+    }
 }
 
 
 function add_to_pending(message, model, done = true, role = RoleEnum.assistant) {
+    if (!chatManager.isArenaMode) {
+        const historyMsg = {role: role, content: message, model: model};
+        currentChat.messages.push(historyMsg);
+        chatStorage.addMessages(currentChat.id, [historyMsg], currentChat.messages.length - 1);
+    }
+    else {
+        // the arena type message is already instantiated at this point, so all we need to do is to add it,
+        // and it doesnt even matter if it's regenerated, because we just push it
+        const currentChatMessage = currentChat.messages[currentChat.messages.length - 1];
+        const matchingModelKey = Object.keys(currentChatMessage.responses).find(
+            key => currentChatMessage.responses[key].name === model
+        );
+        currentChatMessage.responses[matchingModelKey].messages.push(message);
+        chatStorage.updateArenaMessage(currentChat.id, currentChat.messages.length - 1, currentChatMessage);
+    }
     // this is neat because we can only have one "latest" message per model, so if we regenerate many times we just overwrite.
     if (pending_message[model]) {
         pending_message[model].push({role: role, content: message});

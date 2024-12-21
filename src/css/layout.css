@@ -273,17 +273,23 @@ p {
   color: #ffffff;
 }
 
-.arena-full-container {
+.assistant-message {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
 }
 
-.arena-wrapper {
+.arena-full-container {
   display: flex;
   flex-direction: row;
 }
 
+.arena-wrapper {
+  flex:1;
+}
+
 .arena-footer {
   display: flex;
-  margin-top: 0.5em;
   justify-content: space-between;
   transition: all 0.4s ease;
 }

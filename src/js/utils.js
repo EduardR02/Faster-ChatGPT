@@ -327,6 +327,269 @@ export class StreamWriter extends StreamWriterSimple {
 }
 
 
+export class ChatStorage {
+    constructor() {
+        this.dbName = 'llm-chats';
+        this.dbVersion = 1;
+    }
+
+    async getDB() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open(this.dbName, this.dbVersion);
+            
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => resolve(request.result);
+            
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                
+                if (!db.objectStoreNames.contains('messages')) {
+                    const messageStore = db.createObjectStore('messages', { 
+                        keyPath: ['chatId', 'messageId']
+                    });
+                    messageStore.createIndex('chatId', 'chatId');
+                }
+                
+                if (!db.objectStoreNames.contains('chatMeta')) {
+                    const metaStore = db.createObjectStore('chatMeta', { 
+                        keyPath: 'chatId',
+                        autoIncrement: true 
+                    });
+                }
+            };
+        });
+    }
+
+    async createChatWithMessages(title, messages) {
+        const db = await this.getDB();
+        const tx = db.transaction(['chatMeta', 'messages'], 'readwrite');
+        const metaStore = tx.objectStore('chatMeta');
+        const messageStore = tx.objectStore('messages');
+
+        return new Promise((resolve, reject) => {
+            const chatMeta = {
+                title,
+                timestamp: Date.now()
+            };
+
+            const metaRequest = metaStore.add(chatMeta);
+            
+            metaRequest.onsuccess = () => {
+                const chatId = metaRequest.result;
+                const messagePromises = messages.map((message, index) => 
+                    messageStore.add({
+                        chatId,
+                        messageId: index,
+                        timestamp: Date.now(),
+                        ...message
+                    })
+                );
+
+                Promise.all(messagePromises)
+                    .then(() => resolve({
+                        chatId,
+                        ...chatMeta
+                    }))
+                    .catch(reject);
+            };
+            
+            metaRequest.onerror = () => reject(metaRequest.error);
+        });
+    }
+
+    async addMessages(chatId, messages, startMessageIdIncrementAt) {
+        const db = await this.getDB();
+        const tx = db.transaction(['messages'], 'readwrite');
+        const store = tx.objectStore('messages');
+        
+        return Promise.all(messages.map((message, index) => 
+            new Promise((resolve, reject) => {
+                const request = store.add({
+                    chatId,
+                    messageId: startMessageIdIncrementAt + index,
+                    timestamp: Date.now(),
+                    ...message
+                });
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            })
+        ));
+    }
+
+    async updateArenaMessage(chatId, messageId, message) {
+        const db = await this.getDB();
+        const tx = db.transaction(['messages'], 'readwrite');
+        const store = tx.objectStore('messages');
+        
+        return new Promise((resolve, reject) => {
+            const request = store.put({
+                chatId,
+                messageId: messageId,
+                timestamp: Date.now(),
+                ...message
+            });
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async loadChat(chatId) {
+        const db = await this.getDB();
+        const tx = db.transaction(['messages', 'chatMeta'], 'readonly');
+        const messageStore = tx.objectStore('messages');
+        const metaStore = tx.objectStore('chatMeta');
+        
+        return new Promise((resolve) => {
+            const messages = [];
+            
+            const index = messageStore.index('chatId');
+            const request = index.openCursor(IDBKeyRange.only(chatId));
+            
+            request.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (!cursor) {
+                    metaStore.get(chatId).onsuccess = (event) => {
+                        resolve({
+                            meta: event.target.result,
+                            messages
+                        });
+                    };
+                    return;
+                }
+
+                messages.push(cursor.value);
+                cursor.continue();
+            };
+        });
+    }
+
+    async deleteChat(chatId) {
+        const db = await this.getDB();
+        const tx = db.transaction(['messages', 'chatMeta'], 'readwrite');
+        
+        const messageStore = tx.objectStore('messages');
+        const metaStore = tx.objectStore('chatMeta');
+        
+        const index = messageStore.index('chatId');
+        await Promise.all([
+            new Promise((resolve) => {
+                const request = index.openCursor(IDBKeyRange.only(chatId));
+                request.onsuccess = (event) => {
+                    const cursor = event.target.result;
+                    if (cursor) {
+                        cursor.delete();
+                        cursor.continue();
+                    } else {
+                        resolve();
+                    }
+                };
+            }),
+            metaStore.delete(chatId)
+        ]);
+    }
+
+    async getChatMetadata(limit = 20, offset = 0) {
+        const db = await this.getDB();
+        const tx = db.transaction('chatMeta', 'readonly');
+        const store = tx.objectStore('chatMeta');
+        const index = store.index('timestamp');
+
+        return new Promise((resolve) => {
+            const metadata = [];
+            let skipped = 0;
+            
+            const request = index.openCursor(null, 'prev');  // newest first
+            
+            request.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (!cursor) {
+                    resolve(metadata);
+                    return;
+                }
+
+                if (skipped < offset) {
+                    skipped++;
+                    cursor.continue();
+                    return;
+                }
+
+                if (metadata.length < limit) {
+                    metadata.push(cursor.value);
+                    cursor.continue();
+                } else {
+                    resolve(metadata);
+                }
+            };
+        });
+    }
+
+    createNewChatTracking(title) {
+        return {
+            id: null,
+            title,
+            messages: []
+        };
+    }
+
+    initArenaMessage(modelA, modelB) {
+        return {
+            role: 'assistant',
+            choice: 'ignored',
+            continued_with: '',
+            responses: {
+                model_a: {
+                    name: modelA,
+                    messages: []
+                },
+                model_b: {
+                    name: modelB,
+                    messages: []
+                },
+            }
+        };
+    }
+}
+
+/* Expected object shapes for reference:
+{
+    chatMeta: {
+        id: string,
+        timestamp: number,
+        title: string,
+    },
+    
+    regularMessage: {
+        chatId: autoincrement,
+        messageId: autoincrement,
+        timestamp: number,
+        role: 'user' | 'assistant' | 'system',
+        model?: string,  // For assistant messages
+        content: string,
+        images?: string[] // Optional, user only
+    },
+    
+    arenaMessage: {
+        chatId: autoincrement,
+        messageId: autoincrement,
+        timestamp: number,
+        role: 'assistant',
+        choice: 'model_a' | 'model_b' | 'draw' | 'draw(bothbad)' | 'ignored',
+        continued_with: string  // model_a | model_b | none (in case of draw(bothbad), because the whole arena gets regenerated),
+        responses: {
+            model_a: {
+                name: string,
+                messages: string[]  // Latest is current, previous are regenerations
+            },
+            model_b: {
+                name: string,
+                messages: string[]
+            },
+        }
+    }
+}
+*/
+
+
 export class ArenaRatingManager {
     constructor(dbName = "MatchesDB", storeName = "matches", ratingsCacheKey = "elo_ratings") {
         this.dbName = dbName;
