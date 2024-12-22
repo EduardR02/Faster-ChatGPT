@@ -455,8 +455,9 @@ p {
 }
 
 .image-content img {
-  width: 100%;
-  height: auto;
+  max-width: 100%;  /* instead of width: 100% */
+  width: auto;      /* let it be its natural size if container is bigger */
+  height: auto;     /* maintain aspect ratio */
   display: block;
 }
 

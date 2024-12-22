@@ -91,7 +91,7 @@ export function add_codeblock_html(message) {
         .replace(/'/g, '&#039;');
 
     // Then handle code blocks
-    const codeBlockRegex = /(\n*)```(\w*)\n([\s\S]*?)```(\n+)/g;
+    const codeBlockRegex = /(\n*)```(\w*)\n([\s\S]*?)```(\n+|$)/g;
     return escapedMessage.replace(codeBlockRegex, (match, preNewlines, lang, code, postNewlines) => {
         const paddingBack = '\n';
         const paddingFront = paddingBack + '\n';

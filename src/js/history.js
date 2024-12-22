@@ -51,16 +51,27 @@ function displayChat(chatId, title, timestamp) {
                 wrapperDiv.append(toggleButton, contentDiv);
             } else {
                 messageDiv.className = `${message.role}-message`;
-
                 const prefixSpan = document.createElement('span');
                 prefixSpan.className = `message-prefix ${message.role}-prefix`;
                 prefixSpan.textContent = message.role === 'user' ? 'You' : 'Assistant';
-
+                wrapperDiv.append(prefixSpan);
+                
+                // currently only user can add images, but this would already work for assistant too
+                if (message.images && message.images.length > 0) {
+                    
+                    message.images.forEach(imageUrl => {
+                        const imageContent = document.createElement('div');
+                        imageContent.className = `image-content ${message.role}-content`;
+                        const img = document.createElement('img');
+                        img.src = imageUrl;
+                        imageContent.appendChild(img);
+                        wrapperDiv.append(imageContent);
+                    });
+                }
                 const contentDiv = document.createElement('div');
                 contentDiv.className = `message-content ${message.role}-content`;
                 contentDiv.innerHTML = add_codeblock_html(message?.content || "");
-
-                wrapperDiv.append(prefixSpan, contentDiv);
+                wrapperDiv.append(contentDiv);
             }
 
             messageDiv.appendChild(wrapperDiv);
