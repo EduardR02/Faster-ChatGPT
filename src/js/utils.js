@@ -80,6 +80,26 @@ export function remove_model_from_storage(apiString) {
 }
 
 
+// Process code blocks only at the end (poor man's streamed codeblock) (claude magic)
+export function add_codeblock_html(message) {
+    // First escape ALL HTML
+    const escapedMessage = message
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+
+    // Then handle code blocks
+    const codeBlockRegex = /(\n*)```(\w*)\n([\s\S]*?)```(\n+)/g;
+    return escapedMessage.replace(codeBlockRegex, (match, preNewlines, lang, code, postNewlines) => {
+        const paddingBack = '\n';
+        const paddingFront = paddingBack + '\n';
+        return `${paddingFront}<div class="code-style"><pre><code class="language-${lang}">${code}</code></pre></div>${paddingBack}`;
+    });
+}
+
+
 export function auto_resize_textfield_listener(element_id) {
     let inputField = document.getElementById(element_id);
 
@@ -245,14 +265,8 @@ export class StreamWriterSimple {
 
     addFooter(footer, add_pending) {
         this.fullMessage = this.message.join('');
-        // Process code blocks only at the end (poor man's streamed codeblock) (claude magic)
-        const codeBlockRegex = /(\n*)```(\w*)\n([\s\S]*?)```(\n*)/g;
-        this.contentDiv.innerHTML = this.fullMessage.replace(codeBlockRegex, (match, preNewlines, lang, code, postNewlines) => {
-            const paddingBack = '\n';
-            const paddingFront = paddingBack + '\n';
-            const escapedCode = new DOMParser().parseFromString(code, 'text/html').documentElement.textContent;
-            return `${paddingFront}<div class="code-style"><pre><code class="language-${lang}">${escapedCode}</code></pre></div>${paddingBack}`;
-        });
+        
+        this.contentDiv.innerHTML = add_codeblock_html(this.fullMessage);
 
         footer.create(this.contentDiv);
         this.scrollFunc();

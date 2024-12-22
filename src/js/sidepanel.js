@@ -109,7 +109,6 @@ class ChatManager {
         messageWrapper.appendChild(prefixSpan);
 
         let contentDiv = document.createElement('div');
-        contentDiv.style.whiteSpace = 'pre-wrap';
         contentDiv.classList.add('message-content', role + '-content');
         contentDiv.textContent = text;
         messageWrapper.appendChild(contentDiv);
