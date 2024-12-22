@@ -477,6 +477,31 @@ export class ChatStorage {
         });
     }
 
+    async renameChat(chatId, newTitle) {
+        const db = await this.getDB();
+        const tx = db.transaction('chatMeta', 'readwrite');
+        const store = tx.objectStore('chatMeta');
+
+        const chatMeta = await new Promise((resolve, reject) => {
+            const request = store.get(chatId);
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+
+        if (!chatMeta) {
+            throw new Error(`Chat with ID ${chatId} not found`);
+        }
+
+        chatMeta.title = newTitle;
+        await new Promise((resolve, reject) => {
+            const request = store.put(chatMeta);
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error);
+        });
+
+        return chatMeta;
+    }
+
     async deleteChat(chatId) {
         const db = await this.getDB();
         const tx = db.transaction(['messages', 'chatMeta'], 'readwrite');

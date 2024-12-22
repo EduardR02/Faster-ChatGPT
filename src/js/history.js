@@ -22,65 +22,120 @@ function populateHistory() {
 }
 
 
+function createElementWithClass(type, className) {
+    const elem = document.createElement(type);
+    if (className) elem.className = className;
+    return elem;
+}
+
+
+function createSystemMessage(message) {
+    const messageDiv = createElementWithClass('div', 'system-message collapsed');
+    const wrapperDiv = createElementWithClass('div', 'message-wrapper');
+
+    const toggleButton = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
+    const toggleIcon = createElementWithClass('span', 'toggle-icon');
+    toggleIcon.textContent = '⯈';
+
+    const contentDiv = createElementWithClass('div', 'message-content history-system-content');
+    contentDiv.innerHTML = add_codeblock_html(message?.content || "");
+
+    toggleButton.append(toggleIcon, 'System Prompt');
+    toggleButton.onclick = () => messageDiv.classList.toggle('collapsed');
+    wrapperDiv.append(toggleButton, contentDiv);
+    messageDiv.appendChild(wrapperDiv);
+
+    return messageDiv;
+}
+
+
+function createModelResponse(modelKey, response) {
+    const arenaWrapper = createElementWithClass('div', 'arena-wrapper');
+    
+    // Create a message wrapper for each message in the history
+    response.messages.forEach((msg, index) => {
+        const modelWrapper = createElementWithClass('div', 'message-wrapper');
+        
+        const prefix = createElementWithClass('span', 'message-prefix assistant-prefix');
+        prefix.textContent = response.name + (index > 0 ? ' ⟳' : '');
+        
+        const contentDiv = createElementWithClass('div', 'message-content assistant-content');
+        contentDiv.innerHTML = add_codeblock_html(msg || "");
+
+        modelWrapper.append(prefix, contentDiv);
+        arenaWrapper.appendChild(modelWrapper);
+    });
+    
+    return arenaWrapper;
+}
+
+function createArenaMessage(message) {
+    const messageDiv = createElementWithClass('div', 'assistant-message');
+    const arenaContainer = createElementWithClass('div', 'arena-full-container');
+
+    ['model_a', 'model_b'].forEach(model => {
+        const modelResponse = createModelResponse(model, message.responses[model]);
+        arenaContainer.appendChild(modelResponse);
+    });
+
+    messageDiv.appendChild(arenaContainer);
+    return messageDiv;
+}
+
+
+function createRegularMessage(message, previousRole) {
+    const messageDiv = createElementWithClass('div', `${message.role}-message`);
+    const wrapperDiv = createElementWithClass('div', 'message-wrapper');
+
+    const prefix = createElementWithClass('span', `message-prefix ${message.role}-prefix`);
+    prefix.textContent = message.role === 'user' ? 'You' : message.model || 'Assistant';
+    if (message.role === 'assistant' && message.role === previousRole) prefix.textContent += ' ⟳';
+    wrapperDiv.appendChild(prefix);
+
+    if (message.images?.length) {
+        message.images.forEach(imageUrl => {
+            const imgWrapper = createElementWithClass('div', `image-content ${message.role}-content`);
+            const img = createElementWithClass('img');
+            img.src = imageUrl;
+            imgWrapper.appendChild(img);
+            wrapperDiv.appendChild(imgWrapper);
+        });
+    }
+
+    const contentDiv = createElementWithClass('div', `message-content ${message.role}-content`);
+    contentDiv.innerHTML = add_codeblock_html(message?.content || "");
+    wrapperDiv.appendChild(contentDiv);
+    messageDiv.appendChild(wrapperDiv);
+
+    return messageDiv;
+}
+
+
 function displayChat(chatId, title, timestamp) {
     chatStorage.loadChat(chatId).then((chat) => {
         const conversationWrapper = document.getElementById('conversation-wrapper');
         conversationWrapper.innerHTML = '';
-
+        let previousRole = null;
         chat.messages.forEach(message => {
-            const messageDiv = document.createElement('div');
-            const wrapperDiv = document.createElement('div');
-            wrapperDiv.className = 'message-wrapper';
+            let messageElement;
 
             if (message.role === 'system') {
-                messageDiv.className = 'system-message collapsed';
-                
-                const toggleButton = document.createElement('button');
-                toggleButton.className = 'message-prefix system-toggle system-prefix history-sidebar-item';
-                
-                const toggleIcon = document.createElement('span');
-                toggleIcon.className = 'toggle-icon';
-                toggleIcon.textContent = '⯈';
-                
-                const contentDiv = document.createElement('div');
-                contentDiv.className = 'message-content history-system-content';
-                contentDiv.innerHTML = add_codeblock_html(message?.content || "");
-            
-                toggleButton.append(toggleIcon, 'System Prompt');
-                toggleButton.onclick = () => messageDiv.classList.toggle('collapsed');
-                wrapperDiv.append(toggleButton, contentDiv);
+                messageElement = createSystemMessage(message);
+            } else if (message.responses) {
+                messageElement = createArenaMessage(message);
             } else {
-                messageDiv.className = `${message.role}-message`;
-                const prefixSpan = document.createElement('span');
-                prefixSpan.className = `message-prefix ${message.role}-prefix`;
-                prefixSpan.textContent = message.role === 'user' ? 'You' : 'Assistant';
-                wrapperDiv.append(prefixSpan);
-                
-                // currently only user can add images, but this would already work for assistant too
-                if (message.images && message.images.length > 0) {
-                    
-                    message.images.forEach(imageUrl => {
-                        const imageContent = document.createElement('div');
-                        imageContent.className = `image-content ${message.role}-content`;
-                        const img = document.createElement('img');
-                        img.src = imageUrl;
-                        imageContent.appendChild(img);
-                        wrapperDiv.append(imageContent);
-                    });
-                }
-                const contentDiv = document.createElement('div');
-                contentDiv.className = `message-content ${message.role}-content`;
-                contentDiv.innerHTML = add_codeblock_html(message?.content || "");
-                wrapperDiv.append(contentDiv);
+                messageElement = createRegularMessage(message, previousRole);
+                previousRole = message.role;
             }
 
-            messageDiv.appendChild(wrapperDiv);
-            conversationWrapper.appendChild(messageDiv);
+            conversationWrapper.appendChild(messageElement);
         });
-        const footerDiv = document.getElementById('history-chat-footer');
-        footerDiv.textContent = `${title} - ${timestamp.toString().split(' GMT')[0]}`;
+
+        document.getElementById('history-chat-footer').textContent =
+            `${title} - ${timestamp.toString().split(' GMT')[0]}`;
     });
 }
+
 
 function timestampToDateString(timestamp) {
     const date = new Date(timestamp);
