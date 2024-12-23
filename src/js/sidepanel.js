@@ -449,7 +449,7 @@ function setup_message_listeners() {
 
 function when_new_selection(text, url) {
     remove_added_paragraphs();
-    currentChat = chatStorage.createNewChatTracking(`Selection from ${url}`);
+    currentChat = chatStorage.createNewChatTracking(`Selection from ${url.replace(/^https?:\/\//, '')}`);
 
     chatManager.createMessageBlock(RoleEnum.system, text, 'none', "Selected text");
     console.log("REACHED HERE")
