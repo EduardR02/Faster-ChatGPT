@@ -54,16 +54,19 @@ class PopupMenu {
         e.stopPropagation();
         const action = e.target.dataset.action;
         if (!action) return;
-
+    
         switch (action) {
             case 'rename':
                 this.renameChat(this.activePopup);
                 break;
             case 'delete':
-                this.deleteChat(this.activePopup);
+                // If deleteChat returns false, don't hide popup
+                if (this.deleteChat(this.activePopup, e.target) === false) {
+                    return;
+                }
                 break;
         }
-
+    
         this.hidePopup();
     }
 
@@ -72,6 +75,14 @@ class PopupMenu {
     }
 
     hidePopup() {
+        // Reset the delete button state
+        const deleteButton = this.popup.querySelector('[data-action="delete"]');
+        if (deleteButton) {
+            deleteButton.classList.remove('delete-confirm');
+            deleteButton.textContent = 'Delete';
+        }
+    
+        // Normal hide behavior
         this.popup.classList.remove('active');
         this.activePopup = null;
     }
@@ -85,10 +96,18 @@ class PopupMenu {
         }
     }
 
-    deleteChat(item) {
-        if (confirm('Are you sure you want to delete this chat?')) {
+    deleteChat(item, popupItem) {
+        if (popupItem.classList.contains('delete-confirm')) {
             item.remove();
-            // Update backend/storage here
+            // clear the conversation-div
+            document.getElementById('conversation-wrapper').innerHTML = '';
+            document.getElementById('history-chat-footer').textContent = '';
+            
+            chatStorage.deleteChat(parseInt(item.id, 10));
+        } else {
+            popupItem.classList.add('delete-confirm');
+            popupItem.textContent = 'Sure?';
+            return false;   // Prevent popup from closing on first click
         }
     }
 }
@@ -124,6 +143,8 @@ function populateHistory() {
             button.onclick = () => {
                 displayChat(chat.chatId, chat.title, new Date(chat.timestamp));
             };
+
+            button.id = chat.chatId;
 
             button.appendChild(textSpan);
             button.appendChild(dots);

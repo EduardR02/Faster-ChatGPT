@@ -207,6 +207,11 @@ body {
   color: #ffffff;
 }
 
+.popup-item.delete-confirm {
+  background-color: #ef596f;
+  text-align: center;
+}
+
 .conversation-title {
   color: #fdaaaa;
   font-size: 2em;
