@@ -451,7 +451,8 @@ function when_new_selection(text, url) {
     remove_added_paragraphs();
     currentChat = chatStorage.createNewChatTracking(`Selection from ${url}`);
 
-    chatManager.createMessageBlock(RoleEnum.system, text, "Selected text");
+    chatManager.createMessageBlock(RoleEnum.system, text, 'none', "Selected text");
+    console.log("REACHED HERE")
     thoughtLoops = [0, 0];
     init_prompt({mode: "selection", text: text, url: url}).then(() => {
         get_mode(function(current_mode) {
@@ -501,9 +502,7 @@ function update_settings(changes, namespace) {
 
 
 function remove_added_paragraphs() {
-    const newConversationDiv = document.createElement('div');
-    newConversationDiv.classList.add('conversation-wrapper');
-    chatManager.conversationDiv.replaceWith(newConversationDiv);
+    chatManager.conversationDiv.innerHTML = '';
 }
 
 
