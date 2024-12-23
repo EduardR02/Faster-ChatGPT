@@ -103,13 +103,55 @@ body {
   color: #d4d4d4;
   border-radius: 0.5em;
   cursor: pointer;
-  padding: 0.5em;
+  padding: 0 0.5em;
+  padding-right: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: color 0.2s ease-out;
+  z-index: 1;
+  overflow: hidden; /* Prevents the animation overflow */
+  position: relative;
+}
+
+.item-text {
+  width: 100%;  /* take full width */
   white-space: nowrap;
+  padding: 0.5em 0;
   overflow: hidden;
-  position: relative;  /* for pseudo-element positioning */
-  mask-image: linear-gradient(to right, black 85%, transparent 100%);  /* text fade */
-  transition: color 0.2s ease-out;  /* add this for smooth color transition */
-  z-index: 1;  /* make sure it's above the pseudo-element */
+  mask-image: linear-gradient(to right, black 85%, transparent 100%);
+  transition: mask-image 0.2s ease-out;
+  min-width: 0;
+}
+
+.action-dots {
+  position: absolute;
+  right: 0;   /* overlay the action dots on top of text. When they become visible we adjust the text fade to account for dots */
+  opacity: 0;
+  color: #d4d4d4;
+  cursor: pointer;
+  font-size: 1.3em;
+  width: calc(2rem - 1px);
+  height: calc(2rem - 1px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: color 0.2s ease-out;
+}
+
+.history-sidebar-item:hover .action-dots {
+  opacity: 1;
+}
+
+.history-sidebar-item:hover .item-text {
+  mask-image: linear-gradient(to right, black 75%, transparent 85%);  /* adjusted to account for dots */
+}
+
+.action-dots:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
 }
 
 .history-sidebar-item::before {
@@ -120,20 +162,49 @@ body {
   right: 0;
   bottom: 0;
   background: #fdaaaa7a;
+  border-radius: 0.5em; /* Added back the border radius */
   mask-image: linear-gradient(to right, black 60%, transparent 100%);
-  transform: scaleX(0);  /* starts scaled to 0 */
-  transform-origin: left;  /* scales from left side */
-  transition: transform 0.2s ease-out;  /* slower out */
-  z-index: -1;  /* behind the text */
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.2s ease-out;
+  z-index: -1;
 }
 
 .history-sidebar-item:hover::before {
-  transform: scaleX(1);  /* scales to full width */
-  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1); /* bouncy! */
+  transform: scaleX(1);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .history-sidebar-item:hover {
-  color: #ffffff;  /* this will now transition smoothly */
+  color: #ffffff;
+}
+
+.popup-menu {
+  position: fixed;
+  background: #2d3139;
+  border-radius: 0.5em;
+  padding: 0.3em;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  display: none;
+  z-index: 1000;
+}
+
+.popup-menu.active {
+  display: block;
+}
+
+.popup-item {
+  padding: 0.5em 1em;
+  border-radius: 0.5em;
+  color: #d4d4d4;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.1s ease-out;
+}
+
+.popup-item:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
 }
 
 .conversation-title {
@@ -150,7 +221,7 @@ body {
   text-align: center;
 }
 
-.system-message {
+.history-system-message {
   background-color: #1e1e1e;
   border-radius: 1em;
 }
@@ -184,15 +255,15 @@ body {
   margin-right: 0.3em;
 }
 
-.system-message:not(.collapsed) .toggle-icon {
+.history-system-message:not(.collapsed) .toggle-icon {
   transform: rotate(90deg);
 }
 
-.system-message .message-content {
+.history-system-message .message-content {
   display: none;
 }
 
-.system-message:not(.collapsed) .message-content {
+.history-system-message:not(.collapsed) .message-content {
   display: block;
 }
 

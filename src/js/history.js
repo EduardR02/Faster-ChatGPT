@@ -1,7 +1,102 @@
 import { ChatStorage, add_codeblock_html } from './utils.js';
 
 
+class PopupMenu {
+    constructor() {
+        this.activePopup = null;
+        this.init();
+    }
+
+    init() {
+        this.popup = document.createElement('div');
+        this.popup.className = 'popup-menu';
+        this.popup.innerHTML = `
+            <div class="popup-item" data-action="rename">Rename</div>
+            <div class="popup-item" data-action="delete">Delete</div>
+        `;
+        document.body.appendChild(this.popup);
+
+        document.addEventListener('click', this.handleGlobalClick.bind(this));
+        
+        const historyItems = document.querySelectorAll('.history-sidebar-item');
+        historyItems.forEach(item => {
+            const dots = item.querySelector('.action-dots');
+            dots.addEventListener('click', (e) => this.handleDotsClick(e, item));
+        });
+
+        this.popup.addEventListener('click', this.handlePopupClick.bind(this));
+
+        document.body.appendChild(this.popup);
+    }
+
+    addHistoryItem(item) {
+        const dots = item.querySelector('.action-dots');
+        dots.addEventListener('click', (e) => this.handleDotsClick(e, item));
+    }
+
+    handleDotsClick(e, item) {
+        e.stopPropagation();
+        
+        if (this.activePopup === item) {
+            this.hidePopup();
+            return;
+        }
+    
+        const rect = item.getBoundingClientRect();
+        this.popup.style.top = `${rect.top}px`;
+        this.popup.style.left = `${rect.right + 5}px`;
+        
+        this.popup.classList.add('active');
+        this.activePopup = item;
+    }
+
+    handlePopupClick(e) {
+        e.stopPropagation();
+        const action = e.target.dataset.action;
+        if (!action) return;
+
+        switch (action) {
+            case 'rename':
+                this.renameChat(this.activePopup);
+                break;
+            case 'delete':
+                this.deleteChat(this.activePopup);
+                break;
+        }
+
+        this.hidePopup();
+    }
+
+    handleGlobalClick() {
+        this.hidePopup();
+    }
+
+    hidePopup() {
+        this.popup.classList.remove('active');
+        this.activePopup = null;
+    }
+
+    renameChat(item) {
+        const textSpan = item.querySelector('.item-text');
+        const newName = prompt('Enter new name:', textSpan.textContent);
+        if (newName) {
+            textSpan.textContent = newName;
+            // Update backend/storage here
+        }
+    }
+
+    deleteChat(item) {
+        if (confirm('Are you sure you want to delete this chat?')) {
+            item.remove();
+            // Update backend/storage here
+        }
+    }
+}
+
+
+
 const chatStorage = new ChatStorage();
+let popupMenu = null;
 
 
 function populateHistory() {
@@ -9,15 +104,32 @@ function populateHistory() {
     chatStorage.getChatMetadata(100, 0).then((chats) => {
         for (let i = 0; i < chats.length; i++) {
             const chat = chats[i];
-            const div = document.createElement('button');
-            div.classList.add('unset-button', 'history-sidebar-item');
-            const timestamp = new Date(chat.timestamp);
-            div.textContent = `${chat.title} ${timestampToDateString(timestamp)}`;
-            div.onclick = () => {
-                displayChat(chat.chatId, chat.title, timestamp);
+            const button = document.createElement('button');
+            button.classList.add('unset-button', 'history-sidebar-item');
+
+            const textSpan = document.createElement('span');
+            textSpan.classList.add('item-text');
+            textSpan.textContent = `${chat.title} ${timestampToDateString(chat.timestamp)}`;
+            
+            const dots = document.createElement('div');
+            dots.classList.add('action-dots');
+            dots.textContent = '\u{22EF}';
+            
+            // Prevent dots from triggering chat display
+            dots.onclick = (e) => {
+                e.stopPropagation();
             };
-            container.appendChild(div);
+
+            // Add main click handler to the button
+            button.onclick = () => {
+                displayChat(chat.chatId, chat.title, new Date(chat.timestamp));
+            };
+
+            button.appendChild(textSpan);
+            button.appendChild(dots);
+            container.appendChild(button);
         }
+        popupMenu = new PopupMenu();
     });
 }
 
@@ -30,7 +142,7 @@ function createElementWithClass(type, className) {
 
 
 function createSystemMessage(message) {
-    const messageDiv = createElementWithClass('div', 'system-message collapsed');
+    const messageDiv = createElementWithClass('div', 'history-system-message collapsed');
     const wrapperDiv = createElementWithClass('div', 'message-wrapper');
 
     const toggleButton = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
