@@ -8,14 +8,10 @@ class PopupMenu {
     }
 
     init() {
-        this.popup = document.createElement('div');
-        this.popup.className = 'popup-menu';
-        this.popup.innerHTML = `
-            <div class="popup-item" data-action="rename">Rename</div>
-            <div class="popup-item" data-action="delete">Delete</div>
-        `;
-        document.body.appendChild(this.popup);
-
+        this.popup = document.querySelector('.popup-menu');
+        
+        this.initRenameLogic();
+    
         document.addEventListener('click', this.handleGlobalClick.bind(this));
         
         const historyItems = document.querySelectorAll('.history-sidebar-item');
@@ -23,10 +19,33 @@ class PopupMenu {
             const dots = item.querySelector('.action-dots');
             dots.addEventListener('click', (e) => this.handleDotsClick(e, item));
         });
-
+    
         this.popup.addEventListener('click', this.handlePopupClick.bind(this));
+    }
 
-        document.body.appendChild(this.popup);
+    initRenameLogic() {
+        const confirmBtn = this.popup.querySelector('.rename-confirm');
+        const cancelBtn = this.popup.querySelector('.rename-cancel');
+
+        confirmBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.confirmRename();
+        });
+
+        cancelBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.restorePopupMenu();
+        });
+
+        const input = this.popup.querySelector('.rename-input');
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                this.confirmRename();
+            } else if (e.key === 'Escape') {
+                this.hidePopup();
+            }
+        });
     }
 
     addHistoryItem(item) {
@@ -41,6 +60,9 @@ class PopupMenu {
             this.hidePopup();
             return;
         }
+
+        // Restore popup menu state before showing it for another item
+        this.restorePopupMenu();
     
         const rect = item.getBoundingClientRect();
         this.popup.style.top = `${rect.top}px`;
@@ -54,46 +76,61 @@ class PopupMenu {
         e.stopPropagation();
         const action = e.target.dataset.action;
         if (!action) return;
-    
+
         switch (action) {
             case 'rename':
-                this.renameChat(this.activePopup);
+                const renameButton = this.popup.querySelector('[data-action="rename"]');
+                const inputWrapper = this.popup.querySelector('.rename-input-wrapper');
+                const deleteButton = this.popup.querySelector('[data-action="delete"]');
+                const input = this.popup.querySelector('.rename-input');
+                
+                renameButton.style.display = 'none';
+                deleteButton.style.display = 'none';
+                inputWrapper.style.display = 'flex';
+                
+                input.value = this.activePopup.dataset.name;
+                input.focus();
                 break;
             case 'delete':
-                // If deleteChat returns false, don't hide popup
-                if (this.deleteChat(this.activePopup, e.target) === false) {
-                    return;
-                }
+                this.deleteChat(this.activePopup, e.target);
                 break;
         }
-    
-        this.hidePopup();
     }
 
     handleGlobalClick() {
         this.hidePopup();
     }
 
-    hidePopup() {
+    restorePopupMenu() {
+        this.popup.querySelector('[data-action="rename"]').style.display = 'block';
+        this.popup.querySelector('.rename-input-wrapper').style.display = 'none';
+        this.popup.querySelector('[data-action="delete"]').style.display = 'block';
+    
         // Reset the delete button state
         const deleteButton = this.popup.querySelector('[data-action="delete"]');
         if (deleteButton) {
             deleteButton.classList.remove('delete-confirm');
             deleteButton.textContent = 'Delete';
         }
+    }
     
-        // Normal hide behavior
+    hidePopup() {
+        this.restorePopupMenu();
         this.popup.classList.remove('active');
         this.activePopup = null;
     }
 
-    renameChat(item) {
-        const textSpan = item.querySelector('.item-text');
-        const newName = prompt('Enter new name:', textSpan.textContent);
+    confirmRename() {
+        const newName = this.popup.querySelector('.rename-input').value.trim();
         if (newName) {
-            textSpan.textContent = newName;
-            // Update backend/storage here
+            const oldName = this.activePopup.dataset.name;
+            this.activePopup.dataset.name = newName;
+            const textSpan = this.activePopup.querySelector('.item-text');
+            textSpan.textContent = textSpan.textContent.replace(oldName, newName);
+            
+            chatStorage.renameChat(parseInt(this.activePopup.id, 10), newName);
         }
+        this.hidePopup();
     }
 
     deleteChat(item, popupItem) {
@@ -107,15 +144,14 @@ class PopupMenu {
         } else {
             popupItem.classList.add('delete-confirm');
             popupItem.textContent = 'Sure?';
-            return false;   // Prevent popup from closing on first click
         }
     }
 }
 
 
-
 const chatStorage = new ChatStorage();
 let popupMenu = null;
+let currentChat = null;
 
 
 function populateHistory() {
@@ -145,6 +181,7 @@ function populateHistory() {
             };
 
             button.id = chat.chatId;
+            button.dataset.name = chat.title;
 
             button.appendChild(textSpan);
             button.appendChild(dots);
@@ -261,6 +298,7 @@ function createRegularMessage(message, previousRole) {
 
 function displayChat(chatId, title, timestamp) {
     chatStorage.loadChat(chatId).then((chat) => {
+        currentChat = chat;
         const conversationWrapper = document.getElementById('conversation-wrapper');
         conversationWrapper.innerHTML = '';
         let previousRole = null;
@@ -309,5 +347,5 @@ function populateDummyHistory() {
     }
 }
 
-// Run it when page loads
+
 document.addEventListener('DOMContentLoaded', populateHistory);

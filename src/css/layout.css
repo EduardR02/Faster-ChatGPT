@@ -228,6 +228,39 @@ body {
   display: block;
 }
 
+.rename-input-wrapper {
+  display: none;
+  align-items: stretch;
+  gap: 0.5em;
+  padding: 0.2em;
+}
+
+.rename-confirm,
+.rename-cancel {
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;  /* don't need this because we use padding, but in case i figure it out later */
+  transform-origin: center center;
+  padding: 0 7px; /* couldn't figure out how to match the width with the height (which is auto to stretch)...*/
+  border-radius: 0.3rem;
+  font-size: 1.2em;
+  cursor: pointer;
+  background: #2d3139;
+  color: #d4d4d4;
+  transition: background 0.2s ease-out;
+}
+
+.rename-confirm:hover {
+  background-color: #98c379;
+  color: #ffffff;
+}
+
+.rename-cancel:hover {
+  background-color: #ef596f;
+  color: #ffffff;
+}
+
 .popup-item {
   padding: 0.5em 1em;
   border-radius: 0.5em;
@@ -574,7 +607,7 @@ p {
 }
 
 .std-input {
-  padding: 10px;
+  padding: 0.5rem;
   box-sizing: border-box;
   font-family: Consolas, Courier New, monospace;
   border: 1px solid #abb2bf;
@@ -598,6 +631,14 @@ p {
   padding-right: 3em; /* pretty terrible, just manual calc of the button size, with even padding on both sides, so 10 - 28 - 10*/
 }
 
+.rename-input {
+  width: 220px;
+  white-space: nowrap;
+  overflow: hidden;
+  border-radius: 0.3rem;
+  padding: 0.3rem;
+}
+
 :root {
   --check-primary: #61afef;
   --check-secondary: #ef596f;
@@ -606,14 +647,14 @@ p {
 
 .button {
   font-family: Consolas, Courier New, monospace;
-  border-radius: 8px;
+  border-radius: 0.5rem;
   position: relative;
   background: var(--check-primary, #61afef);
   border: none;
   color: #282c34;
   text-align: center;
   font-size: 16px;
-  padding: 10px;
+  padding: 0.5rem;
   width: auto;
   transition: all 0.1s;
   cursor: pointer;
