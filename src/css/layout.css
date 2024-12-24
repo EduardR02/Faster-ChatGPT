@@ -91,12 +91,47 @@ body {
   padding: 0 1em;
 }
 
+.history-prefix-wrapper {
+  display: flex;
+  justify-content: space-between;
+  flex-direction: row;
+  align-items: center;
+  margin-bottom: 0.2em; /* decreased by 0.1 to account for button */
+}
+
+.history-prefix-wrapper .message-prefix {
+  display: flex;
+  align-items: center;
+  margin: 0;
+}
+
 .unset-button {
   all: unset;
   display: block;
   width: 100%;
   box-sizing: border-box;
   text-align: left;
+}
+
+.continue-conversation-button {
+  background: #5c6980;
+  color: #ffffff;
+  padding: 0 4px;
+  border-radius: 0.5rem;
+  font-size: 1.4em;
+  cursor: pointer;
+  text-align: center;
+  width: min-content;
+  line-height: 1;
+  transition: background 0.2s ease-out;
+}
+
+.continue-conversation-button:hover {
+  background: #56b6c2;
+}
+
+.continue-conversation-button.arena-left-continue-button {
+  margin-right: 0.5em;
 }
 
 .history-sidebar-item {
@@ -243,6 +278,7 @@ body {
 
 .system-toggle.history-sidebar-item {
   border-radius: 1em;
+  justify-content: left;
 }
 
 .system-toggle.history-sidebar-item::before {

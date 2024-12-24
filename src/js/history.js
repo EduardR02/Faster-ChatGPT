@@ -189,13 +189,22 @@ function createModelResponse(modelKey, response) {
     response.messages.forEach((msg, index) => {
         const modelWrapper = createElementWithClass('div', 'message-wrapper');
         
+        const prefixWrapper = createElementWithClass('div', 'history-prefix-wrapper');
         const prefix = createElementWithClass('span', 'message-prefix assistant-prefix');
         prefix.textContent = response.name + (index > 0 ? ' ⟳' : '');
+
+        const continueConversationButton = createElementWithClass('button', 'unset-button continue-conversation-button');
+        continueConversationButton.textContent = '\u{2197}';
+        if (modelKey === 'model_a') {
+            continueConversationButton.classList.add('arena-left-continue-button');
+        }
         
         const contentDiv = createElementWithClass('div', 'message-content assistant-content');
         contentDiv.innerHTML = add_codeblock_html(msg || "");
 
-        modelWrapper.append(prefix, contentDiv);
+        prefixWrapper.append(prefix, continueConversationButton);
+
+        modelWrapper.append(prefixWrapper, contentDiv);
         arenaWrapper.appendChild(modelWrapper);
     });
     
@@ -220,10 +229,16 @@ function createRegularMessage(message, previousRole) {
     const messageDiv = createElementWithClass('div', `${message.role}-message`);
     const wrapperDiv = createElementWithClass('div', 'message-wrapper');
 
+    const prefixWrapper = createElementWithClass('div', 'history-prefix-wrapper');
     const prefix = createElementWithClass('span', `message-prefix ${message.role}-prefix`);
     prefix.textContent = message.role === 'user' ? 'You' : message.model || 'Assistant';
     if (message.role === 'assistant' && message.role === previousRole) prefix.textContent += ' ⟳';
-    wrapperDiv.appendChild(prefix);
+
+    const continueConversationButton = createElementWithClass('button', 'unset-button continue-conversation-button');
+    continueConversationButton.textContent = '\u{2197}';
+
+    prefixWrapper.append(prefix, continueConversationButton);
+    wrapperDiv.appendChild(prefixWrapper);
 
     if (message.images?.length) {
         message.images.forEach(imageUrl => {
