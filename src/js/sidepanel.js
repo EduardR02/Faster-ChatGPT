@@ -429,6 +429,7 @@ function init() {
     init_settings();
     init_arena_toggle_button_listener();
     init_thinking_mode_button();
+    init_footer_buttons();
     auto_resize_textfield_listener("textInput");
     init_textarea_image_drag_and_drop();
     setup_message_listeners();
@@ -1264,6 +1265,18 @@ function init_thinking_mode_button() {
         thinkingMode = !thinkingMode;
         if (thinkingMode) button.classList.add('thinking-mode-on');
         else button.classList.remove('thinking-mode-on');
+    });
+}
+
+
+function init_footer_buttons() {
+    const historyButton = document.getElementById('history-button');
+    historyButton.addEventListener('click', () => {
+        chrome.tabs.create({url: chrome.runtime.getURL('src/html/history.html')});
+    });
+    const settingsButton = document.getElementById('settings-button');
+    settingsButton.addEventListener('click', () => {
+        chrome.runtime.openOptionsPage();
     });
 }
 

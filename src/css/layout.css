@@ -48,6 +48,12 @@ body {
   overflow-y: auto;
 }
 
+.sidepanel-button-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
 .sidebar-separator {
   width: 1px;
   background: #fdaaaa;
@@ -111,6 +117,24 @@ body {
   width: 100%;
   box-sizing: border-box;
   text-align: left;
+}
+
+.sidepanel-open-history,
+.sidepanel-open-settings {
+  border-radius: 0.5rem;
+  font-size: 0.8em;
+  width: min-content;
+  cursor: pointer;
+  padding: 1px 5px;
+  background: #abb2bf;
+  transition: background 0.1s ease-out;
+  color: #282c34;
+}
+
+.sidepanel-open-settings:hover,
+.sidepanel-open-history:hover {
+  background: #56b6c2;
+  color: #ffffff;
 }
 
 .continue-conversation-button {
