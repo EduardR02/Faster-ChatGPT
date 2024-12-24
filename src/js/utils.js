@@ -612,7 +612,7 @@ export class ChatStorage {
         messageId: autoincrement,
         timestamp: number,
         role: 'assistant',
-        choice: 'model_a' | 'model_b' | 'draw' | 'draw(bothbad)' | 'ignored',
+        choice: 'model_a' | 'model_b' | 'draw' | 'draw(bothbad)' | 'ignored' | 'reveal',
         continued_with: string  // model_a | model_b | none (in case of draw(bothbad), because the whole arena gets regenerated),
         responses: {
             model_a: {
