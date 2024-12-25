@@ -119,8 +119,10 @@ body {
   text-align: left;
 }
 
+.incognito-toggle,
 .sidepanel-open-history,
 .sidepanel-open-settings {
+  overflow: hidden;
   border-radius: 0.5rem;
   font-size: 0.8em;
   width: min-content;
@@ -129,6 +131,56 @@ body {
   background: #abb2bf;
   transition: background 0.1s ease-out;
   color: #282c34;
+}
+
+.sidepanel-button-footer .hover-text {
+  overflow: hidden;
+  display: flex;
+  opacity: 0;
+  min-width: fit-content;
+  color: #56b6c2;
+  background: transparent;
+  font-size: 0.8em;
+  white-space: nowrap;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease-in-out;
+}
+
+.incognito-toggle {
+  display: flex;
+  align-items: center;
+  padding: 1px 3px;
+}
+
+.incognito-toggle svg {
+  height: 20px;
+  fill: #282c34;
+  transition: fill 0.2s ease-out;
+}
+
+.incognito-toggle:hover {
+  background: #ef596f;
+}
+
+.incognito-toggle:hover svg {
+  fill: #1e1e1e;
+}
+
+.incognito-toggle.active {
+  background: #1e1e1e;
+}
+
+.incognito-toggle.active svg {
+  fill: #ffffff;
+}
+
+.incognito-toggle.active:hover {
+  background: #ef596f;
+}
+
+.sidepanel-button-footer.showing-text .hover-text {
+  opacity: 1;
 }
 
 .sidepanel-open-settings:hover,

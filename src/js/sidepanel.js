@@ -344,8 +344,9 @@ class ChatManager {
             this.arenaResultUIUpdate(this.arenaDivs[loserIndex], 'arena-loser', this.getModelRating(this.arenaDivs[loserIndex].model, updatedRatings));
             resolve_pending(this.arenaDivs[winnerIndex].model);
         }
-
-        chatStorage.updateArenaMessage(currentChat.id, currentChat.messages.length - 1, currentChat.messages[currentChat.messages.length - 1]);
+        if (currentChat.id !== null && shouldSave) {
+            chatStorage.updateArenaMessage(currentChat.id, currentChat.messages.length - 1, currentChat.messages[currentChat.messages.length - 1]);
+        }
     
         this.arenaDivs = [];
         this.isArenaMode = false;
@@ -407,6 +408,11 @@ class ChatManager {
 
 const ChatRoleDict = { user: "You", assistant: "Assistant", system: "System" };
 const RoleEnum = { system: "system", user: "user", assistant: "assistant" };
+const CHAT_STATE = {
+    NORMAL: 0,      // Fresh normal chat
+    INCOGNITO: 1,   // Fresh incognito or continued as incognito
+    CONVERTED: 2    // Used the one-time transition either way
+};
 
 const MaxTemp = {
     openai: 2.0,
@@ -425,6 +431,8 @@ let thoughtLoops = [0, 0];
 
 let chatStorage = new ChatStorage();
 let currentChat = null;
+let chatState = CHAT_STATE.NORMAL;
+let shouldSave = true;
 
 
 document.addEventListener('DOMContentLoaded', init);
@@ -457,13 +465,33 @@ function setup_message_listeners() {
     });
 }
 
+function init_states(chat_name) {
+    remove_added_paragraphs();
+    thoughtLoops = [0, 0];
+    chatState = CHAT_STATE.NORMAL;
+    shouldSave = true;
+    currentChat = chatStorage.createNewChatTracking(chat_name);
+    pending_message = {};
+    if (chatManager.isArenaMode) {
+        chatManager.handleArenaChoiceDefault();
+    }
+    chatManager.pendingImageDiv = null;
+    chatManager.pendingImages = [];
+
+    document.getElementById("incognito-toggle").classList.remove('active');
+    document.getElementById('textInput').value = '';
+}
+
+
+function simple_chat_restart() {
+    init_states("New Chat");
+    messages = messages.slice(0, 1);    // keep the system message
+}
+
 
 function when_new_selection(text, url) {
-    remove_added_paragraphs();
-    currentChat = chatStorage.createNewChatTracking(`Selection from ${url}`);
-
+    init_states(`Selection from ${url}`);
     chatManager.createMessageBlock(RoleEnum.system, text, 'none', "Selected text");
-    thoughtLoops = [0, 0];
     init_prompt({mode: "selection", text: text, url: url}).then(() => {
         get_mode(function(current_mode) {
             if (current_mode === ModeEnum.InstantPromptMode) {
@@ -480,7 +508,8 @@ function when_new_chat() {
         if (current_mode === ModeEnum.InstantPromptMode) {
             post_warning_in_chat("Instant prompt mode does not make sense in chat mode and will be ignored.");
         }
-        currentChat = chatStorage.createNewChatTracking("New Chat");
+        messages = [];
+        init_states("New Chat");
         init_prompt({mode: "chat"});
     });
 }
@@ -489,11 +518,8 @@ function when_new_chat() {
 function reconstruct_chat(chat) {
     if (chat.length === 0) return;
 
-    remove_added_paragraphs();
-    currentChat = chatStorage.createNewChatTracking("Continued Chat");
     messages = [];
-    chatManager.pendingImageDiv = null;
-    chatManager.pendingImages = [];
+    init_states("Continued Chat");
 
     function create_msg_block(role, content, images, isLast) {
         if (role === RoleEnum.user && images) {
@@ -1071,11 +1097,17 @@ function append_context(message, role) {
     if (currentChat && role === RoleEnum.user) {
         if (currentChat.id === null) {
             currentChat.messages = [...messages];
-            chatStorage.createChatWithMessages(currentChat.title, currentChat.messages).then(res => currentChat.id = res.chatId);
+
+            if (shouldSave) {
+                chatStorage.createChatWithMessages(currentChat.title, currentChat.messages).then(res => currentChat.id = res.chatId);
+            }
         } else {
             const newMsg = messages[messages.length - 1];
             currentChat.messages.push(newMsg);
-            chatStorage.addMessages(currentChat.id, [newMsg], currentChat.messages.length - 1);
+
+            if (currentChat.id !== null && shouldSave) {
+                chatStorage.addMessages(currentChat.id, [newMsg], currentChat.messages.length - 1);
+            }
         }
     }
 }
@@ -1085,7 +1117,10 @@ function add_to_pending(message, model, done = true, role = RoleEnum.assistant) 
     if (!chatManager.isArenaMode) {
         const historyMsg = {role: role, content: message, model: model};
         currentChat.messages.push(historyMsg);
-        chatStorage.addMessages(currentChat.id, [historyMsg], currentChat.messages.length - 1);
+
+        if (currentChat.id !== null && shouldSave) {
+            chatStorage.addMessages(currentChat.id, [historyMsg], currentChat.messages.length - 1);
+        }
     }
     else {
         // the arena type message is already instantiated at this point, so all we need to do is to add it,
@@ -1095,7 +1130,9 @@ function add_to_pending(message, model, done = true, role = RoleEnum.assistant) 
             key => currentChatMessage.responses[key].name === model
         );
         currentChatMessage.responses[matchingModelKey].messages.push(message);
-        chatStorage.updateArenaMessage(currentChat.id, currentChat.messages.length - 1, currentChatMessage);
+        if (currentChat.id !== null && shouldSave) {
+            chatStorage.updateArenaMessage(currentChat.id, currentChat.messages.length - 1, currentChatMessage);
+        }
     }
     // this is neat because we can only have one "latest" message per model, so if we regenerate many times we just overwrite.
     if (pending_message[model]) {
@@ -1328,12 +1365,81 @@ function init_thinking_mode_button() {
 function init_footer_buttons() {
     const historyButton = document.getElementById('history-button');
     historyButton.addEventListener('click', () => {
-        chrome.tabs.create({url: chrome.runtime.getURL('src/html/history.html')});
+        chrome.tabs.create({ url: chrome.runtime.getURL('src/html/history.html') });
     });
+
     const settingsButton = document.getElementById('settings-button');
     settingsButton.addEventListener('click', () => {
         chrome.runtime.openOptionsPage();
     });
+
+    const buttonFooter = document.getElementById('sidepanel-button-footer');
+    const incognitoToggle = document.getElementById('incognito-toggle');
+    const hoverText = buttonFooter.querySelectorAll('.hover-text');
+
+    const updateButtonVisuals = () => {
+        incognitoToggle.classList.toggle('active', !shouldSave);
+    };
+
+    const updateHoverText = (hoverText) => {
+        const [hoverTextLeft, hoverTextRight] = hoverText;
+        // Default text
+        hoverTextLeft.textContent = "start new";
+        hoverTextRight.textContent = "incognito chat";
+    
+        if (messages.length > 1 && chatState === CHAT_STATE.NORMAL) {
+            hoverTextLeft.textContent = "continue";
+            hoverTextRight.textContent = "in incognito";
+        }
+        else if (messages.length < 2 && chatState === CHAT_STATE.INCOGNITO) {
+            hoverTextLeft.textContent = "leave";
+            hoverTextRight.textContent = "incognito";
+        }
+        else if (messages.length > 1 && chatState === CHAT_STATE.INCOGNITO) {
+            hoverTextLeft.textContent = "actually,";
+            hoverTextRight.textContent = "save it please";
+        }
+        // CHAT_STATE.CONVERTED will use the default text
+
+        // set the width of both elements to the width of the longest text
+        const longestText = Math.max(hoverTextLeft.offsetWidth, hoverTextRight.offsetWidth);
+        hoverText.forEach(text => text.style.width = `${longestText}px`);
+    };
+
+
+    incognitoToggle.addEventListener('mouseenter', () => {
+        updateHoverText(hoverText);
+        buttonFooter.classList.add('showing-text');
+    });
+
+    incognitoToggle.addEventListener('mouseleave', () => {
+        buttonFooter.classList.remove('showing-text');
+    });
+
+    incognitoToggle.addEventListener('click', () => {
+        switch (chatState) {
+            case CHAT_STATE.NORMAL:
+                shouldSave = false;
+                // if we only have the system message, we can toggle as much as we want, we haven't "started" the chat yet
+                chatState = messages.length < 2 ? CHAT_STATE.INCOGNITO : CHAT_STATE.CONVERTED;
+                break;
+            case CHAT_STATE.INCOGNITO:
+                shouldSave = true;
+                // if we only have the system message, we can toggle as much as we want, we haven't "started" the chat yet
+                chatState = messages.length < 2 ? CHAT_STATE.NORMAL : CHAT_STATE.CONVERTED;
+                break;
+            case CHAT_STATE.CONVERTED:
+                simple_chat_restart();
+                shouldSave = false;
+                chatState = CHAT_STATE.INCOGNITO;
+                break;
+        }
+        updateHoverText(hoverText);
+        updateButtonVisuals();
+    });
+
+    // Initial state
+    updateButtonVisuals();
 }
 
 
