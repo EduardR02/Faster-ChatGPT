@@ -141,6 +141,7 @@ class PopupMenu {
             document.getElementById('history-chat-footer').textContent = '';
 
             chatStorage.deleteChat(parseInt(item.id, 10));
+            this.hidePopup();
         } else {
             popupItem.classList.add('delete-confirm');
             popupItem.textContent = 'Sure?';
@@ -192,6 +193,82 @@ function populateHistory() {
 }
 
 
+function buildChat(continueFromIndex, arenaMessageIndex = null, modelChoice = null) {
+    const workingMessages = currentChat.messages.slice(0, continueFromIndex + 1);
+
+    const simplifiedChat = [];
+
+    for (let i = 0; i < workingMessages.length; i++) {
+        const msg = workingMessages[i];
+        const isLastMessage = i === continueFromIndex;
+
+        // If it's not an assistant message, add it
+        if (msg.role !== 'assistant') {
+            const simplifiedMsg = {
+                role: msg.role,
+                content: msg.content
+            };
+            if (msg.images?.length) simplifiedMsg.images = msg.images;
+            simplifiedChat.push(simplifiedMsg);
+            continue;
+        }
+
+        // Find next user message
+        let nextUserIndex = workingMessages.findIndex((m, idx) =>
+            idx > i && ('content' in m && m.role === 'user')
+        );
+
+        // For assistant messages (both regular and arena), 
+        // take if it's the last one before next user (or end of messages)
+        if (nextUserIndex === -1 ? (i === workingMessages.length - 1) : (i === nextUserIndex - 1)) {
+            if ('content' in msg) {
+                simplifiedChat.push({
+                    role: 'assistant',
+                    content: msg.content
+                });
+            } else {  // arena message
+                // If it's the last message and we're continuing from it, use modelChoice and arenaMessageIndex
+                const model = (isLastMessage ? modelChoice : msg.continued_with) || 'model_a';
+                // this case should actually not be possible, because 'none' means draw(bothbad), which means the arena is full regenerated,
+                // which means this can't be the last message before a user message
+                if (!isLastMessage && model === 'none') continue;
+                const messages = msg.responses[model].messages;
+                const index = (isLastMessage && arenaMessageIndex !== null) ? arenaMessageIndex : messages.length - 1;
+
+                simplifiedChat.push({
+                    role: 'assistant',
+                    content: messages[index]
+                });
+            }
+            // Skip to the next user message to avoid duplicates
+            i = nextUserIndex !== -1 ? nextUserIndex - 1 : i;
+        }
+    }
+
+    return simplifiedChat;
+}
+
+function sendChatToSidepanel(chat) {
+    chrome.runtime.sendMessage({ type: "is_sidepanel_open" })
+        .then(response => {
+            if (!response.isOpen) {
+                return chrome.runtime.sendMessage({ type: "open_side_panel" })
+                    .then(() => {
+                        return chrome.runtime.sendMessage({
+                            type: "reconstruct_chat",
+                            chat: chat,
+                        });
+                    });
+            } else {
+                return chrome.runtime.sendMessage({
+                    type: "reconstruct_chat",
+                    chat: chat,
+                });
+            }
+        });
+}
+
+
 function createElementWithClass(type, className) {
     const elem = document.createElement(type);
     if (className) elem.className = className;
@@ -219,8 +296,8 @@ function createSystemMessage(message) {
 }
 
 
-function createModelResponse(modelKey, message) {
-    const arenaWrapper = createElementWithClass('div', 'arena-wrapper');
+function createModelResponse(modelKey, message, msgIndex) {
+    const arenaWrapper = createElementWithClass('div', 'arena-wrapper history-arena-wrapper');
     const response = message.responses[modelKey];
     const choice = message.choice;
     const continuedWith = message.continued_with;
@@ -262,6 +339,10 @@ function createModelResponse(modelKey, message) {
             continueConversationButton.classList.add('arena-left-continue-button');
         }
 
+        continueConversationButton.onclick = () => {
+            sendChatToSidepanel(buildChat(msgIndex, index, modelKey));
+        };
+
         const contentDiv = createElementWithClass('div', 'message-content assistant-content');
         contentDiv.innerHTML = add_codeblock_html(msg || "");
 
@@ -281,12 +362,12 @@ function createModelResponse(modelKey, message) {
 }
 
 
-function createArenaMessage(message) {
+function createArenaMessage(message, index) {
     const messageDiv = createElementWithClass('div', 'assistant-message');
     const arenaContainer = createElementWithClass('div', 'arena-full-container');
 
     ['model_a', 'model_b'].forEach(model => {
-        const modelResponse = createModelResponse(model, message);
+        const modelResponse = createModelResponse(model, message, index);
         arenaContainer.appendChild(modelResponse);
     });
 
@@ -295,7 +376,7 @@ function createArenaMessage(message) {
 }
 
 
-function createRegularMessage(message, previousRole) {
+function createRegularMessage(message, index, previousRole) {
     const messageDiv = createElementWithClass('div', `${message.role}-message`);
     const wrapperDiv = createElementWithClass('div', 'message-wrapper');
 
@@ -306,6 +387,10 @@ function createRegularMessage(message, previousRole) {
 
     const continueConversationButton = createElementWithClass('button', 'unset-button continue-conversation-button');
     continueConversationButton.textContent = '\u{2197}';
+
+    continueConversationButton.onclick = () => {
+        sendChatToSidepanel(buildChat(index));
+    };
 
     prefixWrapper.append(prefix, continueConversationButton);
     wrapperDiv.appendChild(prefixWrapper);
@@ -335,15 +420,15 @@ function displayChat(chatId, title, timestamp) {
         const conversationWrapper = document.getElementById('conversation-wrapper');
         conversationWrapper.innerHTML = '';
         let previousRole = null;
-        chat.messages.forEach(message => {
+        chat.messages.forEach((message, index) => {
             let messageElement;
 
             if (message.role === 'system') {
                 messageElement = createSystemMessage(message);
             } else if (message.responses) {
-                messageElement = createArenaMessage(message);
+                messageElement = createArenaMessage(message, index);
             } else {
-                messageElement = createRegularMessage(message, previousRole);
+                messageElement = createRegularMessage(message, index, previousRole);
                 previousRole = message.role;
             }
 

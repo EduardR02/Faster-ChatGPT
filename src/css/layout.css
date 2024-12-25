@@ -513,6 +513,13 @@ p {
   flex:1;
 }
 
+.arena-wrapper.history-arena-wrapper {
+  /* not necessary in the normal one because there we have the token footer which naturally creates a gap (but not actually)*/
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+}
+
 .arena-footer {
   display: flex;
   justify-content: space-between;

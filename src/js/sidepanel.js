@@ -1,5 +1,5 @@
 import { ArenaRatingManager, StreamWriter, StreamWriterSimple, Footer, TokenCounter, ModeEnum, get_mode, set_lifetime_tokens,
-    auto_resize_textfield_listener, update_textfield_height, is_on, ChatStorage } from "./utils.js";
+    auto_resize_textfield_listener, update_textfield_height, is_on, ChatStorage, add_codeblock_html } from "./utils.js";
 
 
 class ChatManager {
@@ -393,6 +393,14 @@ class ChatManager {
         if (this.shouldScroll && event.deltaY < 0) {
             this.shouldScroll = false;
         }
+    
+        const element = this.scrollToElement;
+        const threshold = 100;
+        const distanceFromBottom = Math.abs(element.scrollHeight - window.scrollY - window.innerHeight);
+        
+        if (!this.shouldScroll && event.deltaY > 0 && distanceFromBottom <= threshold) {
+            this.shouldScroll = true;
+        }
     }
 }
 
@@ -443,6 +451,8 @@ function setup_message_listeners() {
             when_new_selection(msg.text, msg.url);
         } else if (msg.type === 'new_chat') {
             when_new_chat();
+        } else if (msg.type === 'reconstruct_chat') {
+            reconstruct_chat(msg.chat);
         }
     });
 }
@@ -453,7 +463,6 @@ function when_new_selection(text, url) {
     currentChat = chatStorage.createNewChatTracking(`Selection from ${url}`);
 
     chatManager.createMessageBlock(RoleEnum.system, text, 'none', "Selected text");
-    console.log("REACHED HERE")
     thoughtLoops = [0, 0];
     init_prompt({mode: "selection", text: text, url: url}).then(() => {
         get_mode(function(current_mode) {
@@ -474,6 +483,53 @@ function when_new_chat() {
         currentChat = chatStorage.createNewChatTracking("New Chat");
         init_prompt({mode: "chat"});
     });
+}
+
+
+function reconstruct_chat(chat) {
+    if (chat.length === 0) return;
+
+    remove_added_paragraphs();
+    currentChat = chatStorage.createNewChatTracking("Continued Chat");
+    messages = [];
+    chatManager.pendingImageDiv = null;
+    chatManager.pendingImages = [];
+
+    function create_msg_block(role, content, images, isLast) {
+        if (role === RoleEnum.user && images) {
+            chatManager.initPendingImageDiv();
+            images.forEach(img => chatManager.appendToPendingImageDiv(img));
+        }
+        if (isLast && role === RoleEnum.user) return;
+        chatManager.createMessageBlock(role, "");
+        const lastMsgHtml = chatManager.conversationDiv.lastChild;
+        lastMsgHtml.querySelector('.message-content').innerHTML = add_codeblock_html(content);
+    }
+
+    // Initialize with system prompt as first message
+    if (chat[0].role === RoleEnum.system) {
+        initial_prompt = chat[0].content;
+        messages.push(chat[0]);     
+        // don't show the system prompt in the chat
+    }
+
+    // Process all messages except the last one
+    for (let i = 1; i < chat.length - 1; i++) {
+        const msg = chat[i];
+        messages.push(msg);
+        create_msg_block(msg.role, msg.content, msg.images, false);
+    }
+
+    // Handle the last message separately
+    const lastMsg = chat[chat.length - 1];
+    if (lastMsg.role === RoleEnum.assistant) messages.push(lastMsg);
+
+    create_msg_block(lastMsg.role, lastMsg.content, lastMsg.images, true);
+    
+    const inputField = document.getElementById('textInput');
+    inputField.value = lastMsg.role === RoleEnum.user ? lastMsg.content : '';
+    update_textfield_height(inputField);
+    chatManager.scrollIntoView();
 }
 
 
@@ -1015,7 +1071,7 @@ function append_context(message, role) {
     if (currentChat && role === RoleEnum.user) {
         if (currentChat.id === null) {
             currentChat.messages = [...messages];
-            chatStorage.createChatWithMessages(currentChat.title, messages).then(res => currentChat.id = res.chatId);
+            chatStorage.createChatWithMessages(currentChat.title, currentChat.messages).then(res => currentChat.id = res.chatId);
         } else {
             const newMsg = messages[messages.length - 1];
             currentChat.messages.push(newMsg);
