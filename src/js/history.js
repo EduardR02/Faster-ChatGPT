@@ -197,7 +197,6 @@ function buildChat(continueFromIndex, arenaMessageIndex = null, modelChoice = nu
     const workingMessages = currentChat.messages.slice(0, continueFromIndex + 1);
 
     const simplifiedChat = [];
-
     for (let i = 0; i < workingMessages.length; i++) {
         const msg = workingMessages[i];
         const isLastMessage = i === continueFromIndex;
@@ -224,7 +223,8 @@ function buildChat(continueFromIndex, arenaMessageIndex = null, modelChoice = nu
             if ('content' in msg) {
                 simplifiedChat.push({
                     role: 'assistant',
-                    content: msg.content
+                    content: msg.content,
+                    ...(msg.model && {model: msg.model})
                 });
             } else {  // arena message
                 // If it's the last message and we're continuing from it, use modelChoice and arenaMessageIndex
@@ -233,11 +233,13 @@ function buildChat(continueFromIndex, arenaMessageIndex = null, modelChoice = nu
                 // which means this can't be the last message before a user message
                 if (!isLastMessage && model === 'none') continue;
                 const messages = msg.responses[model].messages;
+                const modelString = msg.responses[model].name;
                 const index = (isLastMessage && arenaMessageIndex !== null) ? arenaMessageIndex : messages.length - 1;
 
                 simplifiedChat.push({
                     role: 'assistant',
-                    content: messages[index]
+                    content: messages[index],
+                    ...(modelString && {model: modelString})
                 });
             }
             // Skip to the next user message to avoid duplicates
