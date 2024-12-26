@@ -154,42 +154,85 @@ const chatStorage = new ChatStorage();
 let popupMenu = null;
 let currentChat = null;
 
+let isLoading = false;
+let offset = 0;
+const limit = 20;
+let hasMoreItems = true;
+let historyListContainer = null;
 
-function populateHistory() {
-    const container = document.querySelector('.history-list');
-    chatStorage.getChatMetadata(100, 0).then((chats) => {
-        for (let i = 0; i < chats.length; i++) {
-            const chat = chats[i];
-            const button = document.createElement('button');
-            button.classList.add('unset-button', 'history-sidebar-item');
 
-            const textSpan = document.createElement('span');
-            textSpan.classList.add('item-text');
-            textSpan.textContent = `${chat.title} ${timestampToDateString(chat.timestamp)}`;
+function initChatHistory() {
+    historyListContainer = document.querySelector('.history-list');
+    historyListContainer.addEventListener('scroll', handleHistoryScroll);
+    popupMenu = new PopupMenu();
+    populateHistory();
+}
 
-            const dots = document.createElement('div');
-            dots.classList.add('action-dots');
-            dots.textContent = '\u{22EF}';
 
-            // Prevent dots from triggering chat display
-            dots.onclick = (e) => {
-                e.stopPropagation();
-            };
+function createHistoryItem(chat) {
+    const button = document.createElement('button');
+    button.classList.add('unset-button', 'history-sidebar-item');
 
-            // Add main click handler to the button
-            button.onclick = () => {
-                displayChat(chat.chatId, chat.title, new Date(chat.timestamp));
-            };
+    const textSpan = document.createElement('span');
+    textSpan.classList.add('item-text');
+    textSpan.textContent = `${chat.title} ${timestampToDateString(chat.timestamp)}`;
 
-            button.id = chat.chatId;
-            button.dataset.name = chat.title;
+    const dots = document.createElement('div');
+    dots.classList.add('action-dots');
+    dots.textContent = '\u{22EF}';
 
-            button.appendChild(textSpan);
-            button.appendChild(dots);
-            container.appendChild(button);
+    dots.onclick = (e) => e.stopPropagation();
+    button.onclick = () => displayChat(chat.chatId, chat.title, new Date(chat.timestamp));
+    button.id = chat.chatId;
+    button.dataset.name = chat.title;
+
+    button.appendChild(textSpan);
+    button.appendChild(dots);
+
+    return button;
+}
+
+async function populateHistory() {
+    if (isLoading || !hasMoreItems) return;
+    
+    isLoading = true;
+    
+    try {
+        const chats = await chatStorage.getChatMetadata(limit, offset);
+        
+        if (chats.length === 0) {
+            hasMoreItems = false;
+            historyListContainer.removeEventListener('scroll', handleHistoryScroll);
+            return;
         }
-        popupMenu = new PopupMenu();
-    });
+
+        chats.forEach(chat => {
+            historyListContainer.appendChild(createHistoryItem(chat));
+        });
+
+        offset += chats.length;
+    } catch (error) {
+        console.error('Error loading chat history:', error);
+    } finally {
+        isLoading = false;
+        
+        if (shouldLoadMore()) {
+            populateHistory();
+        }
+    }
+}
+
+function shouldLoadMore() {
+    const { scrollHeight, clientHeight } = historyListContainer;
+    return scrollHeight <= clientHeight && hasMoreItems;
+}
+
+function handleHistoryScroll() {
+    const { scrollTop, scrollHeight, clientHeight } = historyListContainer;
+    
+    if (scrollHeight - (scrollTop + clientHeight) < 10 && !isLoading && hasMoreItems) {
+        populateHistory();
+    }
 }
 
 
@@ -468,4 +511,4 @@ function populateDummyHistory() {
 }
 
 
-document.addEventListener('DOMContentLoaded', populateHistory);
+document.addEventListener('DOMContentLoaded', initChatHistory);
