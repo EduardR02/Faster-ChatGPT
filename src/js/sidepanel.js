@@ -417,7 +417,8 @@ const CHAT_STATE = {
 const MaxTemp = {
     openai: 2.0,
     anthropic: 1.0,
-    gemini: 2.0
+    gemini: 2.0,
+    deepseek: 2.0
 }
 
 let settings = {};
@@ -649,6 +650,8 @@ function create_api_request(model) {
             return create_anthropic_request(model, messages_temp);
         case 'gemini':
             return create_gemini_request(model, messages_temp);
+        case 'deepseek':
+            return create_deepseek_request(model, messages_temp);
         default:
             post_error_message_in_chat("model", "Model not found");
             return [null, null];
@@ -714,6 +717,31 @@ function create_openai_request(model, msgs) {
 }
 
 
+function create_deepseek_request(model, msgs) {
+    check_api_key('deepseek');
+    msgs = map_msges_to_deepseek_format(msgs);
+    const requestOptions = {
+        method: 'POST',
+        credentials: 'omit',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + settings.api_keys.deepseek
+        },
+        body: JSON.stringify({
+            model: model,
+            messages: msgs,
+            max_tokens: settings.max_tokens,
+            temperature: settings.temperature > MaxTemp.deepseek ? MaxTemp.deepseek : settings.temperature,
+            stream: settings.stream_response,
+            ...(settings.stream_response && {
+                stream_options: { include_usage: true }
+            })
+        })
+    };
+    return ['https://api.deepseek.com/v1/chat/completions', requestOptions];
+}
+
+
 function create_gemini_request(model, msgs) {
     check_api_key("gemini");
     // gemini either has "model" or "user", even the system prompt is classified as "user"
@@ -759,6 +787,14 @@ function map_msges_to_openai_format(msgs) {
             let img_dict = msg.images.map(img => ({ type: 'image_url', image_url: {url: img}}));
             return { role: msg.role, content: [{type: 'text', text: msg.content}, ...img_dict] };
         }
+        return { role: msg.role, content: msg.content };
+    });
+}
+
+
+function map_msges_to_deepseek_format(msgs) {
+    // seems like deepseek v3 only has text input
+    return msgs.map(msg => {
         return { role: msg.role, content: msg.content };
     });
 }
@@ -854,6 +890,8 @@ function get_response_data_no_stream(data, model) {
             return [data.candidates[0].content.parts[0].text,
                     data.usageMetadata.promptTokenCount,
                     data.usageMetadata.candidatesTokenCount];
+        case 'deepseek':
+            return [data.choices[0].message.content, data.usage.prompt_tokens, data.usage.completion_tokens];
         default:
             return ['', 0, 0];
     }
@@ -976,6 +1014,8 @@ function stream_parse(data, api_provider, streamWriter, tokenCounter) {
                 handle_anthropic_stream(parsed, streamWriter, tokenCounter);
             case "gemini":
                 handle_gemini_stream(parsed, streamWriter, tokenCounter);
+            case "deepseek":
+                handle_deepseek_stream(parsed, streamWriter, tokenCounter);
         }
     }
     catch (error) {
@@ -992,6 +1032,18 @@ function handle_openai_stream(parsed, streamWriter, tokenCounter) {
         }
     } else if (parsed.usage && parsed.usage.prompt_tokens) {
         tokenCounter.update(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);  
+    }
+}
+
+function handle_deepseek_stream(parsed, streamWriter, tokenCounter) {
+    if (parsed?.usage && parsed?.choices?.[0]?.delta?.content === "") {
+        tokenCounter.update(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);
+        return;
+    }
+
+    const content = parsed?.choices?.[0]?.delta?.content;
+    if (content) {
+        streamWriter.processContent(content);
     }
 }
 

@@ -2,12 +2,13 @@ import {ArenaRatingManager, auto_resize_textfield_listener, update_textfield_hei
 
 
 let existing_settings = {};
-const apiProviders = ['anthropic', 'openai', 'gemini'];
 const apiDisplayNames = {
   anthropic: 'Anthropic',
   openai: 'OpenAI',
-  gemini: 'Gemini'
+  gemini: 'Gemini',
+  deepseek: 'DeepSeek'
 };
+const apiProviders = Object.keys(apiDisplayNames);
 
 let currentApiIndex = 0;
 
