@@ -9,17 +9,8 @@ class PopupMenu {
 
     init() {
         this.popup = document.querySelector('.popup-menu');
-
         this.initRenameLogic();
-
         document.addEventListener('click', this.handleGlobalClick.bind(this));
-
-        const historyItems = document.querySelectorAll('.history-sidebar-item');
-        historyItems.forEach(item => {
-            const dots = item.querySelector('.action-dots');
-            dots.addEventListener('click', (e) => this.handleDotsClick(e, item));
-        });
-
         this.popup.addEventListener('click', this.handlePopupClick.bind(this));
     }
 
@@ -188,6 +179,8 @@ function createHistoryItem(chat) {
 
     button.appendChild(textSpan);
     button.appendChild(dots);
+
+    popupMenu.addHistoryItem(button);
 
     return button;
 }
