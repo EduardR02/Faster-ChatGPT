@@ -250,7 +250,7 @@ export class Footer {
 
 
 export class StreamWriterSimple {
-    constructor(contentDiv, scrollFunc) {
+    constructor(contentDiv, scrollFunc = () => {}) {
         this.contentDiv = contentDiv;
         this.scrollFunc = scrollFunc;
         this.message = [];

@@ -1,5 +1,6 @@
 import { ArenaRatingManager, StreamWriter, StreamWriterSimple, Footer, TokenCounter, ModeEnum, get_mode, set_lifetime_tokens,
     auto_resize_textfield_listener, update_textfield_height, is_on, ChatStorage, add_codeblock_html } from "./utils.js";
+import { ApiManager } from "./api_manager.js";
 
 
 class ChatManager {
@@ -161,7 +162,7 @@ class ChatManager {
 
     getContentDiv(model) {
         if (!this.isArenaMode && this.contentDiv === null || this.isArenaMode && this.arenaDivs.length !== 2) {
-            post_error_message_in_chat("Content divs", "No content divs available.");
+            post_error_message_in_chat("No content divs available.");
             return null;
         }
         if (this.isArenaMode) {
@@ -414,23 +415,18 @@ const CHAT_STATE = {
     CONVERTED: 2    // Used the one-time transition either way
 };
 
-const MaxTemp = {
-    openai: 2.0,
-    anthropic: 1.0,
-    gemini: 2.0,
-    deepseek: 2.0
-}
-
 let settings = {};
 let messages = [];
 let initial_prompt = "";
 let pending_message = {};
-let chatManager = new ChatManager();
+const chatManager = new ChatManager();
 let arenaRatingManager = null;
 let thinkingMode = false;
 let thoughtLoops = [0, 0];
 
-let chatStorage = new ChatStorage();
+const apiManager = new ApiManager();
+
+const chatStorage = new ChatStorage();
 let currentChat = null;
 let chatState = CHAT_STATE.NORMAL;
 let shouldSave = true;
@@ -595,22 +591,65 @@ function api_call() {
     const thinkingModeString = thinkingMode ? "thinking" : "none";
     chatManager.thinkingModeActive = thinkingMode;
     thoughtLoops = [0, 0];
+
     if (settings.arena_mode) {
         if (settings.arena_models.length < 2) {
-            post_error_message_in_chat("Arena mode", "Not enough models enabled for Arena mode.");
+            post_error_message_in_chat("Not enough models enabled for Arena mode.");
             return;
         }
         let [model1, model2] = get_random_arena_models();
         chatManager.initArenaMode();
         chatManager.initMessageBlock(RoleEnum.assistant, thinkingModeString);
-        // even if it's just two models selected for arena mode, they are still shuffled every time, meaning no bias in which side they are on
         chatManager.assignModelsToArenaDivs(model1, model2);
-        api_call_single(model1, thinkingModeString);
-        api_call_single(model2, thinkingModeString);
-    }
-    else {
+
+        // Run both API calls concurrently
+        Promise.all([
+            makeApiCall(model1, thinkingModeString),
+            makeApiCall(model2, thinkingModeString)
+        ]).catch(error => {
+            post_error_message_in_chat(error.message);
+        });
+    } else {
         chatManager.initMessageBlock(RoleEnum.assistant, thinkingModeString);
-        api_call_single(settings.current_model, thinkingModeString);
+        makeApiCall(settings.current_model, thinkingModeString);
+    }
+}
+
+
+async function makeApiCall(model, thoughtProcessState) {
+    const contentDiv = chatManager.getContentDiv(model);
+    const msgs = messages.concat(resolve_pending_handler(model));
+    const api_provider = apiManager.getProviderForModel(model);
+    const tokenCounter = new TokenCounter(api_provider);
+    const isArenaMode = chatManager.isArenaMode;
+
+    try {
+        // Initialize StreamWriter based on streaming preference and arena mode
+        let streamWriter;
+        if (settings.stream_response && (isArenaMode || api_provider === "gemini")) {
+            const writerSpeed = isArenaMode ? 1500 : 2000;
+            streamWriter = new StreamWriter(contentDiv, chatManager.scrollIntoView.bind(chatManager), writerSpeed);
+        } else {
+            streamWriter = new StreamWriterSimple(contentDiv, chatManager.scrollIntoView.bind(chatManager));
+        }
+
+        const response = await apiManager.callApi(model, msgs, tokenCounter, settings.stream_response ? streamWriter : null);
+
+        // Process non-streaming response
+        if (!settings.stream_response) {
+            streamWriter.processContent(response);
+        }
+
+        // Add footer and handle thinking mode
+        const msgFooter = new Footer(tokenCounter.inputTokens, tokenCounter.outputTokens, isArenaMode, thoughtProcessState, regenerate_response.bind(null, model));
+        const addToPendingWithModel = (msg, done) => add_to_pending(msg, model, done);
+
+        await streamWriter.addFooter(msgFooter, addToPendingWithModel);
+        tokenCounter.updateLifetimeTokens();
+        handleThinkingMode(streamWriter.fullMessage, thoughtProcessState, model, contentDiv);
+        
+    } catch (error) {
+        post_error_message_in_chat(error.message);
     }
 }
 
@@ -632,357 +671,6 @@ function get_random_arena_models() {
 }
 
 
-function api_call_single(model, thoughtProcessState = "none") {
-    const [api_link, requestOptions] = create_api_request(model);
-    fetch(api_link, requestOptions)
-        .then(response => settings.stream_response ? response_stream(response, model, thoughtProcessState) : get_reponse_no_stream(response, model, thoughtProcessState))
-        .catch(error => post_error_message_in_chat("api request (likely incorrect key)", error.message));
-}
-
-
-function create_api_request(model) {
-    const provider = get_provider_for_model(model);
-    const messages_temp = messages.concat(resolve_pending_handler(model));
-    switch (provider) {
-        case 'openai':
-            return create_openai_request(model, messages_temp);
-        case 'anthropic':
-            return create_anthropic_request(model, messages_temp);
-        case 'gemini':
-            return create_gemini_request(model, messages_temp);
-        case 'deepseek':
-            return create_deepseek_request(model, messages_temp);
-        default:
-            post_error_message_in_chat("model", "Model not found");
-            return [null, null];
-    }
-}
-
-
-function get_provider_for_model(model) {
-    for (const [provider, models] of Object.entries(settings.models)) {
-        if (model in models) return provider;
-    }
-    return null;
-}
-
-
-function create_anthropic_request(model, msgs) {
-    check_api_key('anthropic');
-    msgs = map_msges_to_anthropic_format(msgs);
-    const requestOptions = {
-        method: 'POST',
-        credentials: 'omit',
-        headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': settings.api_keys.anthropic,
-            'anthropic-version': '2023-06-01',
-            'anthropic-dangerous-direct-browser-access': 'true'
-        },
-        body: JSON.stringify({
-            model: model,
-            system: msgs[0].content,
-            messages: msgs.slice(1),
-            max_tokens: settings.max_tokens,
-            temperature: settings.temperature > MaxTemp.anthropic ? MaxTemp.anthropic : settings.temperature,
-            stream: settings.stream_response
-        })
-    };
-    return ['https://api.anthropic.com/v1/messages', requestOptions];
-}
-
-
-function create_openai_request(model, msgs) {
-    check_api_key('openai');
-
-    if (model.includes('o1')) {
-        return create_openai_thinking_request(model, msgs);
-    }
-    msgs = map_msges_to_openai_format(msgs);
-    const requestOptions = {
-        method: 'POST',
-        credentials: 'omit',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + settings.api_keys.openai
-        },
-        body: JSON.stringify({
-            model: model,
-            messages: msgs,
-            max_tokens: settings.max_tokens,
-            temperature: settings.temperature > MaxTemp.openai ? MaxTemp.openai : settings.temperature,
-            stream: settings.stream_response,
-            ...(settings.stream_response && {
-                stream_options: { include_usage: true }
-            })
-        })
-    };
-    return ['https://api.openai.com/v1/chat/completions', requestOptions];
-}
-
-
-function create_openai_thinking_request(model, msgs) {
-    msgs = map_msges_to_openai_format(msgs);
-    if (msgs?.[0]?.role === "developer") {
-        // o1 type models currently don't support system prompts, so we have to just change it to user
-        msgs[0].role = RoleEnum.user;
-    }
-    const requestOptions = {
-        method: 'POST',
-        credentials: 'omit',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + settings.api_keys.openai
-        },
-        body: JSON.stringify({
-            model: model,
-            messages: msgs,
-            max_completion_tokens: settings.max_tokens,
-            stream: settings.stream_response,
-            ...(settings.stream_response && {
-                stream_options: { include_usage: true }
-            })
-        })
-    };
-    return ['https://api.openai.com/v1/chat/completions', requestOptions];
-}
-
-
-function create_deepseek_request(model, msgs) {
-    check_api_key('deepseek');
-    msgs = map_msges_to_deepseek_format(msgs);
-    const requestOptions = {
-        method: 'POST',
-        credentials: 'omit',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + settings.api_keys.deepseek
-        },
-        body: JSON.stringify({
-            model: model,
-            messages: msgs,
-            max_tokens: settings.max_tokens,
-            temperature: settings.temperature > MaxTemp.deepseek ? MaxTemp.deepseek : settings.temperature,
-            stream: settings.stream_response,
-            ...(settings.stream_response && {
-                stream_options: { include_usage: true }
-            })
-        })
-    };
-    return ['https://api.deepseek.com/v1/chat/completions', requestOptions];
-}
-
-
-function create_gemini_request(model, msgs) {
-    check_api_key("gemini");
-    // gemini either has "model" or "user", even the system prompt is classified as "user"
-    msgs = map_msges_to_gemini_format(msgs);
-    // to use images with gemini we need to use file api and im too lazy for that rn, i use sonnet anyway so whatever
-    const requestOptions = {
-        method: 'POST',
-        credentials: 'omit',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            contents: msgs.slice(1),
-            systemInstruction: msgs[0],
-            safetySettings: get_gemini_safety_settings(),
-            generationConfig: {
-                temperature: settings.temperature > MaxTemp.gemini ? MaxTemp.gemini : settings.temperature,
-                maxOutputTokens: settings.max_tokens,
-                responseMimeType: "text/plain"
-            },
-        })
-    };
-    const responseType = settings.stream_response ? "streamGenerateContent" : "generateContent";
-    const streamParam = settings.stream_response ? "alt=sse&" : "";
-    const requestLink = `https://generativelanguage.googleapis.com/v1beta/models/${model}:${responseType}?${streamParam}key=${settings.api_keys.gemini}`;
-    return [requestLink, requestOptions];
-}
-
-
-function map_msges_to_anthropic_format(msgs) {
-    return msgs.map(msg => {
-        if (msg.role === RoleEnum.user && 'images' in msg) {
-            let img_dict = msg.images.map(img => ({ type: 'image', source: 
-                {type: 'base64', media_type: get_base64_media_type(img), data: simple_base64_splitter(img)}}));
-            return { role: msg.role, content: [{type: 'text', text: msg.content}, ...img_dict] };
-        }
-        return { role: msg.role, content: msg.content };
-    });
-}
-
-
-function map_msges_to_openai_format(msgs) {
-    return msgs.map(msg => {
-        const role = msg.role === RoleEnum.system ? "developer" : msg.role;
-        if (msg.role === RoleEnum.user && 'images' in msg) {
-            let img_dict = msg.images.map(img => ({ type: 'image_url', image_url: {url: img}}));
-            return { role: role, content: [{type: 'text', text: msg.content}, ...img_dict] };
-        }
-        return { role: role, content: msg.content };
-    });
-}
-
-
-function map_msges_to_deepseek_format(msgs) {
-    // seems like deepseek v3 only has text input
-    return msgs.map(msg => {
-        return { role: msg.role, content: msg.content };
-    });
-}
-
-
-function map_msges_to_gemini_format(msgs) {
-    return msgs.map(message => {
-        let parts = [];
-
-        // Handle text part
-        if (message.content) {
-            parts.push({ text: message.content });
-        }
-
-        // Handle image parts
-        if (message.role === RoleEnum.user && message.images) {
-            message.images.forEach(img => {
-                parts.push({
-                    inline_data: {
-                        mime_type: get_base64_media_type(img),
-                        data: simple_base64_splitter(img)
-                    }
-                });
-            });
-        }
-        
-        return {
-            role: message.role === "assistant" ? "model" : "user",
-            parts: parts
-        };
-    });
-}
-
-
-function simple_base64_splitter(base64_string) {
-    return base64_string.split('base64,')[1];
-}
-
-
-function get_base64_media_type(base64_string) {
-    return base64_string.split(':')[1].split(';')[0];
-}
-
-
-function check_api_key(provider) {
-    if (!settings.api_keys[provider] || settings.api_keys[provider] === "") {
-        post_error_message_in_chat(`${provider} API Key`, `${provider} API key is empty, switch to another model or enter a key in the settings.`);
-    }
-}
-
-
-function get_gemini_safety_settings() {
-    return [
-        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
-    ];
-}
-
-
-function get_reponse_no_stream(response, model, thoughtProcessState) {
-    response.json().then(data => {
-        let contentDiv = chatManager.getContentDiv(model);
-        let streamWriter = new StreamWriterSimple(contentDiv, chatManager.scrollIntoView.bind(chatManager));
-        let response_text, input_tokens, output_tokens;
-        try {
-            [response_text, input_tokens, output_tokens] = get_response_data_no_stream(data, model);
-        }
-        catch (error) {
-            post_error_message_in_chat("API request error (likely incorrect key)", error.message);
-            hadError = true;
-        }
-        streamWriter.processContent(response_text);
-        let msgFooter = new Footer(input_tokens, output_tokens, chatManager.isArenaMode, thoughtProcessState, regenerate_response.bind(null, model));
-        const add_to_pending_with_model = (msg, done) => add_to_pending(msg, model, done);
-        streamWriter.addFooter(msgFooter, add_to_pending_with_model).then(() => {
-            if (!hadError) handleThinkingMode(streamWriter.fullMessage, thoughtProcessState, model, contentDiv);
-        });
-        set_lifetime_tokens(input_tokens, output_tokens);
-    });
-}
-
-
-function get_response_data_no_stream(data, model) {
-    const provider = get_provider_for_model(model);
-    switch (provider) {
-        case 'openai':
-            return [data.choices[0].message.content, data.usage.prompt_tokens, data.usage.completion_tokens];
-        case 'anthropic':
-            return [data.content[0].text, data.usage.input_tokens, data.usage.output_tokens];
-        case 'gemini':
-            return [data.candidates[0].content.parts[0].text,
-                    data.usageMetadata.promptTokenCount,
-                    data.usageMetadata.candidatesTokenCount];
-        case 'deepseek':
-            return [data.choices[0].message.content, data.usage.prompt_tokens, data.usage.completion_tokens];
-        default:
-            return ['', 0, 0];
-    }
-}
-
-
-// "stolen" from https://umaar.com/dev-tips/269-web-streams-openai/ and https://www.builder.io/blog/stream-ai-javascript
-async function response_stream(response_stream, model, thoughtProcessState) {
-    // right now you can't "stop generating", too lazy lol
-    let contentDiv = chatManager.getContentDiv(model);
-    let api_provider = get_provider_for_model(model);
-    let tokenCounter = new TokenCounter(api_provider);
-    let streamWriter;
-    const writerSpeed = chatManager.isArenaMode ? 1500 : 2000;
-    // problem is that stream speed and how "clunky" it is is a dead giveaway in arena mode for which model/provider it is, so we try to even it out by fixing the speed.
-    // unfortunately currently gemini stream still "stutters" for the first few seconds, so it's obvious, but for the other models you can't tell anymore
-    // might make sense to add random startup delay, like 2-3 sec
-    if (api_provider.trim() === "gemini" || chatManager.isArenaMode) {
-        streamWriter = new StreamWriter(contentDiv, chatManager.scrollIntoView.bind(chatManager), writerSpeed);
-    }
-    else {
-        streamWriter = new StreamWriterSimple(contentDiv, chatManager.scrollIntoView.bind(chatManager));
-    }
-
-    const reader = response_stream.body.getReader();
-    const decoder = new TextDecoder("utf-8");
-    let hadError = false;
-
-    try {
-        let buffer = '';
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop();
-
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    const data = line.slice(6);
-                    if (data === '[DONE]') continue;
-                    stream_parse(data, api_provider, streamWriter, tokenCounter);
-                }
-            }
-        }
-    } catch (error) {
-        post_error_message_in_chat("API request error (likely incorrect key)", error.message);
-        hadError = true;
-    }
-    tokenCounter.updateLifetimeTokens();
-    let msgFooter = new Footer(tokenCounter.inputTokens, tokenCounter.outputTokens, chatManager.isArenaMode, thoughtProcessState, regenerate_response.bind(null, model));
-    const add_to_pending_with_model = (msg, done) => add_to_pending(msg, model, done);
-    streamWriter.addFooter(msgFooter, add_to_pending_with_model).then(() => {
-        if (!hadError) handleThinkingMode(streamWriter.fullMessage, thoughtProcessState, model, contentDiv);
-    });
-}
-
-
 function regenerate_response(model, contentDiv) {
     const thinkingProcessString = thinkingMode ? "thinking" : "none";
     chatManager.thinkingModeActive = thinkingMode;
@@ -991,8 +679,8 @@ function regenerate_response(model, contentDiv) {
     discard_pending(model);
     chatManager.antiScrollListener();
     if (!chatManager.isArenaMode) model = settings.current_model;
-    togglePrompt(thinkingProcessString);
-    api_call_single(model, thinkingProcessString);
+
+    makeApiCall(model, messages.concat(resolve_pending_handler(model)), thinkingProcessString, contentDiv);
 }
 
 
@@ -1017,7 +705,7 @@ function handleThinkingMode(msg, thoughtProcessState, model, contentDiv) {
         togglePrompt("solver");
     }
     chatManager.onContinue(contentDiv, thinkingProcessString);
-    api_call_single(model, thinkingProcessString);
+    makeApiCall(model, thinkingProcessString);
 }
 
 
@@ -1032,92 +720,6 @@ function togglePrompt(promptType = "none") {
             break;
         case "none":
             messages[0].content = initial_prompt;
-    }
-}
-
-
-function stream_parse(data, api_provider, streamWriter, tokenCounter) {
-    try {
-        const parsed = JSON.parse(data);
-        switch (api_provider) {
-            case "openai":
-                handle_openai_stream(parsed, streamWriter, tokenCounter);
-                break;
-            case "anthropic":
-                handle_anthropic_stream(parsed, streamWriter, tokenCounter);
-                break;
-            case "gemini":
-                handle_gemini_stream(parsed, streamWriter, tokenCounter);
-                break;
-            case "deepseek":
-                handle_deepseek_stream(parsed, streamWriter, tokenCounter);
-                break;
-        }
-    }
-    catch (error) {
-        post_error_message_in_chat('Error parsing streamed response:', error);
-    }
-}
-
-
-function handle_openai_stream(parsed, streamWriter, tokenCounter) {
-    if (parsed.choices && parsed.choices.length > 0) {
-        const content = parsed.choices[0].delta.content;
-        if (content) {
-            streamWriter.processContent(content);
-        }
-    } else if (parsed.usage && parsed.usage.prompt_tokens) {
-        tokenCounter.update(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);  
-    }
-}
-
-function handle_deepseek_stream(parsed, streamWriter, tokenCounter) {
-    if (parsed?.usage && parsed?.choices?.[0]?.delta?.content === "") {
-        tokenCounter.update(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);
-        return;
-    }
-
-    const content = parsed?.choices?.[0]?.delta?.content;
-    if (content) {
-        streamWriter.processContent(content);
-    }
-}
-
-
-function handle_anthropic_stream(parsed, streamWriter, tokenCounter) {
-    switch (parsed.type) {
-        case 'content_block_delta':
-            const content = parsed.delta.text;
-            if (content) {
-                streamWriter.processContent(content);
-            }
-            break;
-        case 'message_start':
-            if (parsed.message && parsed.message.usage && parsed.message.usage.input_tokens) {
-                tokenCounter.update(parsed.message.usage.input_tokens, parsed.message.usage.output_tokens);
-            }
-            break;
-        case 'message_delta':
-            if (parsed.usage && parsed.usage.output_tokens) {
-                tokenCounter.update(0, parsed.usage.output_tokens);  
-            }
-            break;
-        case 'error':
-            post_error_message_in_chat('Anthropic stream response (error block received)', parsed.error);
-            break;
-    }
-}
-
-
-function handle_gemini_stream(parsed, streamWriter, tokenCounter) {
-    if (parsed.candidates && parsed.candidates.length > 0) {
-        const content = parsed.candidates[0].content.parts[0].text;
-        if (content) {
-            streamWriter.processContent(content);
-        }
-    }
-    if (parsed.usageMetadata && parsed.usageMetadata.promptTokenCount) {
-        tokenCounter.update(parsed.usageMetadata.promptTokenCount, parsed.usageMetadata.candidatesTokenCount);
     }
 }
 
@@ -1144,7 +746,7 @@ function init_prompt(context) {
                 resolve();
             })
             .catch(error => {
-                post_error_message_in_chat(`loading ${context.mode} prompt file`, error.message);
+                post_error_message_in_chat(`Error loading ${context.mode} prompt file:\n` + error.message);
                 reject(error);
             });
     });
@@ -1152,23 +754,17 @@ function init_prompt(context) {
 
 
 function init_settings() {
-    chrome.storage.local.get(['api_keys', 'max_tokens', 'loop_threshold', 'temperature', 'current_model', 'stream_response', 'arena_mode', 'arena_models', 'models'])
+    chrome.storage.local.get(['loop_threshold', 'current_model', 'arena_mode', 'arena_models', 'stream_response'])
     .then(res => {
         settings = {
-            api_keys: res.api_keys || {},
-            max_tokens: res.max_tokens,
-            temperature: res.temperature,
             loop_threshold: res.loop_threshold,
             current_model: res.current_model,
-            stream_response: res.stream_response,
             arena_mode: res.arena_mode,
             arena_models: res.arena_models || [],
-            models: res.models || {}
+            stream_response: res.stream_response
         };
         chrome.storage.onChanged.addListener(update_settings);
-        if (Object.keys(settings.api_keys).length === 0) {
-            post_error_message_in_chat("api keys", "Please enter an api key in the settings, all are currently empty.");
-        }
+        arena_toggle_button_update();
     });
 }
 
@@ -1318,8 +914,8 @@ function adjust_thought_structure(pending_messages) {
 }
 
 
-function post_error_message_in_chat(error_occurred, error_message) {
-    return chatManager.createMessageBlock(RoleEnum.system, "Error occurred here: " + error_occurred +  "\nHere is the error message:\n" + error_message);
+function post_error_message_in_chat(error_message) {
+    return chatManager.createMessageBlock(RoleEnum.system, error_message);
 }
 
 
@@ -1374,7 +970,7 @@ function init_textarea_image_drag_and_drop() {
                 reader.readAsDataURL(blob);
             });
         } catch (error) {
-            post_error_message_in_chat(error, 'Error converting image to base64');
+            post_error_message_in_chat('Error converting image to base64\n' + error.message);
             return null;
         }
     }
@@ -1534,8 +1130,7 @@ function init_footer_buttons() {
 function arena_toggle_button_update() {
     const button = document.querySelector('.arena-toggle-button');
     button.textContent = settings.arena_mode ? '\u{2694}' : '\u{1F916}';
-    if (settings.arena_mode) button.classList.add('arena-mode-on');
-    else button.classList.remove('arena-mode-on');
+    button.classList.toggle('arena-mode-on', settings.arena_mode === true);
 }
 
 
