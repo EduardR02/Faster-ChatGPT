@@ -582,7 +582,8 @@ p {
 }
 
 .arena-wrapper {
-  flex:1;
+  flex: 1;
+  overflow-x: auto;
 }
 
 .arena-wrapper.history-arena-wrapper {
