@@ -694,6 +694,10 @@ function create_anthropic_request(model, msgs) {
 
 function create_openai_request(model, msgs) {
     check_api_key('openai');
+
+    if (model.includes('o1')) {
+        return create_openai_thinking_request(model, msgs);
+    }
     msgs = map_msges_to_openai_format(msgs);
     const requestOptions = {
         method: 'POST',
@@ -707,6 +711,33 @@ function create_openai_request(model, msgs) {
             messages: msgs,
             max_tokens: settings.max_tokens,
             temperature: settings.temperature > MaxTemp.openai ? MaxTemp.openai : settings.temperature,
+            stream: settings.stream_response,
+            ...(settings.stream_response && {
+                stream_options: { include_usage: true }
+            })
+        })
+    };
+    return ['https://api.openai.com/v1/chat/completions', requestOptions];
+}
+
+
+function create_openai_thinking_request(model, msgs) {
+    msgs = map_msges_to_openai_format(msgs);
+    if (msgs?.[0]?.role === "developer") {
+        // o1 type models currently don't support system prompts, so we have to just change it to user
+        msgs[0].role = RoleEnum.user;
+    }
+    const requestOptions = {
+        method: 'POST',
+        credentials: 'omit',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + settings.api_keys.openai
+        },
+        body: JSON.stringify({
+            model: model,
+            messages: msgs,
+            max_completion_tokens: settings.max_tokens,
             stream: settings.stream_response,
             ...(settings.stream_response && {
                 stream_options: { include_usage: true }
@@ -783,11 +814,12 @@ function map_msges_to_anthropic_format(msgs) {
 
 function map_msges_to_openai_format(msgs) {
     return msgs.map(msg => {
+        const role = msg.role === RoleEnum.system ? "developer" : msg.role;
         if (msg.role === RoleEnum.user && 'images' in msg) {
             let img_dict = msg.images.map(img => ({ type: 'image_url', image_url: {url: img}}));
-            return { role: msg.role, content: [{type: 'text', text: msg.content}, ...img_dict] };
+            return { role: role, content: [{type: 'text', text: msg.content}, ...img_dict] };
         }
-        return { role: msg.role, content: msg.content };
+        return { role: role, content: msg.content };
     });
 }
 
@@ -1010,12 +1042,16 @@ function stream_parse(data, api_provider, streamWriter, tokenCounter) {
         switch (api_provider) {
             case "openai":
                 handle_openai_stream(parsed, streamWriter, tokenCounter);
+                break;
             case "anthropic":
                 handle_anthropic_stream(parsed, streamWriter, tokenCounter);
+                break;
             case "gemini":
                 handle_gemini_stream(parsed, streamWriter, tokenCounter);
+                break;
             case "deepseek":
                 handle_deepseek_stream(parsed, streamWriter, tokenCounter);
+                break;
         }
     }
     catch (error) {
