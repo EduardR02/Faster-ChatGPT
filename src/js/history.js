@@ -150,6 +150,7 @@ let offset = 0;
 const limit = 20;
 let hasMoreItems = true;
 let historyListContainer = null;
+let lastDateCategory = null;
 
 
 function initChatHistory() {
@@ -160,13 +161,23 @@ function initChatHistory() {
 }
 
 
+// Function to create a divider
+function createDivider(category, padding_top = true) {
+    const divider = document.createElement('div');
+    divider.classList.add('history-divider');
+    divider.textContent = category;
+    if (!padding_top) divider.style.paddingTop = '0';
+    return divider;
+}
+
+
 function createHistoryItem(chat) {
     const button = document.createElement('button');
     button.classList.add('unset-button', 'history-sidebar-item');
 
     const textSpan = document.createElement('span');
     textSpan.classList.add('item-text');
-    textSpan.textContent = `${chat.title} ${timestampToDateString(chat.timestamp)}`;
+    textSpan.textContent = `${chat.title}`;
 
     const dots = document.createElement('div');
     dots.classList.add('action-dots');
@@ -200,6 +211,13 @@ async function populateHistory() {
         }
 
         chats.forEach(chat => {
+            const currentCategory = getDateCategory(chat.timestamp);
+            
+            if (currentCategory !== lastDateCategory) {
+                historyListContainer.appendChild(createDivider(currentCategory, lastDateCategory !== null));
+                lastDateCategory = currentCategory;
+            }
+            
             historyListContainer.appendChild(createHistoryItem(chat));
         });
 
@@ -479,9 +497,41 @@ function displayChat(chatId, title, timestamp) {
 }
 
 
-function timestampToDateString(timestamp) {
+function getDateCategory(timestamp) {
     const date = new Date(timestamp);
-    return date.toISOString().split('T')[0];
+    const now = new Date();
+    
+    // Helper function to get midnight of a date
+    const getMidnight = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    
+    const todayMidnight = getMidnight(now);
+    const yesterdayMidnight = new Date(todayMidnight);
+    yesterdayMidnight.setDate(yesterdayMidnight.getDate() - 1);
+    
+    const dateMidnight = getMidnight(date);
+    
+    if (dateMidnight.getTime() === todayMidnight.getTime()) return 'Today';
+    if (dateMidnight.getTime() === yesterdayMidnight.getTime()) return 'Yesterday';
+    
+    // Last Week = Last 7 full calendar days (excluding today and yesterday)
+    const lastWeekStart = new Date(todayMidnight);
+    lastWeekStart.setDate(lastWeekStart.getDate() - 7);
+    
+    if (dateMidnight >= lastWeekStart) return 'Last 7 Days';
+    
+    // Last 30 Days = Last 30 full calendar days (excluding the above)
+    const last30DaysStart = new Date(todayMidnight);
+    last30DaysStart.setDate(last30DaysStart.getDate() - 30);
+    
+    if (dateMidnight >= last30DaysStart) return 'Last 30 Days';
+    
+    // Months within the current year
+    if (date.getFullYear() === now.getFullYear()) {
+        return date.toLocaleString('default', { month: 'long' });
+    }
+    
+    // Older than current year
+    return `${date.getFullYear()}`;
 }
 
 

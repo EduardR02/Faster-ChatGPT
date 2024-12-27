@@ -224,8 +224,8 @@ body {
   color: #d4d4d4;
   border-radius: 0.5em;
   cursor: pointer;
-  padding: 0 0.5em;
-  padding-right: 0;
+  padding: 0;
+  padding-left: 0.5em;
   position: relative;
   display: flex;
   align-items: center;
@@ -298,6 +298,16 @@ body {
 
 .history-sidebar-item:hover {
   color: #ffffff;
+}
+
+.history-divider {
+  font-weight: bold;
+  padding: 0;
+  padding-top: 1rem;
+  padding-bottom: 0.3rem;
+  font-size: 0.8em;
+  color: #ffffff;
+  background: transparent;
 }
 
 .popup-menu {
