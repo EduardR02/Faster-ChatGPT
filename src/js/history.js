@@ -532,8 +532,8 @@ function displayChat(chatId, title, timestamp) {
             conversationWrapper.appendChild(messageElement);
         });
 
-        document.getElementById('history-chat-footer').textContent =
-            `${title} - ${timestamp.toString().split(' GMT')[0]}`;
+        document.getElementById('history-chat-header').textContent = title;
+        document.getElementById('history-chat-footer').textContent = timestamp.toString().split(' GMT')[0];
     });
 }
 
@@ -617,8 +617,9 @@ async function prepareMessages(chat, customPrompt) {
         content: customPrompt
     };
 
-    if (chat.title.startsWith("Selection from")) {
-        const extracted = extractSelectionAndUrl(systemMsg.content);
+    const extracted = extractSelectionAndUrl(systemMsg.content);
+
+    if (chat.title.startsWith("Selection from") || extracted !== null) {
         if (!extracted) return null;
         
         const combinedContent = [
@@ -674,6 +675,7 @@ async function renameSingleChat(chat, model, messages, timeoutPromise) {
 
 
 async function autoRenameUnmodified() {
+    // if there are a lot of chats this will currently hit rate limits because we're trying to do every request at the same time...
     const button = document.getElementById('auto-rename');
     const model = apiManager.getCurrentModel();
 
