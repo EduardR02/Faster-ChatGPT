@@ -249,6 +249,33 @@ export class Footer {
 }
 
 
+export class StreamWriterBase {
+    // class for auto renaming history items with streamed response from llm api
+    constructor(contentDiv = null) {
+        this.contentDiv = contentDiv;
+        this.message = [];
+        this.fullMessage = "";
+        this.isFirstChunk = true;
+    }
+
+    processContent(content) {
+        this.message.push(content);
+        if (this.contentDiv) {
+            if (this.isFirstChunk) {
+                this.contentDiv.textContent = "";
+                this.isFirstChunk = false;
+            }
+            this.contentDiv.textContent += content;
+        }
+    }
+
+    done() {
+        this.fullMessage = this.message.join('');
+        return this.fullMessage;
+    }
+}
+
+
 export class StreamWriterSimple {
     constructor(contentDiv, scrollFunc = () => {}) {
         this.contentDiv = contentDiv;
@@ -383,7 +410,8 @@ export class ChatStorage {
         return new Promise((resolve, reject) => {
             const chatMeta = {
                 title,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                renamed: false
             };
 
             const metaRequest = metaStore.add(chatMeta);
@@ -447,7 +475,7 @@ export class ChatStorage {
         });
     }
 
-    async loadChat(chatId) {
+    async loadChat(chatId, messageLimit = null) {
         const db = await this.getDB();
         const tx = db.transaction(['messages', 'chatMeta'], 'readonly');
         const messageStore = tx.objectStore('messages');
@@ -455,13 +483,15 @@ export class ChatStorage {
         
         return new Promise((resolve) => {
             const messages = [];
+            let count = 0;
             
             const index = messageStore.index('chatId');
             const request = index.openCursor(IDBKeyRange.only(chatId));
             
             request.onsuccess = (event) => {
                 const cursor = event.target.result;
-                if (!cursor) {
+                
+                if (!cursor || (messageLimit !== null && count >= messageLimit)) {
                     metaStore.get(chatId).onsuccess = (event) => {
                         resolve({
                             meta: event.target.result,
@@ -470,9 +500,14 @@ export class ChatStorage {
                     };
                     return;
                 }
-
+    
                 messages.push(cursor.value);
+                count++;
                 cursor.continue();
+            };
+    
+            request.onerror = () => {
+                resolve({ meta: null, messages: [] });
             };
         });
     }
@@ -493,6 +528,7 @@ export class ChatStorage {
         }
 
         chatMeta.title = newTitle;
+        chatMeta.renamed = true;
         await new Promise((resolve, reject) => {
             const request = store.put(chatMeta);
             request.onsuccess = () => resolve();

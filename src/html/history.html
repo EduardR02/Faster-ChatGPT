@@ -12,7 +12,9 @@
     <div class="chat-history-sidebar">
       <div class="history-title">Chat History</div>
       <div class="history-list"><!-- Chat history items will be dynamically added here --></div>
-      <div class="history-title">—</div>
+      <div class="history-auto-rename-wrapper">
+        <button class="unset-button history-auto-rename" id="auto-rename">auto-rename unmodified</button>
+      </div>
     </div>
     <div class="sidebar-separator"></div>
     <div class="history-chat-container">
@@ -24,6 +26,7 @@
     </div>
   </div>
   <div class="popup-menu">
+    <div class="popup-item" data-action="auto-rename">Auto-Rename</div>
     <div class="popup-item" data-action="rename">Rename</div>
     <div class="rename-input-wrapper">
       <input type="text" class="std-input rename-input" id="rename-chat-input" placeholder="Enter new name">

@@ -5,12 +5,13 @@ export class ApiManager {
     }
 
     async initSettingsAndListener() {
-        const storageData = await chrome.storage.local.get(['api_keys', 'max_tokens', 'temperature', 'models']);
+        const storageData = await chrome.storage.local.get(['api_keys', 'max_tokens', 'temperature', 'models', 'current_model']);
         this.settings = {
             api_keys: storageData.api_keys || {},
             max_tokens: storageData.max_tokens || 2000,
             temperature: storageData.temperature || 0.7,
-            models: storageData.models || {}
+            models: storageData.models || {},
+            current_model: storageData.current_model
         };
 
         if (Object.keys(this.settings.api_keys).length === 0) {
@@ -25,6 +26,10 @@ export class ApiManager {
                 }
             }
         });
+    }
+
+    getCurrentModel() {
+        return this.settings.current_model;
     }
 
     async callApi(model, messages, tokenCounter, streamWriter = null) {
@@ -288,6 +293,7 @@ export class ApiManager {
                 }
             }
         }
+        return true;
     }
 
     async handleNonStreamResponse(response, model, tokenCounter) {
