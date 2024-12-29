@@ -430,6 +430,7 @@ const chatStorage = new ChatStorage();
 let currentChat = null;
 let chatState = CHAT_STATE.NORMAL;
 let shouldSave = true;
+let isSidePanel = true;
 
 
 document.addEventListener('DOMContentLoaded', init);
@@ -458,6 +459,7 @@ function setup_message_listeners() {
             when_new_chat();
         } else if (msg.type === 'reconstruct_chat') {
             reconstruct_chat(msg.chat);
+            isSidePanel = msg.isSidePanel === false ? false : true;
         }
     });
 }
@@ -513,10 +515,15 @@ function when_new_chat() {
 
 
 function reconstruct_chat(chat) {
-    if (chat.length === 0) return;
+    if (chat.length === 0 || chat.messages?.length === 0) return;
 
     messages = [];
     init_states("Continued Chat");
+    if (chat.id !== null) {
+        currentChat.id = chat.id;
+        currentChat.name = chat.name;
+    }
+    if (chat.messages) chat = chat.messages;
 
     function create_msg_block(role, content, images, isLast) {
         if (role === RoleEnum.user && images) {
@@ -545,11 +552,11 @@ function reconstruct_chat(chat) {
 
     // Handle the last message separately
     const lastMsg = chat[chat.length - 1];
-    if (lastMsg.role === RoleEnum.assistant) messages.push(lastMsg);
-
-    create_msg_block(lastMsg.role, lastMsg.content, lastMsg.images, true);
-    
     const inputField = document.getElementById('textInput');
+    if (chat.length > 1) {
+        if (lastMsg.role === RoleEnum.assistant) messages.push(lastMsg);
+        create_msg_block(lastMsg.role, lastMsg.content, lastMsg.images, true);
+    }
     inputField.value = lastMsg.role === RoleEnum.user ? lastMsg.content : '';
     update_textfield_height(inputField);
     chatManager.scrollIntoView();
@@ -1057,6 +1064,63 @@ function init_footer_buttons() {
         chrome.runtime.openOptionsPage();
     });
 
+    init_incognito_toggle();
+    init_popout_toggle_button();
+}
+
+
+function init_popout_toggle_button() {
+    const button = document.getElementById('pop-out-toggle');
+    button.addEventListener('click', async () => {
+        resolve_pending();
+        if (currentChat && currentChat.messages.length === 0)
+            currentChat.messages = [...messages];
+        if (!currentChat)
+            currentChat = [];
+
+        if (isSidePanel) {
+            // Create new tab and wait for it to be ready
+            chrome.tabs.create({ 
+                url: chrome.runtime.getURL('src/html/sidepanel.html') 
+            });
+
+            // Wait for the "sidepanel ready" message from the new tab
+            await new Promise(resolve => {
+                chrome.runtime.onMessage.addListener(function listener(message) {
+                    if (message.type === "sidepanel_ready") {
+                        chrome.runtime.onMessage.removeListener(listener);
+                        resolve();
+                    }
+                });
+            });
+            chrome.runtime.sendMessage({
+                type: "reconstruct_chat",
+                chat: currentChat,
+                isSidePanel: false
+            });
+
+            window.close();
+        } else {
+            // Using your existing sidepanel logic
+            const response = await chrome.runtime.sendMessage({ type: "is_sidepanel_open" });
+            
+            if (!response.isOpen) {
+                await chrome.runtime.sendMessage({ type: "open_side_panel" });
+            }
+            
+            await chrome.runtime.sendMessage({
+                type: "reconstruct_chat",
+                chat: currentChat,
+                isSidePanel: true
+            });
+
+            window.close();
+        }
+    });
+}
+
+
+function init_incognito_toggle() {
     const buttonFooter = document.getElementById('sidepanel-button-footer');
     const incognitoToggle = document.getElementById('incognito-toggle');
     const hoverText = buttonFooter.querySelectorAll('.hover-text');
@@ -1095,9 +1159,22 @@ function init_footer_buttons() {
         updateHoverText(hoverText);
         buttonFooter.classList.add('showing-text');
     });
-
+    
+    function createTransitionHandler(label) {
+        return function handler(event) {
+            if (!label.parentElement.classList.contains('showing-text')) {
+                label.textContent = "";
+                label.style.width = "auto";
+            }
+            label.removeEventListener('transitionend', handler);
+        };
+    }
+    
     incognitoToggle.addEventListener('mouseleave', () => {
         buttonFooter.classList.remove('showing-text');
+        hoverText.forEach(label => {
+            label.addEventListener('transitionend', createTransitionHandler(label));
+        });
     });
 
     incognitoToggle.addEventListener('click', () => {

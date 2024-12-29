@@ -104,7 +104,8 @@ export function auto_resize_textfield_listener(element_id) {
     let inputField = document.getElementById(element_id);
 
     inputField.addEventListener('input', () => update_textfield_height(inputField));
-    window.addEventListener('resize', () => update_textfield_height(inputField))
+    window.addEventListener('resize', () => update_textfield_height(inputField));
+    update_textfield_height(inputField);
 }
 
 

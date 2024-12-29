@@ -57,10 +57,12 @@ body {
   overflow-y: auto;
 }
 
+.button-footer-center-group,
 .sidepanel-button-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.5em;
 }
 
 .sidebar-separator {
@@ -140,6 +142,7 @@ body {
   padding: 1px 5px;
   background: #abb2bf;
   white-space: nowrap;
+  min-width: fit-content;
   transition: background 0.1s ease-out;
   color: #282c34;
 }
@@ -165,13 +168,13 @@ body {
   overflow: hidden;
   display: flex;
   opacity: 0;
-  min-width: fit-content;
+  white-space: pre-wrap;
   color: #56b6c2;
   background: transparent;
   font-size: 0.8em;
-  white-space: nowrap;
   align-items: center;
   justify-content: center;
+  text-align: center;
   transition: all 0.2s ease-in-out;
 }
 
@@ -189,6 +192,10 @@ body {
 
 .incognito-toggle:hover {
   background: #ef596f;
+}
+
+.incognito-toggle.pop-out-toggle:hover svg {
+  fill: #ffffff;
 }
 
 .incognito-toggle:hover svg {
@@ -211,6 +218,7 @@ body {
   opacity: 1;
 }
 
+.incognito-toggle.pop-out-toggle:hover,
 .sidepanel-open-settings:hover,
 .sidepanel-open-history:hover {
   background: #56b6c2;
