@@ -519,7 +519,7 @@ function reconstruct_chat(chat) {
 
     messages = [];
     init_states("Continued Chat");
-    if (chat.id !== null) {
+    if (chat.id) {
         currentChat.id = chat.id;
         currentChat.name = chat.name;
     }
@@ -559,6 +559,7 @@ function reconstruct_chat(chat) {
     }
     inputField.value = lastMsg.role === RoleEnum.user ? lastMsg.content : '';
     update_textfield_height(inputField);
+    currentChat.messages = chat;
     chatManager.scrollIntoView();
 }
 
