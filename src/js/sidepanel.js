@@ -647,7 +647,6 @@ async function makeApiCall(model, thoughtProcessState) {
         if (!settings.stream_response) {
             if (response?.thoughts !== undefined) {
                 streamWriter.processContent(response.thoughts, true);
-                streamWriter.processContent('\n\n', true);
                 streamWriter.processContent(response.text);
             } else {
                 streamWriter.processContent(response);

@@ -407,14 +407,10 @@ export class ApiManager {
 
     handleGeminiStreamData(parsed, tokenCounter, streamWriter) {
         if (parsed.candidates && parsed.candidates.length > 0) {
-            parsed.candidates[0].content.parts.forEach(part => {
-                if (part.text) {
-                    streamWriter.processContent(part.text, !!part.thought);
-                    if (part.thought) {
-                        streamWriter.processContent('\n\n', true);
-                    }
-                }
-            });
+            const contentDict = parsed.candidates[0].content.parts[0];
+            if (contentDict.text) {
+                streamWriter.processContent(contentDict.text, !!contentDict.thought);
+            }
         }
         
         if (parsed.usageMetadata && parsed.usageMetadata.promptTokenCount) {

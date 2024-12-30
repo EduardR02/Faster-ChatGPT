@@ -284,13 +284,20 @@ export class StreamWriterSimple {
         this.message = [];
         this.responseMessage = []; // Add this for non-thought content
         this.fullMessage = "";
+        this.thoughtEndToggle = false;
     }
 
     processContent(content, isThought = false) {
-        this.message.push(content);
         if (!isThought) {
             this.responseMessage.push(content);
+            if (!this.thoughtEndToggle) {
+                this.thoughtEndToggle = true;
+                const responseString = "\n\nResponse:\n\n";
+                this.contentDiv.textContent += responseString;
+                this.message.push(responseString);
+            }
         }
+        this.message.push(content);
         this.contentDiv.textContent += content;
         this.scrollFunc();
     }
@@ -323,11 +330,17 @@ export class StreamWriter extends StreamWriterSimple {
     }
 
     processContent(content, isThought = false) {
-        this.message.push(content);
         if (!isThought) {
             this.responseMessage.push(content);
+            if (!this.thoughtEndToggle) {
+                this.thoughtEndToggle = true;
+                const responseString = "\n\nResponse:\n\n";
+                this.contentQueue.push(...responseString.split(""));
+                this.message.push(responseString);
+            }
         }
-        this.contentQueue = this.contentQueue.concat(content.split(""));
+        this.message.push(content);
+        this.contentQueue.push(...content.split(""));
 
         if (!this.isProcessing) {
             this.isProcessing = true;
