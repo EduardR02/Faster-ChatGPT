@@ -282,19 +282,25 @@ export class StreamWriterSimple {
         this.contentDiv = contentDiv;
         this.scrollFunc = scrollFunc;
         this.message = [];
+        this.responseMessage = []; // Add this for non-thought content
         this.fullMessage = "";
     }
 
-    processContent(content) {
+    processContent(content, isThought = false) {
         this.message.push(content);
+        if (!isThought) {
+            this.responseMessage.push(content);
+        }
         this.contentDiv.textContent += content;
         this.scrollFunc();
     }
 
     addFooter(footer, add_pending) {
-        this.fullMessage = this.message.join('');
+        // Use responseMessage for context, don't include model "thinking" in context
+        this.fullMessage = this.responseMessage.join('');
         
-        this.contentDiv.innerHTML = add_codeblock_html(this.fullMessage);
+        // still show everything, even the thinking part
+        this.contentDiv.innerHTML = add_codeblock_html(this.message.join(''));
 
         footer.create(this.contentDiv);
         this.scrollFunc();
@@ -316,8 +322,11 @@ export class StreamWriter extends StreamWriterSimple {
         this.pendingFooter = null;
     }
 
-    processContent(content) {
+    processContent(content, isThought = false) {
         this.message.push(content);
+        if (!isThought) {
+            this.responseMessage.push(content);
+        }
         this.contentQueue = this.contentQueue.concat(content.split(""));
 
         if (!this.isProcessing) {

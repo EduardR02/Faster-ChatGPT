@@ -241,7 +241,16 @@ export class ApiManager {
     }
 
     createGeminiRequest(model, messages, streamResponse) {
+        // Filter out images if it's a thinking model
+        if (model.includes('thinking')) {
+            messages = messages.map(msg => ({
+                role: msg.role,
+                content: msg.content
+            }));
+        }
+        
         messages = this.formatMessagesForGemini(messages);
+        
         const requestOptions = {
             method: 'POST',
             credentials: 'omit',
@@ -257,9 +266,12 @@ export class ApiManager {
                 },
             })
         };
+    
+        const apiVersion = model.includes('thinking') ? 'v1alpha' : 'v1beta';
         const responseType = streamResponse ? "streamGenerateContent" : "generateContent";
         const streamParam = streamResponse ? "alt=sse&" : "";
-        const requestLink = `https://generativelanguage.googleapis.com/v1beta/models/${model}:${responseType}?${streamParam}key=${this.settings.api_keys.gemini}`;
+        const requestLink = `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:${responseType}?${streamParam}key=${this.settings.api_keys.gemini}`;
+        
         return [requestLink, requestOptions];
     }
 
@@ -326,7 +338,10 @@ export class ApiManager {
 
     handleGeminiNonStreamResponse(data, tokenCounter) {
         tokenCounter.update(data.usageMetadata.promptTokenCount, data.usageMetadata.candidatesTokenCount);
-        return data.candidates[0].content.parts[0].text;
+        return {
+            thoughts: data.candidates[0].content.parts.find(part => part.thought)?.text || '',
+            text: data.candidates[0].content.parts.find(part => !part.thought)?.text || ''
+        };
     }
 
     handleDeepseekNonStreamResponse(data, tokenCounter) {
@@ -392,11 +407,16 @@ export class ApiManager {
 
     handleGeminiStreamData(parsed, tokenCounter, streamWriter) {
         if (parsed.candidates && parsed.candidates.length > 0) {
-            const content = parsed.candidates[0].content.parts[0].text;
-            if (content) {
-                streamWriter.processContent(content);
-            }
+            parsed.candidates[0].content.parts.forEach(part => {
+                if (part.text) {
+                    streamWriter.processContent(part.text, !!part.thought);
+                    if (part.thought) {
+                        streamWriter.processContent('\n\n', true);
+                    }
+                }
+            });
         }
+        
         if (parsed.usageMetadata && parsed.usageMetadata.promptTokenCount) {
             tokenCounter.update(parsed.usageMetadata.promptTokenCount, parsed.usageMetadata.candidatesTokenCount);
         }

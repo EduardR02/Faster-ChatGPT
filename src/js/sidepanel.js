@@ -645,7 +645,13 @@ async function makeApiCall(model, thoughtProcessState) {
 
         // Process non-streaming response
         if (!settings.stream_response) {
-            streamWriter.processContent(response);
+            if (response?.thoughts !== undefined) {
+                streamWriter.processContent(response.thoughts, true);
+                streamWriter.processContent('\n\n', true);
+                streamWriter.processContent(response.text);
+            } else {
+                streamWriter.processContent(response);
+            }
         }
 
         // Add footer and handle thinking mode
