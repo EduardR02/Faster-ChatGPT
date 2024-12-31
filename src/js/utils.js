@@ -259,7 +259,12 @@ export class StreamWriterBase {
         this.isFirstChunk = true;
     }
 
-    processContent(content) {
+    setThinkingModel() {
+        return; // do nothing for base class
+    }
+
+    processContent(content, isThought = false) {
+        if (isThought) return;  // simply discard thoughts, as we only care about the final output for renaming here
         this.message.push(content);
         if (this.contentDiv) {
             if (this.isFirstChunk) {
