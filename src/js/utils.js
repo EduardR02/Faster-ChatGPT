@@ -297,6 +297,39 @@ export class StreamWriterSimple {
         this.contentDiv.classList.add('thoughts');
     }
 
+    addThinkingCounter() {
+        const span = this.contentDiv.parentElement.querySelector('.message-prefix');
+        if (!span) return;
+
+        let seconds = 0;
+        let intervalId = null;
+        let hasProcessed = false;
+    
+        // Split and preserve all parts of the text
+        const originalText = span.textContent;
+        const [firstWord, ...remainingWords] = originalText.split(' ');
+        const remainingText = remainingWords.length ? ' ' + remainingWords.join(' ') : '';
+    
+        const updateCounter = () => {
+            if (hasProcessed) return;
+            seconds++;
+            span.textContent = `${firstWord} thinking for ${seconds} seconds...${remainingText}`;
+        };
+    
+        intervalId = setInterval(updateCounter, 1000);
+    
+        // Override processContent to catch first content
+        const originalProcessContent = this.processContent.bind(this);
+        this.processContent = (content) => {
+            if (!hasProcessed) {
+                hasProcessed = true;
+                clearInterval(intervalId);
+                span.textContent = `${firstWord} thought for ${seconds} seconds${remainingText}`;
+            }
+            originalProcessContent(content);
+        };
+    }
+
     processContent(content, isThought = false) {
         if (!isThought) {
             this.responseMessage.push(content);

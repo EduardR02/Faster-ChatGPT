@@ -635,7 +635,7 @@ async function makeApiCall(model, thoughtProcessState) {
         // Initialize StreamWriter based on streaming preference and arena mode
         let streamWriter;
         if (settings.stream_response && (isArenaMode || api_provider === "gemini")) {
-            const writerSpeed = isArenaMode ? 1500 : 5000;
+            const writerSpeed = isArenaMode ? 2500 : 5000;
             streamWriter = new StreamWriter(contentDiv, chatManager.scrollIntoView.bind(chatManager), writerSpeed);
         } else {
             streamWriter = new StreamWriterSimple(contentDiv, chatManager.scrollIntoView.bind(chatManager));

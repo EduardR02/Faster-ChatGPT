@@ -64,7 +64,7 @@ export class ApiManager {
         const provider = this.getProviderForModel(model);
         switch (provider) {
             case 'openai':
-                return this.createOpenAIRequest(model, messages, streamResponse);
+                return this.createOpenAIRequest(model, messages, streamResponse, streamWriter);
             case 'anthropic':
                 return this.createAnthropicRequest(model, messages, streamResponse);
             case 'gemini':
@@ -143,10 +143,10 @@ export class ApiManager {
         return base64String.split('base64,')[1];
     }
 
-    createOpenAIRequest(model, messages, streamResponse) {
+    createOpenAIRequest(model, messages, streamResponse, streamWriter) {
         messages = this.formatMessagesForOpenAI(messages);
         if (model.includes('o1')) {
-            return this.createOpenAIThinkingRequest(model, messages);
+            return this.createOpenAIThinkingRequest(model, messages, streamResponse, streamWriter);
         }
         const requestOptions = {
             method: 'POST',
@@ -169,11 +169,13 @@ export class ApiManager {
         return ['https://api.openai.com/v1/chat/completions', requestOptions];
     }
 
-    createOpenAIThinkingRequest(model, messages, streamResponse) {
+    createOpenAIThinkingRequest(model, messages, streamResponse, streamWriter) {
         if (messages?.[0]?.role === "developer") {
             // o1 type models currently don't support system prompts, so we have to just change it to user
             messages[0].role = RoleEnum.user;
         }
+        messages = messages.map(msg => ({role: msg.role, content: msg.content}));    // remove images
+        if (streamWriter) streamWriter.addThinkingCounter();
         const requestOptions = {
             method: 'POST',
             credentials: 'omit',
