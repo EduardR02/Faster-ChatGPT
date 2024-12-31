@@ -289,6 +289,7 @@ export class StreamWriterSimple {
 
     setThinkingModel() {
         this.thoughtEndToggle = false;
+        this.contentDiv.classList.add('thoughts');
     }
 
     processContent(content, isThought = false) {
@@ -296,9 +297,8 @@ export class StreamWriterSimple {
             this.responseMessage.push(content);
             if (!this.thoughtEndToggle) {
                 this.thoughtEndToggle = true;
-                const responseString = "\n\nResponse:\n\n";
-                this.contentDiv.textContent += responseString;
-                this.message.push(responseString);
+                this.message.push("\n\n");
+                this.switchContentDiv();
             }
         }
         this.message.push(content);
@@ -306,12 +306,21 @@ export class StreamWriterSimple {
         this.scrollFunc();
     }
 
+    switchContentDiv() {
+        const newContentDiv = this.contentDiv.cloneNode(true);
+        newContentDiv.textContent = '';
+        newContentDiv.classList.remove('thoughts');
+        this.contentDiv.parentNode.insertBefore(newContentDiv, this.contentDiv.nextSibling);
+        this.contentDiv.innerHTML = add_codeblock_html(this.message.join(''));
+        this.contentDiv = newContentDiv;
+    }
+
     addFooter(footer, add_pending) {
         // Use responseMessage for context, don't include model "thinking" in context
         this.fullMessage = this.responseMessage.join('');
         
         // still show everything, even the thinking part
-        this.contentDiv.innerHTML = add_codeblock_html(this.message.join(''));
+        this.contentDiv.innerHTML = add_codeblock_html(this.responseMessage.join(''));
 
         footer.create(this.contentDiv);
         this.scrollFunc();
@@ -333,18 +342,30 @@ export class StreamWriter extends StreamWriterSimple {
         this.pendingFooter = null;
     }
 
+    setThinkingModel() {
+        super.setThinkingModel();
+        this.pendingSwitch = false;
+        this.pendingQueue = [];
+    }
+
     processContent(content, isThought = false) {
         if (!isThought) {
             this.responseMessage.push(content);
             if (!this.thoughtEndToggle) {
                 this.thoughtEndToggle = true;
-                const responseString = "\n\nResponse:\n\n";
-                this.contentQueue.push(...responseString.split(""));
-                this.message.push(responseString);
+                this.pendingSwitch = true;
+                this.contentQueue.push(..."\n\n".split(""));
+                this.message.push("\n\n");
             }
         }
-        this.message.push(content);
-        this.contentQueue.push(...content.split(""));
+        
+        if (this.pendingSwitch) {
+            this.pendingQueue.push(...content.split(""));
+        }
+        else {
+            this.message.push(content);
+            this.contentQueue.push(...content.split(""));
+        }
 
         if (!this.isProcessing) {
             this.isProcessing = true;
@@ -369,6 +390,13 @@ export class StreamWriter extends StreamWriterSimple {
 
                 this.contentDiv.textContent += chunk.join('');
                 this.scrollFunc();
+
+                if (this.thoughtEndToggle && this.pendingSwitch && this.contentQueue.length === 0) {
+                    this.pendingSwitch = false;
+                    this.contentQueue.push(...this.pendingQueue);
+                    delete this.pendingQueue;
+                    this.switchContentDiv();
+                }
 
                 this.lastFrameTime = currentTime;
                 this.processCharacters();

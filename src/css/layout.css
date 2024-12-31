@@ -701,6 +701,10 @@ p {
   color: #fdaaaa;
 }
 
+.thoughts {
+  color: #abb2bf;
+}
+
 .message-footer {
   display: flex;
   align-items: center;
