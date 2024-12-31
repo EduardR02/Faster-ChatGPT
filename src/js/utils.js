@@ -284,6 +284,10 @@ export class StreamWriterSimple {
         this.message = [];
         this.responseMessage = []; // Add this for non-thought content
         this.fullMessage = "";
+        this.thoughtEndToggle = true;
+    }
+
+    setThinkingModel() {
         this.thoughtEndToggle = false;
     }
 

@@ -39,7 +39,7 @@ export class ApiManager {
         }
 
         const streamResponse = streamWriter !== null;
-        const [apiLink, requestOptions] = this.createApiRequest(model, messages, streamResponse);
+        const [apiLink, requestOptions] = this.createApiRequest(model, messages, streamResponse, streamWriter);
         if (!apiLink || !requestOptions) {
             throw new Error("Invalid API request configuration.");
         }
@@ -60,7 +60,7 @@ export class ApiManager {
         }
     }
 
-    createApiRequest(model, messages, streamResponse) {
+    createApiRequest(model, messages, streamResponse, streamWriter) {
         const provider = this.getProviderForModel(model);
         switch (provider) {
             case 'openai':
@@ -68,7 +68,7 @@ export class ApiManager {
             case 'anthropic':
                 return this.createAnthropicRequest(model, messages, streamResponse);
             case 'gemini':
-                return this.createGeminiRequest(model, messages, streamResponse);
+                return this.createGeminiRequest(model, messages, streamResponse, streamWriter);
             case 'deepseek':
                 return this.createDeepseekRequest(model, messages, streamResponse);
             default:
@@ -240,13 +240,14 @@ export class ApiManager {
         return ['https://api.deepseek.com/v1/chat/completions', requestOptions];
     }
 
-    createGeminiRequest(model, messages, streamResponse) {
+    createGeminiRequest(model, messages, streamResponse, streamWriter) {
         // Filter out images if it's a thinking model
         if (model.includes('thinking')) {
             messages = messages.map(msg => ({
                 role: msg.role,
                 content: msg.content
             }));
+            if (streamWriter) streamWriter.setThinkingModel();
         }
         
         messages = this.formatMessagesForGemini(messages);
@@ -406,13 +407,12 @@ export class ApiManager {
     }
 
     handleGeminiStreamData(parsed, tokenCounter, streamWriter) {
-        if (parsed.candidates && parsed.candidates.length > 0) {
-            const contentDict = parsed.candidates[0].content.parts[0];
+        parsed.candidates?.[0]?.content.parts?.forEach(contentDict => {
             if (contentDict.text) {
                 streamWriter.processContent(contentDict.text, !!contentDict.thought);
             }
-        }
-        
+        });
+
         if (parsed.usageMetadata && parsed.usageMetadata.promptTokenCount) {
             tokenCounter.update(parsed.usageMetadata.promptTokenCount, parsed.usageMetadata.candidatesTokenCount);
         }

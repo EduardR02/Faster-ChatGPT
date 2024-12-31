@@ -635,7 +635,7 @@ async function makeApiCall(model, thoughtProcessState) {
         // Initialize StreamWriter based on streaming preference and arena mode
         let streamWriter;
         if (settings.stream_response && (isArenaMode || api_provider === "gemini")) {
-            const writerSpeed = isArenaMode ? 1500 : 2000;
+            const writerSpeed = isArenaMode ? 1500 : 5000;
             streamWriter = new StreamWriter(contentDiv, chatManager.scrollIntoView.bind(chatManager), writerSpeed);
         } else {
             streamWriter = new StreamWriterSimple(contentDiv, chatManager.scrollIntoView.bind(chatManager));
@@ -646,6 +646,7 @@ async function makeApiCall(model, thoughtProcessState) {
         // Process non-streaming response
         if (!settings.stream_response) {
             if (response?.thoughts !== undefined) {
+                streamWriter.setThinkingModel();
                 streamWriter.processContent(response.thoughts, true);
                 streamWriter.processContent(response.text);
             } else {
