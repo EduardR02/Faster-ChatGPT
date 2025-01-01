@@ -1,4 +1,4 @@
-import { ArenaRatingManager, StreamWriter, StreamWriterSimple, Footer, TokenCounter, ModeEnum, get_mode, set_lifetime_tokens,
+import { ArenaRatingManager, StreamWriter, StreamWriterSimple, Footer, TokenCounter, ModeEnum, get_mode, createElementWithClass,
     auto_resize_textfield_listener, update_textfield_height, is_on, ChatStorage, add_codeblock_html } from "./utils.js";
 import { ApiManager } from "./api_manager.js";
 
@@ -10,6 +10,8 @@ class ChatManager {
         this.inputFieldWrapper = document.querySelector('.textarea-wrapper');
         this.pendingImageDiv = null;
         this.pendingImages = [];
+        this.pendingFiles = [];
+        this.tempFileId = 0;
         this.isArenaMode = false;
         this.arenaDivs = [];
         this.arenaButtons = [];
@@ -44,8 +46,7 @@ class ChatManager {
     }
 
     initParagraph(role) {
-        let paragraph = document.createElement('div');
-        paragraph.classList.add(role + "-message");
+        let paragraph = createElementWithClass('div', role + '-message');
         this.conversationDiv.appendChild(paragraph);
         return paragraph;
     }
@@ -65,11 +66,38 @@ class ChatManager {
 
         const imgWrapper = this.pendingImageDiv.querySelector('.message-wrapper');
         const insertBeforeDiv = imgWrapper.querySelector('.message-content');
-        const imgContainer = document.createElement('div');
-        imgContainer.classList.add('image-content', 'user-content');
+        const imgContainer = createElementWithClass('div', 'image-content user-content');
         imgContainer.appendChild(img);
         imgWrapper.insertBefore(imgContainer, insertBeforeDiv);
         this.pendingImages.push(imagebase64);
+    }
+
+    createFileDisplay(file) {
+        const fileDiv = createElementWithClass('div', 'history-system-message collapsed');
+
+        const buttonsWrapper = createElementWithClass('div', 'file-buttons-wrapper');
+        const toggleButton = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
+        const toggleIcon = createElementWithClass('span', 'toggle-icon', '⯈');
+        const removeFileButton = createElementWithClass('button', 'unset-button rename-cancel remove-file-button', '✕');
+
+        const contentDiv = createElementWithClass('div', 'message-content history-system-content', file.content);
+
+        toggleButton.append(toggleIcon, file.name);
+        toggleButton.onclick = () => fileDiv.classList.toggle('collapsed');
+        removeFileButton.onclick = () => this.removeFileFromPrompt(fileDiv, file.id);
+        buttonsWrapper.append(toggleButton, removeFileButton);
+        fileDiv.append(buttonsWrapper, contentDiv);
+        return fileDiv;
+    }
+
+    addFileToPrompt(file) {
+        const fileDisplay = this.createFileDisplay(file);
+        this.conversationDiv.appendChild(fileDisplay);
+    }
+
+    removeFileFromPrompt(fileDisplay, fileId) {
+        fileDisplay.remove();
+        this.pendingFiles = this.pendingFiles.filter(file => file.tempId !== fileId);
     }
 
     onRegenerate(contentDiv, model, thinkingProcess) {
@@ -89,11 +117,8 @@ class ChatManager {
 
     createMessageDiv(parentElement, role, thinkingProcess = "none", text = '', roleString = null) {
         // unfortunately need this guy in case we want to regenerate a response in arena mode
-        let messageWrapper = document.createElement('div');
+        const messageWrapper = document.createElement('div');
         messageWrapper.classList.add('message-wrapper');
-
-        let prefixSpan = document.createElement('span');
-        prefixSpan.classList.add('message-prefix', role + '-prefix');
 
         let thinkingModeString = "";
         if (role === RoleEnum.assistant) {
@@ -105,8 +130,7 @@ class ChatManager {
                 thinkingModeString = ' \u{27F3}' + thinkingModeString
             }
         }
-
-        prefixSpan.textContent = (roleString || ChatRoleDict[role]) + thinkingModeString;
+        const prefixSpan = createElementWithClass('span', `message-prefix ${role}-prefix`, (roleString || ChatRoleDict[role]) + thinkingModeString);
         messageWrapper.appendChild(prefixSpan);
 
         let contentDiv = document.createElement('div');
@@ -786,10 +810,7 @@ function init_settings() {
 function append_context(message, role) {
     // allowed roles are 'user', 'assistant' or system. System is only on init for the prompt.
     messages.push({role: role, content: message});
-    if (role === RoleEnum.user && chatManager.pendingImages.length > 0) {
-        messages[messages.length - 1].images = chatManager.pendingImages;
-        chatManager.pendingImages = [];
-    }
+    add_pending_files(role);
 
     // Save to chat history after each message, this function isn't used for assistant messages (pending does that) so we just focus on user messages
     if (currentChat && role === RoleEnum.user) {
@@ -807,6 +828,19 @@ function append_context(message, role) {
                 chatStorage.addMessages(currentChat.id, [newMsg], currentChat.messages.length - 1);
             }
         }
+    }
+}
+
+
+function add_pending_files(role) {
+    if (role !== RoleEnum.user) return;
+    if (chatManager.pendingImages.length > 0) {
+        messages[messages.length - 1].images = chatManager.pendingImages;
+        chatManager.pendingImages = [];
+        return [];
+    } else if (chatManager.pendingFiles.length > 0) {
+        messages[messages.length - 1].files = chatManager.pendingFiles.map(({ tempId, ...rest }) => rest);
+        chatManager.pendingFiles = [];
     }
 }
 
@@ -1006,15 +1040,28 @@ function init_textarea_image_drag_and_drop() {
     textarea.addEventListener('drop', async function(e) {
         // Handle local file drops
         if (e.dataTransfer.files.length > 0) {
-            const file = e.dataTransfer.files[0];
-            if (file.type.match('image.*')) {
-                const reader = new FileReader();
-                reader.onload = e => chatManager.appendToPendingImageDiv(e.target.result);
-                reader.readAsDataURL(file);
-                return;
+            const files = Array.from(e.dataTransfer.files);
+            for (const file of files) {
+                if (file.type.match('image.*')) {
+                    const reader = new FileReader();
+                    reader.onload = evt => chatManager.appendToPendingImageDiv(evt.target.result);
+                    reader.readAsDataURL(file);
+                } else if (!file.type.match('video.*')) { // Treat other files as text, except videos
+                    const reader = new FileReader();
+                    reader.onload = event => {
+                        const fileContent = event.target.result;
+                        const fileData = { tempId: chatManager.tempFileId, name: file.name, content: fileContent };
+                        chatManager.tempFileId++;
+                        chatManager.pendingFiles.push(fileData);
+                        chatManager.addFileToPrompt(fileData);
+                    };
+                    reader.onerror = error => post_error_message_in_chat(error.message);
+                    reader.readAsText(file);
+                }
             }
+            return;
         }
- 
+
         // Handle web image drops
         const imgSrc = new DOMParser()
             .parseFromString(e.dataTransfer.getData('text/html'), 'text/html')
@@ -1033,6 +1080,7 @@ function init_textarea_image_drag_and_drop() {
         if (text) {
             const start = this.selectionStart;
             this.value = this.value.slice(0, start) + text + this.value.slice(this.selectionEnd);
+            update_textfield_height(textarea);
         }
     });
  }

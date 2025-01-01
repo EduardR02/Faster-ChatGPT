@@ -132,6 +132,14 @@ export function loadTextFromFile(filePath) {
 }
 
 
+export function createElementWithClass(type, className, textContent = null) {
+    const elem = document.createElement(type);
+    if (className) elem.className = className;
+    if (textContent) elem.textContent = textContent;
+    return elem;
+}
+
+
 export function set_defaults() {
     const MODELS = {
         openai: {
@@ -734,6 +742,7 @@ export class ChatStorage {
         model?: string,  // For assistant messages
         content: string,
         images?: string[] // Optional, user only
+        files?: {filename: string, content: string}[]   // Optional, user only (array of objects in case duplicate filenames)
     },
     
     arenaMessage: {

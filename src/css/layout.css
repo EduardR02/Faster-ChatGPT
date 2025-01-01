@@ -437,11 +437,23 @@ body {
 
 .system-toggle.history-sidebar-item {
   border-radius: 1em;
-  justify-content: left;
 }
 
 .system-toggle.history-sidebar-item::before {
   background: #5c6980;
+}
+
+.file-buttons-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+}
+
+.remove-file-button {
+  margin-right: 0.5rem;
+  width: min-content;
+  background: transparent;
+  padding: 0 5px;
 }
 
 .history-system-content {

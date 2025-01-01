@@ -1,4 +1,4 @@
-import { ChatStorage, TokenCounter, StreamWriterBase, add_codeblock_html } from './utils.js';
+import { ChatStorage, TokenCounter, StreamWriterBase, add_codeblock_html, createElementWithClass } from './utils.js';
 import { ApiManager } from './api_manager.js';
 
 
@@ -366,28 +366,18 @@ function sendChatToSidepanel(chat) {
 }
 
 
-function createElementWithClass(type, className) {
-    const elem = document.createElement(type);
-    if (className) elem.className = className;
-    return elem;
-}
-
-
 function createSystemMessage(message) {
     const messageDiv = createElementWithClass('div', 'history-system-message collapsed');
-    const wrapperDiv = createElementWithClass('div', 'message-wrapper');
 
     const toggleButton = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
-    const toggleIcon = createElementWithClass('span', 'toggle-icon');
-    toggleIcon.textContent = '⯈';
+    const toggleIcon = createElementWithClass('span', 'toggle-icon', '⯈');
 
     const contentDiv = createElementWithClass('div', 'message-content history-system-content');
     contentDiv.innerHTML = add_codeblock_html(message?.content || "");
 
     toggleButton.append(toggleIcon, 'System Prompt');
     toggleButton.onclick = () => messageDiv.classList.toggle('collapsed');
-    wrapperDiv.append(toggleButton, contentDiv);
-    messageDiv.appendChild(wrapperDiv);
+    messageDiv.append(toggleButton, contentDiv);
 
     return messageDiv;
 }
@@ -402,36 +392,33 @@ function createModelResponse(modelKey, message, msgIndex) {
     // Create a message wrapper for each message in the history
     response.messages.forEach((msg, index) => {
         const modelWrapper = createElementWithClass('div', 'message-wrapper');
-
         const prefixWrapper = createElementWithClass('div', 'history-prefix-wrapper');
-        const prefix = createElementWithClass('span', 'message-prefix assistant-prefix');
 
         // Determine symbol based on choice and model
         let symbol = '';
         switch (choice) {
             case modelKey:
-                symbol = ' 🏆'; // Winner
+                symbol = ' 🏆';
                 break;
             case 'draw':
-                symbol = ' 🤝'; // Draw
+                symbol = ' 🤝';
                 break;
             case 'draw(bothbad)':
-                symbol = ' ❌'; // Both bad
+                symbol = ' ❌';
                 break;
             case 'reveal':
-                symbol = ' 👁️'; // Reveal
+                symbol = ' 👁️';
                 break;
             case 'ignored':
-                symbol = ' n/a'; // Ignored
+                symbol = ' n/a';
                 break;
             default:
-                symbol = ' ❌'; // Loser
+                symbol = ' ❌';
         }
 
-        prefix.textContent = response.name + (index > 0 ? ' ⟳' : '') + symbol;
+        const prefix = createElementWithClass('span', 'message-prefix assistant-prefix', response.name + (index > 0 ? ' ⟳' : '') + symbol);
 
-        const continueConversationButton = createElementWithClass('button', 'unset-button continue-conversation-button');
-        continueConversationButton.textContent = '\u{2197}';
+        const continueConversationButton = createElementWithClass('button', 'unset-button continue-conversation-button', '\u{2197}');
         if (modelKey === 'model_a') {
             continueConversationButton.classList.add('arena-left-continue-button');
         }
@@ -482,8 +469,7 @@ function createRegularMessage(message, index, previousRole) {
     prefix.textContent = message.role === 'user' ? 'You' : message.model || 'Assistant';
     if (message.role === 'assistant' && message.role === previousRole) prefix.textContent += ' ⟳';
 
-    const continueConversationButton = createElementWithClass('button', 'unset-button continue-conversation-button');
-    continueConversationButton.textContent = '\u{2197}';
+    const continueConversationButton = createElementWithClass('button', 'unset-button continue-conversation-button', '\u{2197}');
 
     continueConversationButton.onclick = () => {
         sendChatToSidepanel(buildChat(index));

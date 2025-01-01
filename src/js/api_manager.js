@@ -39,6 +39,7 @@ export class ApiManager {
         }
 
         const streamResponse = streamWriter !== null;
+        messages = this.processFiles(messages);
         const [apiLink, requestOptions] = this.createApiRequest(model, messages, streamResponse, streamWriter);
         if (!apiLink || !requestOptions) {
             throw new Error("Invalid API request configuration.");
@@ -58,6 +59,17 @@ export class ApiManager {
         } catch (error) {
             throw new Error(`API request error: ${error.message}`);
         }
+    }
+
+    processFiles(messages) {
+        return messages.map(({ files, ...rest }) => ({
+            ...rest,
+            content: files && files.length > 0
+                ? rest.content + "\n\nfiles:\n" + files.map(file =>
+                    `${file.name}:\n<|file_start|>${file.content}<|file_end|>`
+                ).join("\n")
+                : rest.content
+        }));
     }
 
     createApiRequest(model, messages, streamResponse, streamWriter) {
