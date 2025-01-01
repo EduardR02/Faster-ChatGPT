@@ -298,12 +298,8 @@ function buildChat(continueFromIndex, arenaMessageIndex = null, modelChoice = nu
 
         // If it's not an assistant message, add it
         if (msg.role !== 'assistant') {
-            const simplifiedMsg = {
-                role: msg.role,
-                content: msg.content
-            };
-            if (msg.images?.length) simplifiedMsg.images = msg.images;
-            simplifiedChat.push(simplifiedMsg);
+            const { chatId, messageId, timestamp, ...rest } = msg;
+            simplifiedChat.push(rest);
             continue;
         }
 
@@ -485,6 +481,25 @@ function createRegularMessage(message, index, previousRole) {
             img.src = imageUrl;
             imgWrapper.appendChild(img);
             wrapperDiv.appendChild(imgWrapper);
+        });
+    }
+
+    if (message.files?.length) {
+        message.files.forEach(file => {
+            const fileDiv = createElementWithClass('div', 'history-system-message collapsed');
+
+            const buttonsWrapper = createElementWithClass('div', 'file-buttons-wrapper');
+            const toggleButton = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
+            const toggleIcon = createElementWithClass('span', 'toggle-icon', '⯈');
+
+            const contentDiv = createElementWithClass('div', 'message-content history-system-content user-file', file.content);
+
+            toggleButton.append(toggleIcon, file.name);
+            toggleButton.onclick = () => fileDiv.classList.toggle('collapsed');
+            buttonsWrapper.append(toggleButton);
+            fileDiv.append(buttonsWrapper, contentDiv);
+
+            wrapperDiv.appendChild(fileDiv);
         });
     }
 

@@ -450,10 +450,10 @@ body {
 }
 
 .remove-file-button {
-  margin-right: 0.5rem;
-  width: min-content;
+  width: 2rem;
+  height: 2rem;
   background: transparent;
-  padding: 0 5px;
+  border-radius: 1rem;
 }
 
 .history-system-content {
@@ -663,6 +663,11 @@ p {
 
 .history-system-content {
   color: #d4d4d4;
+}
+
+.user-file {
+  white-space: pre;
+  overflow: auto;
 }
 
 .assistant-content {

@@ -72,26 +72,30 @@ class ChatManager {
         this.pendingImages.push(imagebase64);
     }
 
-    createFileDisplay(file) {
+    createFileDisplay(file, addRemoveButton = true) {
         const fileDiv = createElementWithClass('div', 'history-system-message collapsed');
 
         const buttonsWrapper = createElementWithClass('div', 'file-buttons-wrapper');
         const toggleButton = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
         const toggleIcon = createElementWithClass('span', 'toggle-icon', '⯈');
-        const removeFileButton = createElementWithClass('button', 'unset-button rename-cancel remove-file-button', '✕');
-
-        const contentDiv = createElementWithClass('div', 'message-content history-system-content', file.content);
+        const contentDiv = createElementWithClass('div', 'message-content history-system-content user-file', file.content);
 
         toggleButton.append(toggleIcon, file.name);
         toggleButton.onclick = () => fileDiv.classList.toggle('collapsed');
-        removeFileButton.onclick = () => this.removeFileFromPrompt(fileDiv, file.id);
-        buttonsWrapper.append(toggleButton, removeFileButton);
+        
+        buttonsWrapper.append(toggleButton);
+        if (addRemoveButton) {
+            const removeFileButton = createElementWithClass('button', 'unset-button rename-cancel remove-file-button', '✕');
+            removeFileButton.id = `remove-file-button-${file.tempId}`;
+            removeFileButton.onclick = () => this.removeFileFromPrompt(fileDiv, file.tempId);
+            buttonsWrapper.append(removeFileButton);
+        }
         fileDiv.append(buttonsWrapper, contentDiv);
         return fileDiv;
     }
 
-    addFileToPrompt(file) {
-        const fileDisplay = this.createFileDisplay(file);
+    addFileToPrompt(file, addRemoveButton = true) {
+        const fileDisplay = this.createFileDisplay(file, addRemoveButton);
         this.conversationDiv.appendChild(fileDisplay);
     }
 
@@ -549,15 +553,22 @@ function reconstruct_chat(chat) {
     }
     if (chat.messages) chat = chat.messages;
 
-    function create_msg_block(role, content, images, isLast) {
-        if (role === RoleEnum.user && images) {
+    function create_msg_block(msg, isLast) {
+        if (msg.role === RoleEnum.user && msg.images) {
             chatManager.initPendingImageDiv();
-            images.forEach(img => chatManager.appendToPendingImageDiv(img));
+            msg.images.forEach(img => chatManager.appendToPendingImageDiv(img));
         }
-        if (isLast && role === RoleEnum.user) return;
-        chatManager.createMessageBlock(role, "");
+        if (msg.role === RoleEnum.user && msg.files) {
+            msg.files.forEach(file => {
+                if (isLast) file.tempId = chatManager.tempFileId++; 
+                chatManager.addFileToPrompt(file, isLast);
+            });
+            if (!isLast) chatManager.pendingFiles = [];
+        }
+        if (isLast && msg.role === RoleEnum.user) return;
+        chatManager.createMessageBlock(msg.role, "");
         const lastMsgHtml = chatManager.conversationDiv.lastChild;
-        lastMsgHtml.querySelector('.message-content').innerHTML = add_codeblock_html(content);
+        lastMsgHtml.querySelector('.message-content').innerHTML = add_codeblock_html(msg.content);
     }
 
     // Initialize with system prompt as first message
@@ -571,7 +582,7 @@ function reconstruct_chat(chat) {
     for (let i = 1; i < chat.length - 1; i++) {
         const msg = chat[i];
         messages.push(msg);
-        create_msg_block(msg.role, msg.content, msg.images, false);
+        create_msg_block(msg, false);
     }
 
     // Handle the last message separately
@@ -579,7 +590,7 @@ function reconstruct_chat(chat) {
     const inputField = document.getElementById('textInput');
     if (chat.length > 1) {
         if (lastMsg.role === RoleEnum.assistant) messages.push(lastMsg);
-        create_msg_block(lastMsg.role, lastMsg.content, lastMsg.images, true);
+        create_msg_block(lastMsg, true);
     }
     inputField.value = lastMsg.role === RoleEnum.user ? lastMsg.content : '';
     update_textfield_height(inputField);
@@ -840,6 +851,12 @@ function add_pending_files(role) {
         return [];
     } else if (chatManager.pendingFiles.length > 0) {
         messages[messages.length - 1].files = chatManager.pendingFiles.map(({ tempId, ...rest }) => rest);
+
+        chatManager.pendingFiles.forEach(file => {
+            const removeButton = document.getElementById(`remove-file-button-${file.tempId}`);
+            if (removeButton) removeButton.remove();
+        });
+
         chatManager.pendingFiles = [];
     }
 }
