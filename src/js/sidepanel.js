@@ -497,16 +497,15 @@ function setup_message_listeners() {
 }
 
 function init_states(chat_name) {
+    chatManager.handleArenaChoiceDefault();
     remove_added_paragraphs();
     thoughtLoops = [0, 0];
     chatState = CHAT_STATE.NORMAL;
     shouldSave = true;
     currentChat = chatStorage.createNewChatTracking(chat_name);
     pending_message = {};
-    if (chatManager.isArenaMode) {
-        chatManager.handleArenaChoiceDefault();
-    }
-    chatManager.pendingImageDiv = null;
+    chatManager.pendingMediaDiv = null;
+    chatManager.pendingFiles = [];
     chatManager.pendingImages = [];
 
     document.getElementById("incognito-toggle").classList.remove('active');
@@ -1000,6 +999,7 @@ function input_listener() {
             event.preventDefault();
             let inputText = inputField.value;
             if (inputText.trim().length !== 0) {
+                chatManager.handleArenaChoiceDefault();
                 chatManager.createMessageBlock(RoleEnum.user, inputText);
                 resolve_pending();
                 append_context(inputText, RoleEnum.user);
@@ -1308,7 +1308,6 @@ function handle_input(inputText) {
         });
     } else {
         remove_regenerate_buttons();
-        chatManager.handleArenaChoiceDefault();
         const lockedThinkingMode = thinkingMode ? "thinking" : "none";
         togglePrompt(lockedThinkingMode);
         api_call();
