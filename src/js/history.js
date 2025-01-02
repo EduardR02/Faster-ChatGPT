@@ -380,13 +380,14 @@ function createSystemMessage(message) {
 
 
 function createModelResponse(modelKey, message, msgIndex) {
-    const arenaWrapper = createElementWithClass('div', 'arena-wrapper history-arena-wrapper');
+    const arenaWrapper = createElementWithClass('div', 'arena-wrapper');
     const response = message.responses[modelKey];
     const choice = message.choice;
     const continuedWith = message.continued_with;
 
     // Create a message wrapper for each message in the history
     response.messages.forEach((msg, index) => {
+        const roleWrapper = createElementWithClass('div', 'assistant-message');
         const modelWrapper = createElementWithClass('div', 'message-wrapper');
         const prefixWrapper = createElementWithClass('div', 'history-prefix-wrapper');
 
@@ -415,13 +416,7 @@ function createModelResponse(modelKey, message, msgIndex) {
         const prefix = createElementWithClass('span', 'message-prefix assistant-prefix', response.name + (index > 0 ? ' ⟳' : '') + symbol);
 
         const continueConversationButton = createElementWithClass('button', 'unset-button continue-conversation-button', '\u{2197}');
-        if (modelKey === 'model_a') {
-            continueConversationButton.classList.add('arena-left-continue-button');
-        }
-
-        continueConversationButton.onclick = () => {
-            sendChatToSidepanel(buildChat(msgIndex, index, modelKey));
-        };
+        continueConversationButton.onclick = () => sendChatToSidepanel(buildChat(msgIndex, index, modelKey));
 
         const contentDiv = createElementWithClass('div', 'message-content assistant-content');
         contentDiv.innerHTML = add_codeblock_html(msg || "");
@@ -434,8 +429,9 @@ function createModelResponse(modelKey, message, msgIndex) {
         }
 
         prefixWrapper.append(prefix, continueConversationButton);
-        modelWrapper.append(prefixWrapper, contentDiv);
-        arenaWrapper.appendChild(modelWrapper);
+        modelWrapper.append(contentDiv);
+        roleWrapper.append(prefixWrapper, modelWrapper);
+        arenaWrapper.appendChild(roleWrapper);
     });
 
     return arenaWrapper;
@@ -466,13 +462,9 @@ function createRegularMessage(message, index, previousRole) {
     if (message.role === 'assistant' && message.role === previousRole) prefix.textContent += ' ⟳';
 
     const continueConversationButton = createElementWithClass('button', 'unset-button continue-conversation-button', '\u{2197}');
-
-    continueConversationButton.onclick = () => {
-        sendChatToSidepanel(buildChat(index));
-    };
+    continueConversationButton.onclick = () => sendChatToSidepanel(buildChat(index));
 
     prefixWrapper.append(prefix, continueConversationButton);
-    wrapperDiv.appendChild(prefixWrapper);
 
     if (message.images?.length) {
         message.images.forEach(imageUrl => {
@@ -487,18 +479,15 @@ function createRegularMessage(message, index, previousRole) {
     if (message.files?.length) {
         message.files.forEach(file => {
             const fileDiv = createElementWithClass('div', 'history-system-message collapsed');
-
             const buttonsWrapper = createElementWithClass('div', 'file-buttons-wrapper');
             const toggleButton = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
             const toggleIcon = createElementWithClass('span', 'toggle-icon', '⯈');
-
-            const contentDiv = createElementWithClass('div', 'message-content history-system-content user-file', file.content);
+            const contentDiv = createElementWithClass('div', 'history-system-content user-file', file.content);
 
             toggleButton.append(toggleIcon, file.name);
             toggleButton.onclick = () => fileDiv.classList.toggle('collapsed');
             buttonsWrapper.append(toggleButton);
             fileDiv.append(buttonsWrapper, contentDiv);
-
             wrapperDiv.appendChild(fileDiv);
         });
     }
@@ -506,7 +495,7 @@ function createRegularMessage(message, index, previousRole) {
     const contentDiv = createElementWithClass('div', `message-content ${message.role}-content`);
     contentDiv.innerHTML = add_codeblock_html(message?.content || "");
     wrapperDiv.appendChild(contentDiv);
-    messageDiv.appendChild(wrapperDiv);
+    messageDiv.append(prefixWrapper, wrapperDiv);
 
     return messageDiv;
 }

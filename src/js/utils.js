@@ -343,7 +343,6 @@ export class StreamWriterSimple {
             this.responseMessage.push(content);
             if (!this.thoughtEndToggle) {
                 this.thoughtEndToggle = true;
-                this.message.push("\n\n");
                 this.switchContentDiv();
             }
         }
@@ -356,7 +355,7 @@ export class StreamWriterSimple {
         const newContentDiv = this.contentDiv.cloneNode(true);
         newContentDiv.textContent = '';
         newContentDiv.classList.remove('thoughts');
-        this.contentDiv.parentNode.insertBefore(newContentDiv, this.contentDiv.nextSibling);
+        this.contentDiv.parentElement.appendChild(newContentDiv);
         this.contentDiv.innerHTML = add_codeblock_html(this.message.join(''));
         this.contentDiv = newContentDiv;
     }
@@ -400,8 +399,6 @@ export class StreamWriter extends StreamWriterSimple {
             if (!this.thoughtEndToggle) {
                 this.thoughtEndToggle = true;
                 this.pendingSwitch = true;
-                this.contentQueue.push(..."\n\n".split(""));
-                this.message.push("\n\n");
             }
         }
         

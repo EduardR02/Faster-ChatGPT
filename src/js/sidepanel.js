@@ -8,7 +8,7 @@ class ChatManager {
         this.conversationDiv = document.getElementById('conversation-wrapper');
         this.scrollToElement = document.getElementById('conversation');
         this.inputFieldWrapper = document.querySelector('.textarea-wrapper');
-        this.pendingImageDiv = null;
+        this.pendingMediaDiv = null;
         this.pendingImages = [];
         this.pendingFiles = [];
         this.tempFileId = 0;
@@ -51,34 +51,38 @@ class ChatManager {
         return paragraph;
     }
 
-    initPendingImageDiv() {
-        if (this.pendingImageDiv) return;
-        this.pendingImageDiv = this.initParagraph(RoleEnum.user);
-        this.createMessageDiv(this.pendingImageDiv, RoleEnum.user);
-        this.pendingImages = [];
+    initPendingMediaDiv() {
+        if (this.pendingMediaDiv) return;
+        this.pendingMediaDiv = this.initParagraph(RoleEnum.user);
+        const contentDiv = this.createMessageDiv(this.pendingMediaDiv, RoleEnum.user);
+        contentDiv.remove();    // otherwise css gap will account for empty div (it's only pending)
     }
 
-    appendToPendingImageDiv(imagebase64) {
-        if (!this.pendingImageDiv) this.initPendingImageDiv();
+    appendToPendingImages(imagebase64) {
+        this.initPendingMediaDiv();
 
         const img = document.createElement('img');
         img.src = imagebase64;
 
-        const imgWrapper = this.pendingImageDiv.querySelector('.message-wrapper');
-        const insertBeforeDiv = imgWrapper.querySelector('.message-content');
-        const imgContainer = createElementWithClass('div', 'image-content user-content');
+        const imgWrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
+        const imgContainer = createElementWithClass('div', 'image-content');
         imgContainer.appendChild(img);
-        imgWrapper.insertBefore(imgContainer, insertBeforeDiv);
+        if (this.pendingFiles?.length > 0) {
+            imgWrapper.insertBefore(imgContainer, imgWrapper.querySelector('.history-system-message'));  // insert before the first file
+        } else {
+            imgWrapper.appendChild(imgContainer);
+        }
         this.pendingImages.push(imagebase64);
     }
 
     createFileDisplay(file, addRemoveButton = true) {
+        this.initPendingMediaDiv();
         const fileDiv = createElementWithClass('div', 'history-system-message collapsed');
 
         const buttonsWrapper = createElementWithClass('div', 'file-buttons-wrapper');
         const toggleButton = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
         const toggleIcon = createElementWithClass('span', 'toggle-icon', '⯈');
-        const contentDiv = createElementWithClass('div', 'message-content history-system-content user-file', file.content);
+        const contentDiv = createElementWithClass('div', 'history-system-content user-file', file.content);
 
         toggleButton.append(toggleIcon, file.name);
         toggleButton.onclick = () => fileDiv.classList.toggle('collapsed');
@@ -96,7 +100,7 @@ class ChatManager {
 
     addFileToPrompt(file, addRemoveButton = true) {
         const fileDisplay = this.createFileDisplay(file, addRemoveButton);
-        this.conversationDiv.appendChild(fileDisplay);
+        this.pendingMediaDiv.querySelector('.message-wrapper').appendChild(fileDisplay);
     }
 
     removeFileFromPrompt(fileDisplay, fileId) {
@@ -105,9 +109,11 @@ class ChatManager {
     }
 
     onRegenerate(contentDiv, model, thinkingProcess) {
-        let parentDivWrapper = contentDiv.parentElement.parentElement;
+        let parentDivWrapper = contentDiv.parentElement.parentElement.parentElement;
         let roleString = ChatRoleDict[RoleEnum.assistant] + ' \u{27F3}';
-        const newContentDiv = this.createMessageDiv(parentDivWrapper, RoleEnum.assistant, thinkingProcess, '', roleString);
+        const paragraph = createElementWithClass('div', `${RoleEnum.assistant}-message`);
+        const newContentDiv = this.createMessageDiv(paragraph, RoleEnum.assistant, thinkingProcess, '', roleString);
+        parentDivWrapper.appendChild(paragraph);
         // replace the content div in the arenaDivs array with the new one
         if (this.isArenaMode) {
             this.arenaDivs.find(item => item.model === model).contentDiv = newContentDiv;
@@ -120,10 +126,6 @@ class ChatManager {
     }
 
     createMessageDiv(parentElement, role, thinkingProcess = "none", text = '', roleString = null) {
-        // unfortunately need this guy in case we want to regenerate a response in arena mode
-        const messageWrapper = document.createElement('div');
-        messageWrapper.classList.add('message-wrapper');
-
         let thinkingModeString = "";
         if (role === RoleEnum.assistant) {
             if (thinkingProcess === "thinking") thinkingModeString = " 🧠";
@@ -135,11 +137,10 @@ class ChatManager {
             }
         }
         const prefixSpan = createElementWithClass('span', `message-prefix ${role}-prefix`, (roleString || ChatRoleDict[role]) + thinkingModeString);
-        messageWrapper.appendChild(prefixSpan);
+        parentElement.appendChild(prefixSpan);
 
-        let contentDiv = document.createElement('div');
-        contentDiv.classList.add('message-content', role + '-content');
-        contentDiv.textContent = text;
+        let contentDiv = createElementWithClass('div', `message-content ${role}-content`, text);
+        const messageWrapper = createElementWithClass('div', 'message-wrapper');
         messageWrapper.appendChild(contentDiv);
         if (role === RoleEnum.assistant) {
             this.contentDiv = contentDiv;
@@ -154,23 +155,24 @@ class ChatManager {
     }
 
     createMessageBlock(role, text, thinkingProcess = "none", roleString = null) {
-        if (role === RoleEnum.user && this.pendingImageDiv) {
-            this.pendingImageDiv.querySelector('.message-content').textContent = text;
-            this.pendingImageDiv = null;
+        if (role === RoleEnum.user && this.pendingMediaDiv) {
+            const messageContent = createElementWithClass('div', `message-content ${role}-content`, text);
+            this.pendingMediaDiv.querySelector('.message-wrapper').appendChild(messageContent);
+            this.pendingMediaDiv = null;
             return;
         }
-        let paragraph = this.initParagraph(role);
+        const paragraph = this.initParagraph(role);
 
         if (this.isArenaMode && role === RoleEnum.assistant) {
-            let fullDiv = document.createElement('div');
-            fullDiv.classList.add('arena-full-container');
+            const fullDiv = createElementWithClass('div', 'arena-full-container');
             this.arenaContainer = fullDiv;
 
             for (let i = 0; i < 2; i++) {
-                let arenaDiv = document.createElement('div');
-                arenaDiv.classList.add('arena-wrapper');
-                let contentDiv = this.createMessageDiv(arenaDiv, role, thinkingProcess);
+                const arenaDiv = createElementWithClass('div', 'arena-wrapper');
+                const assistantWrapper = createElementWithClass('div', `${RoleEnum.assistant}-message`);
+                const contentDiv = this.createMessageDiv(assistantWrapper, role, thinkingProcess);
                 this.arenaDivs.push({ model: null, contentDiv: contentDiv });
+                arenaDiv.appendChild(assistantWrapper);
                 fullDiv.appendChild(arenaDiv);
             }
 
@@ -391,14 +393,16 @@ class ChatManager {
     }
 
     arenaResultUIUpdate(arenaItem, classString, elo_rating) {
-        const parent = arenaItem.contentDiv.parentElement.parentElement;
+        const parent = arenaItem.contentDiv.parentElement.parentElement.parentElement;
         const prefixes = parent.querySelectorAll('.message-prefix');
         const contentDivs = parent.querySelectorAll('.message-content');
         const tokenFooters = parent.querySelectorAll('.message-footer');
         const full_model_name = arenaItem.model;
         const elo_rounded = Math.round(elo_rating * 10) / 10;   // round to one decimal place
         prefixes.forEach(prefix => prefix.textContent = `${prefix.textContent.replace(ChatRoleDict.assistant, full_model_name)} (ELO: ${elo_rounded})`);
-        contentDivs.forEach(contentDiv => contentDiv.classList.add(classString));
+        contentDivs.forEach(contentDiv => {
+            if(!contentDiv.classList.contains("thoughts")) contentDiv.classList.add(classString);
+        });
         tokenFooters.forEach(footer => {
             const span = footer.querySelector('span');
             span.textContent = span.textContent.replace('~', footer.getAttribute('input-tokens'))
@@ -555,8 +559,8 @@ function reconstruct_chat(chat) {
 
     function create_msg_block(msg, isLast) {
         if (msg.role === RoleEnum.user && msg.images) {
-            chatManager.initPendingImageDiv();
-            msg.images.forEach(img => chatManager.appendToPendingImageDiv(img));
+            msg.images.forEach(img => chatManager.appendToPendingImages(img));
+            if (!isLast) chatManager.pendingImages = [];
         }
         if (msg.role === RoleEnum.user && msg.files) {
             msg.files.forEach(file => {
@@ -846,9 +850,7 @@ function append_context(message, role) {
 function add_pending_files(role) {
     if (role !== RoleEnum.user) return;
     if (chatManager.pendingImages.length > 0) {
-        messages[messages.length - 1].images = chatManager.pendingImages;
-        chatManager.pendingImages = [];
-        return [];
+        messages[messages.length - 1].images = chatManager.pendingImages;  
     } else if (chatManager.pendingFiles.length > 0) {
         messages[messages.length - 1].files = chatManager.pendingFiles.map(({ tempId, ...rest }) => rest);
 
@@ -856,9 +858,9 @@ function add_pending_files(role) {
             const removeButton = document.getElementById(`remove-file-button-${file.tempId}`);
             if (removeButton) removeButton.remove();
         });
-
-        chatManager.pendingFiles = [];
     }
+    chatManager.pendingImages = [];
+    chatManager.pendingFiles = [];
 }
 
 
@@ -1048,7 +1050,7 @@ function init_textarea_image_drag_and_drop() {
             e.preventDefault();
             const file = imageItem.getAsFile();
             const reader = new FileReader();
-            reader.onload = e => chatManager.appendToPendingImageDiv(e.target.result);
+            reader.onload = e => chatManager.appendToPendingImages(e.target.result);
             reader.readAsDataURL(file);
         }
         // If no image found, let default paste behavior happen
@@ -1061,7 +1063,7 @@ function init_textarea_image_drag_and_drop() {
             for (const file of files) {
                 if (file.type.match('image.*')) {
                     const reader = new FileReader();
-                    reader.onload = evt => chatManager.appendToPendingImageDiv(evt.target.result);
+                    reader.onload = evt => chatManager.appendToPendingImages(evt.target.result);
                     reader.readAsDataURL(file);
                 } else if (!file.type.match('video.*')) { // Treat other files as text, except videos
                     const reader = new FileReader();
@@ -1087,7 +1089,7 @@ function init_textarea_image_drag_and_drop() {
         if (imgSrc) {
             const base64String = await urlToBase64(imgSrc);
             if (base64String) {
-                chatManager.appendToPendingImageDiv(base64String);
+                chatManager.appendToPendingImages(base64String);
                 return;
             }
         }

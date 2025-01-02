@@ -243,10 +243,6 @@ body {
   background: #56b6c2;
 }
 
-.continue-conversation-button.arena-left-continue-button {
-  margin-right: 0.5em;
-}
-
 .history-sidebar-item {
   color: #d4d4d4;
   border-radius: 0.5em;
@@ -471,12 +467,12 @@ body {
   transform: rotate(90deg);
 }
 
-.history-system-message .message-content {
+.history-system-message .history-system-content {
   display: none;
 }
 
-.history-system-message:not(.collapsed) .message-content {
-  display: block;
+.history-system-message:not(.collapsed) .history-system-content {
+  display: flex;
 }
 
 .popup-container {
@@ -615,28 +611,25 @@ p {
 .assistant-message {
   display: flex;
   flex-direction: column;
-  gap: 0.5em;
 }
 
 .arena-full-container {
   display: flex;
   flex-direction: row;
+  gap: 0.5em;
 }
 
 .arena-wrapper {
-  flex: 1;
-  overflow-x: auto;
-}
-
-.arena-wrapper.history-arena-wrapper {
-  /* not necessary in the normal one because there we have the token footer which naturally creates a gap (but not actually)*/
   display: flex;
   flex-direction: column;
-  gap: 0.5em;
+  flex: 1;
+  overflow-x: auto;
+  gap: 1em;
 }
 
 .arena-footer {
   display: flex;
+  margin-top: 0.5em;
   justify-content: space-between;
   transition: all 0.4s ease;
 }
@@ -653,11 +646,14 @@ p {
 }
 
 .message-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+  margin-left: 1em;
 }
 
 .message-content {
   color: #ffffff;
-  margin-left: 1em;
   white-space: pre-wrap;
 }
 
@@ -751,11 +747,6 @@ p {
   position: relative;
   display: flex;
   flex-direction: column;
-}
-
-.image-content {
-  margin-left: 1em;
-  margin-bottom: 0.5em;
 }
 
 .image-content img {
