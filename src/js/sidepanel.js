@@ -555,7 +555,9 @@ function reconstruct_chat(chat) {
         currentChat.name = chat.name;
     }
     if (chat.messages) chat = chat.messages;
-
+    if (chat[chat.length - 1].responses && !chat[chat.length - 1].continued_with || chat[chat.length - 1].continued_with === "none") {
+        chat.pop();     // quick way to deal with unfinished arena messages
+    }
     function create_msg_block(msg, isLast) {
         if (msg.role === RoleEnum.user && msg.images) {
             msg.images.forEach(img => chatManager.appendToPendingImages(img));
@@ -571,7 +573,12 @@ function reconstruct_chat(chat) {
         if (isLast && msg.role === RoleEnum.user) return;
         chatManager.createMessageBlock(msg.role, "");
         const lastMsgHtml = chatManager.conversationDiv.lastChild;
+        if (!msg.content) {
+            const messages = msg.responses[msg.continued_with].messages;    // continued_with is guaranteed to be proper becuase of earlier check
+            msg = { role: RoleEnum.assistant, content: messages[messages.length - 1] };
+        }
         lastMsgHtml.querySelector('.message-content').innerHTML = add_codeblock_html(msg.content);
+        messages.push(msg);
     }
 
     // Initialize with system prompt as first message
@@ -584,7 +591,6 @@ function reconstruct_chat(chat) {
     // Process all messages except the last one
     for (let i = 1; i < chat.length - 1; i++) {
         const msg = chat[i];
-        messages.push(msg);
         create_msg_block(msg, false);
     }
 
@@ -592,7 +598,6 @@ function reconstruct_chat(chat) {
     const lastMsg = chat[chat.length - 1];
     const inputField = document.getElementById('textInput');
     if (chat.length > 1) {
-        if (lastMsg.role === RoleEnum.assistant) messages.push(lastMsg);
         create_msg_block(lastMsg, true);
     }
     inputField.value = lastMsg.role === RoleEnum.user ? lastMsg.content : '';
