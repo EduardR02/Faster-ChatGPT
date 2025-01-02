@@ -526,10 +526,21 @@ export class ChatStorage {
                 );
 
                 Promise.all(messagePromises)
-                    .then(() => resolve({
-                        chatId,
-                        ...chatMeta
-                    }))
+                    .then(() => {
+                        // Send message after successful creation
+                        chrome.runtime.sendMessage({
+                            type: 'new_chat_saved',
+                            chat: {
+                                chatId,
+                                ...chatMeta,
+                            }
+                        });
+                        
+                        resolve({
+                            chatId,
+                            ...chatMeta
+                        });
+                    })
                     .catch(reject);
             };
             
@@ -541,8 +552,8 @@ export class ChatStorage {
         const db = await this.getDB();
         const tx = db.transaction(['messages'], 'readwrite');
         const store = tx.objectStore('messages');
-        
-        return Promise.all(messages.map((message, index) => 
+
+        return Promise.all(messages.map((message, index) =>
             new Promise((resolve, reject) => {
                 const request = store.add({
                     chatId,
@@ -553,7 +564,14 @@ export class ChatStorage {
                 request.onsuccess = () => resolve(request.result);
                 request.onerror = () => reject(request.error);
             })
-        ));
+        )).then(results => {
+            chrome.runtime.sendMessage({
+                type: 'appended_messages_to_saved_chat',
+                chatId: chatId,
+                addedCount: messages.length
+            });
+            return results;
+        });
     }
 
     async updateArenaMessage(chatId, messageId, message) {
@@ -568,6 +586,25 @@ export class ChatStorage {
                 timestamp: Date.now(),
                 ...message
             });
+            request.onsuccess = () => {
+                chrome.runtime.sendMessage({
+                    type: 'saved_arena_message_updated',
+                    chatId: chatId,
+                    messageId: messageId
+                });
+                resolve(request.result);
+            };
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async getMessage(chatId, messageId) {
+        const db = await this.getDB();
+        const tx = db.transaction(['messages'], 'readonly');
+        const store = tx.objectStore('messages');
+        
+        return new Promise((resolve, reject) => {
+            const request = store.get([chatId, messageId]);
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
         });
@@ -606,6 +643,38 @@ export class ChatStorage {
     
             request.onerror = () => {
                 resolve({ meta: null, messages: [] });
+            };
+        });
+    }
+
+    async getLatestMessages(chatId, limit) {
+        const db = await this.getDB();
+        const tx = db.transaction(['messages'], 'readonly');
+        const messageStore = tx.objectStore('messages');
+        
+        return new Promise((resolve) => {
+            const messages = [];
+            let count = 0;
+            
+            const index = messageStore.index('chatId');
+            const cursorRequest = index.openCursor(IDBKeyRange.only(chatId), 'prev');
+            
+            cursorRequest.onsuccess = (event) => {
+                const cursor = event.target.result;
+                
+                if (!cursor || count >= limit) {
+                    // Reverse to maintain chronological order
+                    resolve(messages.reverse());
+                    return;
+                }
+    
+                messages.push(cursor.value);
+                count++;
+                cursor.continue();
+            };
+    
+            cursorRequest.onerror = () => {
+                resolve([]);
             };
         });
     }

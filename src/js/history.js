@@ -202,6 +202,94 @@ function initChatHistory() {
 }
 
 
+function initMessageListeners() {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        switch (message.type) {
+            case 'new_chat_saved':
+                handleNewChatSaved(message.chat);
+                break;
+            case 'appended_messages_to_saved_chat':
+                handleAppendedMessages(message.chatId, message.addedCount);
+                break;
+            case 'saved_arena_message_updated':
+                handleArenaMessageUpdate(message.chatId, message.messageId);
+                break;
+        }
+    });
+}
+
+
+function handleAppendedMessages(chatId, addedCount) {
+    if (!currentChat || currentChat.meta.chatId !== chatId) return;
+    chatStorage.getLatestMessages(chatId, addedCount).then(newMessages => {
+        if (!newMessages) return;
+        
+        const conversationWrapper = document.getElementById('conversation-wrapper');
+        
+        newMessages.forEach(message => {
+            let messageElement;
+            const previousRole = currentChat.messages[currentChat.messages.length - 1]?.role;
+            
+            if (message.responses) {
+                messageElement = createArenaMessage(message, currentChat.messages.length);
+            } else {
+                messageElement = createRegularMessage(message, currentChat.messages.length, previousRole);
+            }
+            
+            conversationWrapper.appendChild(messageElement);
+            currentChat.messages.push(message);
+        });
+    });
+}
+
+
+function handleArenaMessageUpdate(chatId, messageId) {
+    if (!currentChat || currentChat.meta.chatId !== chatId) return;
+    chatStorage.getMessage(chatId, messageId).then(updatedMessage => {
+        if (!updatedMessage) return;
+        
+        const messageIndex = currentChat.messages.findIndex(m => m.messageId === messageId);
+        if (messageIndex === -1) {
+            // interaction where new arena messaages are not added through the addMessages function, but through updateArenaMessage function...
+            if (messageId === currentChat.messages[currentChat.messages.length - 1].messageId + 1) {
+                handleAppendedMessages(chatId, 1);
+            }
+            return;
+        }
+        
+        currentChat.messages[messageIndex] = updatedMessage;
+
+        const conversationWrapper = document.getElementById('conversation-wrapper');
+        const oldMessageElement = conversationWrapper.children[messageIndex];
+        
+        if (oldMessageElement) {
+            const newMessageElement = createArenaMessage(updatedMessage, messageIndex);;
+            conversationWrapper.replaceChild(newMessageElement, oldMessageElement);
+        }
+    });
+}
+
+
+function handleNewChatSaved(chat) {
+    const currentCategory = getDateCategory(chat.timestamp);
+    const firstItem = historyListContainer.firstElementChild;
+    
+    if (firstItem?.classList.contains('history-divider') && firstItem.textContent === currentCategory) {
+        const newItem = createHistoryItem(chat);
+        historyListContainer.insertBefore(newItem, firstItem.nextSibling);
+    } else {
+        const newItem = createHistoryItem(chat);
+        const newDivider = createDivider(currentCategory, false);
+        
+        historyListContainer.prepend(newItem);
+        historyListContainer.prepend(newDivider);
+        
+        if (firstItem?.classList.contains('history-divider')) {
+            firstItem.style.paddingTop = '1rem';
+        }
+    }
+}
+
 // Function to create a divider
 function createDivider(category, padding_top = true) {
     const divider = document.createElement('div');
@@ -712,6 +800,7 @@ async function autoRenameUnmodified() {
 
 function init() {
     initChatHistory();
+    initMessageListeners();
     document.getElementById('auto-rename').onclick = autoRenameUnmodified;
 }
 
