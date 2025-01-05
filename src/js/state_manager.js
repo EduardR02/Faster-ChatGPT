@@ -6,6 +6,7 @@ export class SettingsManager {
             settings: {}
         };
         this.requestedSettings = ['mode', ...requestedSettings];
+        this.settingsListeners = {};
         this.initialize();
     }
 
@@ -58,9 +59,20 @@ export class SettingsManager {
         });
     }
 
+    subscribeToSetting(key, callback) {
+        if (!this.settingsListeners[key]) {
+            this.settingsListeners[key] = [];
+        }
+        this.settingsListeners[key].push(callback);
+    }
+
     updateSettingsLocal(newSettings) {
         for (const [path, value] of Object.entries(newSettings)) {
             this.deepUpdate(this.state.settings, path, value);
+
+            if (this.settingsListeners[path]) {
+                this.settingsListeners[path].forEach(func => func(value));
+            }
         }
     }
 
@@ -239,13 +251,8 @@ export class SidepanelStateManager extends SettingsManager {
         this.updateSettingsLocal({ arena_mode: !this.getSetting('arena_mode') });
     }
 
-    // Additional Getters/Setters
     get isArenaModeActive() {
         return this.state.isArenaModeActive;
-    }
-
-    set isArenaModeActive(value) {
-        this.state.isArenaModeActive = value;
     }
 
     get thinkingMode() {

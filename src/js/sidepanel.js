@@ -1062,6 +1062,7 @@ function init_textarea_image_drag_and_drop() {
 function init_arena_toggle_button_listener() {
     const button = document.querySelector('.arena-toggle-button');
     stateManager.runOnReady(arena_toggle_button_update);
+    stateManager.subscribeToSetting('arena_mode', (value) => {arena_toggle_button_update();});
     button.addEventListener('click', () => {
         stateManager.toggleArenaMode();
         arena_toggle_button_update();
