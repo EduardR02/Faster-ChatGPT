@@ -1031,10 +1031,3 @@ export class ArenaRatingManager {
 
 
 export const ModeEnum = {"InstantPromptMode": 0, "PromptMode": 1, "Off": 2};
-
-
-export const CHAT_STATE = {
-    NORMAL: 0,      // Fresh normal chat
-    INCOGNITO: 1,   // Fresh incognito or continued as incognito
-    CONVERTED: 2    // Used the one-time transition either way
-};

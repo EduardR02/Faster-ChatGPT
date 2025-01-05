@@ -1,6 +1,8 @@
-import { ArenaRatingManager, StreamWriter, StreamWriterSimple, Footer, TokenCounter, ModeEnum, get_mode, createElementWithClass,
-    auto_resize_textfield_listener, update_textfield_height, is_on, ChatStorage, add_codeblock_html } from "./utils.js";
+import {
+    ArenaRatingManager, StreamWriter, StreamWriterSimple, Footer, TokenCounter, createElementWithClass,
+    auto_resize_textfield_listener, update_textfield_height, ChatStorage, add_codeblock_html } from "./utils.js";
 import { ApiManager } from "./api_manager.js";
+import { SidepanelStateManager, CHAT_STATE } from './state_manager.js';
 
 
 class ChatManager {
@@ -12,7 +14,6 @@ class ChatManager {
         this.pendingImages = [];
         this.pendingFiles = [];
         this.tempFileId = 0;
-        this.isArenaMode = false;
         this.arenaDivs = [];
         this.arenaButtons = [];
         this.hoverOnFunc = null;
@@ -23,11 +24,10 @@ class ChatManager {
         this.pendingResponses = 0;
         this.shouldScroll = true;
         this.scrollListenerActive = false;
-        this.thinkingModeActive = false;
     }
 
     initArenaMode() {
-        this.isArenaMode = true;
+        stateManager.isArenaModeActive = true;
         this.arenaContainer = null;
         this.arenaFooter = null;
         this.arenaDivs = [];
@@ -37,7 +37,7 @@ class ChatManager {
     }
 
     updatePendingResponses() {
-        if (this.isArenaMode) {
+        if (stateManager.isArenaModeActive) {
             this.pendingResponses--;
             if (this.pendingResponses === 0) {
                 this.addArenaFooter();
@@ -86,7 +86,7 @@ class ChatManager {
 
         toggleButton.append(toggleIcon, file.name);
         toggleButton.onclick = () => fileDiv.classList.toggle('collapsed');
-        
+
         buttonsWrapper.append(toggleButton);
         if (addRemoveButton) {
             const removeFileButton = createElementWithClass('button', 'unset-button rename-cancel remove-file-button', '✕');
@@ -115,7 +115,7 @@ class ChatManager {
         const newContentDiv = this.createMessageDiv(paragraph, RoleEnum.assistant, thinkingProcess, '', roleString);
         parentDivWrapper.appendChild(paragraph);
         // replace the content div in the arenaDivs array with the new one
-        if (this.isArenaMode) {
+        if (stateManager.isArenaModeActive) {
             this.arenaDivs.find(item => item.model === model).contentDiv = newContentDiv;
         }
     }
@@ -163,7 +163,7 @@ class ChatManager {
         }
         const paragraph = this.initParagraph(role);
 
-        if (this.isArenaMode && role === RoleEnum.assistant) {
+        if (stateManager.isArenaModeActive && role === RoleEnum.assistant) {
             const fullDiv = createElementWithClass('div', 'arena-full-container');
             this.arenaContainer = fullDiv;
 
@@ -191,11 +191,11 @@ class ChatManager {
     }
 
     getContentDiv(model) {
-        if (!this.isArenaMode && this.contentDiv === null || this.isArenaMode && this.arenaDivs.length !== 2) {
+        if (!stateManager.isArenaModeActive && this.contentDiv === null || stateManager.isArenaModeActive && this.arenaDivs.length !== 2) {
             post_error_message_in_chat("No content divs available.");
             return null;
         }
-        if (this.isArenaMode) {
+        if (stateManager.isArenaModeActive) {
             // we only need the contentDiv for the singular case anyway, because we have it in the arenaDivs in this case
             return this.arenaDivs.find(item => item.model === model).contentDiv;
         }
@@ -205,7 +205,7 @@ class ChatManager {
     }
 
     getContentDivIndex(model) {
-        if (!this.isArenaMode) return 0;
+        if (!stateManager.isArenaModeActive) return 0;
         return this.arenaDivs.findIndex(item => item.model === model);
     }
 
@@ -272,7 +272,7 @@ class ChatManager {
                 this.arenaFooter = null;
             }
         };
-    
+
         footer.addEventListener('transitionend', handleTransitionEnd);
     }
 
@@ -341,12 +341,12 @@ class ChatManager {
         this.deleteArenaFooter();
         remove_regenerate_buttons();
         currentChat.messages[currentChat.messages.length - 1].choice = choice;
-    
+
         const isNoChoice = choice === 'no_choice(bothbad)';
         const resultString = isNoChoice ? 'draw(bothbad)' : choice;
-    
+
         const [model1, model2] = this.arenaDivs.map(item => item.model);
-    
+
         let winnerIndex = 0
         if (['draw', 'reveal', 'ignored'].includes(choice)) {
             // this is for UI purposes, to highlight which output was chosen to continue the conversation, this doesn't modify the actual rating
@@ -355,7 +355,7 @@ class ChatManager {
             winnerIndex = choice === 'model_a' ? 0 : 1;
         }
         const loserIndex = 1 - winnerIndex;
-    
+
         // Update ratings, don't think it makes sense to save the "ignored"/"reveal" category
         let updatedRatings;
         if (choice === 'ignored' || choice === 'reveal') {
@@ -364,7 +364,7 @@ class ChatManager {
         else {
             updatedRatings = arenaRatingManager.addMatchAndUpdate(model1, model2, resultString);
         }
-    
+
         if (isNoChoice) {
             currentChat.messages[currentChat.messages.length - 1].continued_with = 'none';
             this.arenaDivs.forEach(item => this.arenaResultUIUpdate(item, 'arena-loser', this.getModelRating(item.model, updatedRatings)));
@@ -375,12 +375,12 @@ class ChatManager {
             this.arenaResultUIUpdate(this.arenaDivs[loserIndex], 'arena-loser', this.getModelRating(this.arenaDivs[loserIndex].model, updatedRatings));
             resolve_pending(this.arenaDivs[winnerIndex].model);
         }
-        if (currentChat.id !== null && shouldSave) {
+        if (currentChat.id !== null && stateManager.shouldSave) {
             chatStorage.updateArenaMessage(currentChat.id, currentChat.messages.length - 1, currentChat.messages[currentChat.messages.length - 1]);
         }
-    
+
         this.arenaDivs = [];
-        this.isArenaMode = false;
+        stateManager.isArenaModeActive = false;
         this.arenaContainer = null;
         if (isNoChoice) {
             api_call();
@@ -401,7 +401,7 @@ class ChatManager {
         const elo_rounded = Math.round(elo_rating * 10) / 10;   // round to one decimal place
         prefixes.forEach(prefix => prefix.textContent = `${prefix.textContent.replace(ChatRoleDict.assistant, full_model_name)} (ELO: ${elo_rounded})`);
         contentDivs.forEach(contentDiv => {
-            if(!contentDiv.classList.contains("thoughts")) contentDiv.classList.add(classString);
+            if (!contentDiv.classList.contains("thoughts")) contentDiv.classList.add(classString);
         });
         tokenFooters.forEach(footer => {
             const span = footer.querySelector('span');
@@ -427,11 +427,11 @@ class ChatManager {
         if (this.shouldScroll && event.deltaY < 0) {
             this.shouldScroll = false;
         }
-    
+
         const element = this.scrollToElement;
         const threshold = 100;
         const distanceFromBottom = Math.abs(element.scrollHeight - window.scrollY - window.innerHeight);
-        
+
         if (!this.shouldScroll && event.deltaY > 0 && distanceFromBottom <= threshold) {
             this.shouldScroll = true;
         }
@@ -441,57 +441,47 @@ class ChatManager {
 
 const ChatRoleDict = { user: "You", assistant: "Assistant", system: "System" };
 const RoleEnum = { system: "system", user: "user", assistant: "assistant" };
-const CHAT_STATE = {
-    NORMAL: 0,      // Fresh normal chat
-    INCOGNITO: 1,   // Fresh incognito or continued as incognito
-    CONVERTED: 2    // Used the one-time transition either way
-};
 
-let settings = {};
 let messages = [];
 let initial_prompt = "";
 let pending_message = {};
 const chatManager = new ChatManager();
 let arenaRatingManager = null;
-let thinkingMode = false;
 let thoughtLoops = [0, 0];
 
 const apiManager = new ApiManager();
 
 const chatStorage = new ChatStorage();
 let currentChat = null;
-let chatState = CHAT_STATE.NORMAL;
-let shouldSave = true;
-let isSidePanel = true;
+
+const stateManager = new SidepanelStateManager('chat_prompt');
 
 
 document.addEventListener('DOMContentLoaded', init);
 
 
 function init() {
-    // Panel is now fully loaded, you can initialize your message listeners
-    // and other functionality here.
     input_listener();
-    init_settings();
     init_arena_toggle_button_listener();
     init_thinking_mode_button();
     init_footer_buttons();
     auto_resize_textfield_listener("textInput");
     init_textarea_image_drag_and_drop();
     setup_message_listeners();
-    chrome.runtime.sendMessage({ type : "sidepanel_ready"});
+    chrome.runtime.sendMessage({ type: "sidepanel_ready" });
 }
 
 
 function setup_message_listeners() {
     chrome.runtime.onMessage.addListener((msg) => {
+        if (!stateManager.isOn()) return;
         if (msg.type === 'new_selection') {
             when_new_selection(msg.text, msg.url);
         } else if (msg.type === 'new_chat') {
             when_new_chat();
         } else if (msg.type === 'reconstruct_chat') {
             reconstruct_chat(msg.chat);
-            isSidePanel = msg.isSidePanel === false ? false : true;
+            stateManager.isSidePanel = !!msg.isSidePanel;
         }
     });
 }
@@ -500,8 +490,7 @@ function init_states(chat_name) {
     chatManager.handleArenaChoiceDefault();
     remove_added_paragraphs();
     thoughtLoops = [0, 0];
-    chatState = CHAT_STATE.NORMAL;
-    shouldSave = true;
+    stateManager.resetChatState();
     currentChat = chatStorage.createNewChatTracking(chat_name);
     pending_message = {};
     chatManager.pendingMediaDiv = null;
@@ -522,26 +511,22 @@ function simple_chat_restart() {
 function when_new_selection(text, url) {
     init_states(`Selection from ${url}`);
     chatManager.createMessageBlock(RoleEnum.system, text, 'none', "Selected text");
-    init_prompt({mode: "selection", text: text, url: url}).then(() => {
-        get_mode(function(current_mode) {
-            if (current_mode === ModeEnum.InstantPromptMode) {
-                append_context("Please explain!", RoleEnum.user);
-                api_call();
-            }
-        });
+    init_prompt({ mode: "selection", text: text, url: url }).then(() => {
+        if (stateManager.isInstantPromptMode()) {
+            append_context("Please explain!", RoleEnum.user);
+            api_call();
+        }
     });
 }
 
 
 function when_new_chat() {
-    get_mode(function(current_mode) {
-        if (current_mode === ModeEnum.InstantPromptMode) {
-            post_warning_in_chat("Instant prompt mode does not make sense in chat mode and will be ignored.");
-        }
-        messages = [];
-        init_states("New Chat");
-        init_prompt({mode: "chat"});
-    });
+    if (stateManager.isInstantPromptMode()) {
+        post_warning_in_chat("Instant prompt mode does not make sense in chat mode and will be ignored.");
+    }
+    messages = [];
+    init_states("New Chat");
+    init_prompt({ mode: "chat" });
 }
 
 
@@ -565,7 +550,7 @@ function reconstruct_chat(chat) {
         }
         if (msg.role === RoleEnum.user && msg.files) {
             msg.files.forEach(file => {
-                if (isLast) file.tempId = chatManager.tempFileId++; 
+                if (isLast) file.tempId = chatManager.tempFileId++;
                 chatManager.addFileToPrompt(file, isLast);
             });
             if (!isLast) chatManager.pendingFiles = [];
@@ -584,7 +569,7 @@ function reconstruct_chat(chat) {
     // Initialize with system prompt as first message
     if (chat[0].role === RoleEnum.system) {
         initial_prompt = chat[0].content;
-        messages.push(chat[0]);     
+        messages.push(chat[0]);
         // don't show the system prompt in the chat
     }
 
@@ -619,19 +604,6 @@ function initArenaRatingManager(print_history = false) {
 }
 
 
-function update_settings(changes, namespace) {
-    if (namespace !== "local") return;
-    for (let [key, { newValue }] of Object.entries(changes)) {
-        if (key in settings && key !== "lifetime_tokens" && key !== "mode") {
-            settings[key] = newValue;
-            if (key === "arena_mode") {
-                arena_toggle_button_update();
-            }
-        }
-    }
-}
-
-
 function remove_added_paragraphs() {
     chatManager.conversationDiv.innerHTML = '';
 }
@@ -639,12 +611,14 @@ function remove_added_paragraphs() {
 
 function api_call() {
     chatManager.antiScrollListener();
-    const thinkingModeString = thinkingMode ? "thinking" : "none";
-    chatManager.thinkingModeActive = thinkingMode;
+    stateManager.updateThinkingMode();
+    stateManager.updateArenaMode();
+    const thinkingModeString = stateManager.thinkingMode ? "thinking" : "none";
+    togglePrompt(thinkingModeString);
     thoughtLoops = [0, 0];
 
-    if (settings.arena_mode) {
-        if (settings.arena_models.length < 2) {
+    if (stateManager.isArenaModeActive) {
+        if (stateManager.getSetting('arena_models').length < 2) {
             post_error_message_in_chat("Not enough models enabled for Arena mode.");
             return;
         }
@@ -653,7 +627,6 @@ function api_call() {
         chatManager.initMessageBlock(RoleEnum.assistant, thinkingModeString);
         chatManager.assignModelsToArenaDivs(model1, model2);
 
-        // Run both API calls concurrently
         Promise.all([
             makeApiCall(model1, thinkingModeString),
             makeApiCall(model2, thinkingModeString)
@@ -662,7 +635,7 @@ function api_call() {
         });
     } else {
         chatManager.initMessageBlock(RoleEnum.assistant, thinkingModeString);
-        makeApiCall(settings.current_model, thinkingModeString);
+        makeApiCall(stateManager.getSetting('current_model'), thinkingModeString);
     }
 }
 
@@ -672,22 +645,20 @@ async function makeApiCall(model, thoughtProcessState) {
     const msgs = messages.concat(resolve_pending_handler(model));
     const api_provider = apiManager.getProviderForModel(model);
     const tokenCounter = new TokenCounter(api_provider);
-    const isArenaMode = chatManager.isArenaMode;
+    const isArenaModeActive = stateManager.isArenaModeActive;
 
     try {
-        // Initialize StreamWriter based on streaming preference and arena mode
         let streamWriter;
-        if (settings.stream_response && (isArenaMode || api_provider === "gemini")) {
-            const writerSpeed = isArenaMode ? 2500 : 5000;
+        if (stateManager.getSetting('stream_response') && (isArenaModeActive || api_provider === "gemini")) {
+            const writerSpeed = isArenaModeActive ? 2500 : 5000;
             streamWriter = new StreamWriter(contentDiv, chatManager.scrollIntoView.bind(chatManager), writerSpeed);
         } else {
             streamWriter = new StreamWriterSimple(contentDiv, chatManager.scrollIntoView.bind(chatManager));
         }
 
-        const response = await apiManager.callApi(model, msgs, tokenCounter, settings.stream_response ? streamWriter : null);
+        const response = await apiManager.callApi(model, msgs, tokenCounter, stateManager.getSetting('stream_response') ? streamWriter : null);
 
-        // Process non-streaming response
-        if (!settings.stream_response) {
+        if (!stateManager.getSetting('stream_response')) {
             if (response?.thoughts !== undefined) {
                 streamWriter.setThinkingModel();
                 streamWriter.processContent(response.thoughts, true);
@@ -697,14 +668,13 @@ async function makeApiCall(model, thoughtProcessState) {
             }
         }
 
-        // Add footer and handle thinking mode
-        const msgFooter = new Footer(tokenCounter.inputTokens, tokenCounter.outputTokens, isArenaMode, thoughtProcessState, regenerate_response.bind(null, model));
+        const msgFooter = new Footer(tokenCounter.inputTokens, tokenCounter.outputTokens, isArenaModeActive, thoughtProcessState, regenerate_response.bind(null, model));
         const addToPendingWithModel = (msg, done) => add_to_pending(msg, model, done);
 
         await streamWriter.addFooter(msgFooter, addToPendingWithModel);
         tokenCounter.updateLifetimeTokens();
         handleThinkingMode(streamWriter.fullMessage, thoughtProcessState, model, contentDiv);
-        
+
     } catch (error) {
         post_error_message_in_chat(error.message);
     }
@@ -715,7 +685,7 @@ function get_random_arena_models() {
     // ok fk it, by doing it with calculating random indices it seems to be hard to avoid bias, and doing a while loop is stupid
     // so we'll just do shuffle and pick first, ran this in python for 50 mil iterations on 5 length array, seems unbiased
     function shuffleArray() {
-        let array = settings.arena_models.slice();
+        let array = stateManager.getSetting('arena_models').slice();
         for (let i = array.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [array[i], array[j]] = [array[j], array[i]];
@@ -729,15 +699,15 @@ function get_random_arena_models() {
 
 
 function regenerate_response(model, contentDiv) {
-    const thinkingProcessString = thinkingMode ? "thinking" : "none";
-    chatManager.thinkingModeActive = thinkingMode;
+    stateManager.updateThinkingMode();
+    const thinkingProcessString = stateManager.thinkingMode ? "thinking" : "none";
     thoughtLoops[chatManager.getContentDivIndex(model)] = 0;
     chatManager.onRegenerate(contentDiv, model, thinkingProcessString);
     discard_pending(model);
     chatManager.antiScrollListener();
-    if (!chatManager.isArenaMode) model = settings.current_model;
+    if (!stateManager.isArenaModeActive) model = stateManager.getSetting('current_model');
 
-    makeApiCall(model, messages.concat(resolve_pending_handler(model)), thinkingProcessString, contentDiv);
+    makeApiCall(model, thinkingProcessString);
 }
 
 
@@ -747,8 +717,8 @@ function handleThinkingMode(msg, thoughtProcessState, model, contentDiv) {
     thoughtLoops[idx]++;
     let thinkMore = msg.includes("*continue*");
     let thinkingProcessString = thinkMore ? "thinking" : "solver";
-    const maxItersReached = thoughtLoops[idx] >= settings.loop_threshold;
-    if (thoughtLoops[idx] >= settings.loop_threshold) {
+    const maxItersReached = thoughtLoops[idx] >= stateManager.getSetting('loop_threshold');
+    if (maxItersReached) {
         thinkingProcessString = "solver";
         thinkMore = false;
         thoughtLoops[idx] = 0;
@@ -770,10 +740,10 @@ function togglePrompt(promptType = "none") {
     if (messages.length === 0) return;
     switch (promptType) {
         case "thinking":
-            messages[0].content = initial_prompt + "\n\n" + settings.thinking_prompt;
+            messages[0].content = initial_prompt + "\n\n" + stateManager.getPrompt('thinking');
             break;
         case "solver":
-            messages[0].content = initial_prompt + "\n\n" + settings.solver_prompt;
+            messages[0].content = initial_prompt + "\n\n" + stateManager.getPrompt('solver');
             break;
         case "none":
             messages[0].content = initial_prompt;
@@ -785,16 +755,11 @@ function init_prompt(context) {
     let prompt_string = context.mode + "_prompt";
 
     return new Promise((resolve, reject) => {
-        chrome.storage.local.get([prompt_string, 'thinking_prompt', 'solver_prompt'])
-            .then(res => {
-                if (!res['thinking_prompt'] || !res['solver_prompt']) {
-                    post_warning_in_chat("Thinking or solver prompt is empty. If you're not planning to use thinking mode ignore this.");
-                }
+        stateManager.loadPrompt(prompt_string)
+            .then(() => {
                 messages = [];
                 pending_message = {};
-                let prompt = res[prompt_string];
-                settings.thinking_prompt = res['thinking_prompt'] || "";
-                settings.solver_prompt = res['solver_prompt'] || "";
+                let prompt = stateManager.getPrompt('active_prompt');
                 if (context.mode === "selection") {
                     prompt += `\n"""[${context.url}]"""\n"""[${context.text}]"""`;
                 }
@@ -810,25 +775,9 @@ function init_prompt(context) {
 }
 
 
-function init_settings() {
-    chrome.storage.local.get(['loop_threshold', 'current_model', 'arena_mode', 'arena_models', 'stream_response'])
-    .then(res => {
-        settings = {
-            loop_threshold: res.loop_threshold,
-            current_model: res.current_model,
-            arena_mode: res.arena_mode,
-            arena_models: res.arena_models || [],
-            stream_response: res.stream_response
-        };
-        chrome.storage.onChanged.addListener(update_settings);
-        arena_toggle_button_update();
-    });
-}
-
-
 function append_context(message, role) {
     // allowed roles are 'user', 'assistant' or system. System is only on init for the prompt.
-    messages.push({role: role, content: message});
+    messages.push({ role: role, content: message });
     add_pending_files(role);
 
     // Save to chat history after each message, this function isn't used for assistant messages (pending does that) so we just focus on user messages
@@ -836,14 +785,14 @@ function append_context(message, role) {
         if (currentChat.id === null) {
             currentChat.messages = [...messages];
 
-            if (shouldSave) {
+            if (stateManager.shouldSave) {
                 chatStorage.createChatWithMessages(currentChat.title, currentChat.messages).then(res => currentChat.id = res.chatId);
             }
         } else {
             const newMsg = messages[messages.length - 1];
             currentChat.messages.push(newMsg);
 
-            if (currentChat.id !== null && shouldSave) {
+            if (currentChat.id !== null && stateManager.shouldSave) {
                 chatStorage.addMessages(currentChat.id, [newMsg], currentChat.messages.length - 1);
             }
         }
@@ -854,7 +803,7 @@ function append_context(message, role) {
 function add_pending_files(role) {
     if (role !== RoleEnum.user) return;
     if (chatManager.pendingImages.length > 0) {
-        messages[messages.length - 1].images = chatManager.pendingImages;  
+        messages[messages.length - 1].images = chatManager.pendingImages;
     } else if (chatManager.pendingFiles.length > 0) {
         messages[messages.length - 1].files = chatManager.pendingFiles.map(({ tempId, ...rest }) => rest);
 
@@ -869,11 +818,11 @@ function add_pending_files(role) {
 
 
 function add_to_pending(message, model, done = true, role = RoleEnum.assistant) {
-    if (!chatManager.isArenaMode) {
-        const historyMsg = {role: role, content: message, model: model};
+    if (!stateManager.isArenaModeActive) {
+        const historyMsg = { role: role, content: message, model: model };
         currentChat.messages.push(historyMsg);
 
-        if (currentChat.id !== null && shouldSave) {
+        if (currentChat.id !== null && stateManager.shouldSave) {
             chatStorage.addMessages(currentChat.id, [historyMsg], currentChat.messages.length - 1);
         }
     }
@@ -885,16 +834,16 @@ function add_to_pending(message, model, done = true, role = RoleEnum.assistant) 
             key => currentChatMessage.responses[key].name === model
         );
         currentChatMessage.responses[matchingModelKey].messages.push(message);
-        if (currentChat.id !== null && shouldSave) {
+        if (currentChat.id !== null && stateManager.shouldSave) {
             chatStorage.updateArenaMessage(currentChat.id, currentChat.messages.length - 1, currentChatMessage);
         }
     }
     // this is neat because we can only have one "latest" message per model, so if we regenerate many times we just overwrite.
     if (pending_message[model]) {
-        pending_message[model].push({role: role, content: message});
+        pending_message[model].push({ role: role, content: message });
     }
     else {
-        pending_message[model] = [{role: role, content: message}];
+        pending_message[model] = [{ role: role, content: message }];
     }
     if (done) chatManager.updatePendingResponses();
 }
@@ -924,12 +873,12 @@ function resolve_pending_handler(model = null) {
     if (model && model in pending_message) {
         return pending_message[model];
     }
-    else if (model && chatManager.isArenaMode) {
+    else if (model && stateManager.isArenaModeActive) {
         // case for regenerating, you don't want to accidentally include the other models context
         return [];
     }
-    else if (settings.current_model in pending_message) {
-        return pending_message[settings.current_model];
+    else if (stateManager.getSetting('current_model') in pending_message) {
+        return pending_message[stateManager.getSetting('current_model')];
     }
     return pending_message[Object.keys(pending_message)[0]];
 }
@@ -937,7 +886,7 @@ function resolve_pending_handler(model = null) {
 
 function adjust_thought_structure(pending_messages) {
     // this actually seems to make it worse, just keep the original convo it's better...
-    if (!chatManager.thinkingModeActive || pending_messages.length === 0) {
+    if (!stateManager.thinkingMode || pending_messages.length === 0) {
         return pending_messages;
     }
     let thoughts = [];
@@ -947,7 +896,7 @@ function adjust_thought_structure(pending_messages) {
 
     for (let i = 0; i < pending_messages.length; i++) {
         const message = pending_messages[i];
-        
+
         if (message.role === RoleEnum.assistant) {
             if (message.content.includes("*continue*")) {
                 thoughts.push(message.content.trim());
@@ -971,7 +920,7 @@ function adjust_thought_structure(pending_messages) {
     if (solution) {
         formattedContent += "Solution (user can see this):\n" + solution;
     }
-    let result =  [{
+    let result = [{
         role: RoleEnum.assistant,
         content: formattedContent.trim()
     }];
@@ -998,7 +947,7 @@ function post_warning_in_chat(warning_message) {
 function input_listener() {
     let inputField = document.getElementById('textInput');
 
-    inputField.addEventListener('keydown', function(event) {
+    inputField.addEventListener('keydown', function (event) {
         if (inputField === document.activeElement && event.key === 'Enter' && !event.shiftKey) {
             // prevents new line from being added after the field is cleared (because it prolly triggers on keyup also)
             event.preventDefault();
@@ -1019,20 +968,20 @@ function input_listener() {
 
 function init_textarea_image_drag_and_drop() {
     const textarea = document.getElementById('textInput');
- 
+
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
         textarea.addEventListener(eventName, e => {
             e.preventDefault();
             e.stopPropagation();
             if (eventName === 'dragover' || eventName === 'dragenter') {
                 textarea.classList.add('dragging');
-            } 
+            }
             else {
                 textarea.classList.remove('dragging');
             }
         }, false);
     });
- 
+
     async function urlToBase64(url) {
         try {
             const blob = await (await fetch(url)).blob();
@@ -1047,10 +996,10 @@ function init_textarea_image_drag_and_drop() {
         }
     }
 
-    textarea.addEventListener('paste', async function(e) {
+    textarea.addEventListener('paste', async function (e) {
         const items = e.clipboardData.items;
         const imageItem = Array.from(items).find(item => item.type.startsWith('image/'));
-        
+
         if (imageItem) {
             e.preventDefault();
             const file = imageItem.getAsFile();
@@ -1060,8 +1009,8 @@ function init_textarea_image_drag_and_drop() {
         }
         // If no image found, let default paste behavior happen
     });
- 
-    textarea.addEventListener('drop', async function(e) {
+
+    textarea.addEventListener('drop', async function (e) {
         // Handle local file drops
         if (e.dataTransfer.files.length > 0) {
             const files = Array.from(e.dataTransfer.files);
@@ -1090,7 +1039,7 @@ function init_textarea_image_drag_and_drop() {
         const imgSrc = new DOMParser()
             .parseFromString(e.dataTransfer.getData('text/html'), 'text/html')
             .querySelector('img')?.src;
-            
+
         if (imgSrc) {
             const base64String = await urlToBase64(imgSrc);
             if (base64String) {
@@ -1098,7 +1047,7 @@ function init_textarea_image_drag_and_drop() {
                 return;
             }
         }
- 
+
         // Handle text drops
         const text = e.dataTransfer.getData('text');
         if (text) {
@@ -1107,16 +1056,14 @@ function init_textarea_image_drag_and_drop() {
             update_textfield_height(textarea);
         }
     });
- }
+}
 
 
 function init_arena_toggle_button_listener() {
     const button = document.querySelector('.arena-toggle-button');
-    // update button correctly on init
-    arena_toggle_button_update();
-
+    stateManager.runOnReady(arena_toggle_button_update);
     button.addEventListener('click', () => {
-        settings.arena_mode = !settings.arena_mode;
+        stateManager.toggleArenaMode();
         arena_toggle_button_update();
     });
 }
@@ -1125,9 +1072,8 @@ function init_arena_toggle_button_listener() {
 function init_thinking_mode_button() {
     const button = document.querySelector('.thinking-mode');
     button.addEventListener('click', () => {
-        thinkingMode = !thinkingMode;
-        if (thinkingMode) button.classList.add('thinking-mode-on');
-        else button.classList.remove('thinking-mode-on');
+        stateManager.toggleThinkingMode();
+        button.classList.toggle('thinking-mode-on', stateManager.pendingThinkingMode);
     });
 }
 
@@ -1157,10 +1103,10 @@ function init_popout_toggle_button() {
         if (!currentChat)
             currentChat = [];
 
-        if (isSidePanel) {
+        if (stateManager.isSidePanel) {
             // Create new tab and wait for it to be ready
-            chrome.tabs.create({ 
-                url: chrome.runtime.getURL('src/html/sidepanel.html') 
+            chrome.tabs.create({
+                url: chrome.runtime.getURL('src/html/sidepanel.html')
             });
 
             // Wait for the "sidepanel ready" message from the new tab
@@ -1182,11 +1128,11 @@ function init_popout_toggle_button() {
         } else {
             // Using your existing sidepanel logic
             const response = await chrome.runtime.sendMessage({ type: "is_sidepanel_open" });
-            
+
             if (!response.isOpen) {
                 await chrome.runtime.sendMessage({ type: "open_side_panel" });
             }
-            
+
             await chrome.runtime.sendMessage({
                 type: "reconstruct_chat",
                 chat: currentChat,
@@ -1205,40 +1151,37 @@ function init_incognito_toggle() {
     const hoverText = buttonFooter.querySelectorAll('.hover-text');
 
     const updateButtonVisuals = () => {
-        incognitoToggle.classList.toggle('active', !shouldSave);
+        incognitoToggle.classList.toggle('active', !stateManager.shouldSave);
     };
 
     const updateHoverText = (hoverText) => {
         const [hoverTextLeft, hoverTextRight] = hoverText;
-        // Default text
         hoverTextLeft.textContent = "start new";
         hoverTextRight.textContent = "incognito chat";
-    
-        if (messages.length > 1 && chatState === CHAT_STATE.NORMAL) {
+        const hasChatStarted = messages.length > 1;
+
+        if (hasChatStarted && stateManager.isChatNormal()) {
             hoverTextLeft.textContent = "continue";
             hoverTextRight.textContent = "in incognito";
         }
-        else if (messages.length < 2 && chatState === CHAT_STATE.INCOGNITO) {
+        else if (!hasChatStarted && stateManager.isChatIncognito()) {
             hoverTextLeft.textContent = "leave";
             hoverTextRight.textContent = "incognito";
         }
-        else if (messages.length > 1 && chatState === CHAT_STATE.INCOGNITO) {
+        else if (hasChatStarted && stateManager.isChatIncognito()) {
             hoverTextLeft.textContent = "actually,";
             hoverTextRight.textContent = "save it please";
         }
-        // CHAT_STATE.CONVERTED will use the default text
 
-        // set the width of both elements to the width of the longest text
         const longestText = Math.max(hoverTextLeft.offsetWidth, hoverTextRight.offsetWidth);
         hoverText.forEach(text => text.style.width = `${longestText}px`);
     };
-
 
     incognitoToggle.addEventListener('mouseenter', () => {
         updateHoverText(hoverText);
         buttonFooter.classList.add('showing-text');
     });
-    
+
     function createTransitionHandler(label) {
         return function handler(event) {
             if (!label.parentElement.classList.contains('showing-text')) {
@@ -1248,7 +1191,7 @@ function init_incognito_toggle() {
             label.removeEventListener('transitionend', handler);
         };
     }
-    
+
     incognitoToggle.addEventListener('mouseleave', () => {
         buttonFooter.classList.remove('showing-text');
         hoverText.forEach(label => {
@@ -1256,37 +1199,23 @@ function init_incognito_toggle() {
         });
     });
 
+    stateManager.subscribeToChatReset(simple_chat_restart);
+
     incognitoToggle.addEventListener('click', () => {
-        switch (chatState) {
-            case CHAT_STATE.NORMAL:
-                shouldSave = false;
-                // if we only have the system message, we can toggle as much as we want, we haven't "started" the chat yet
-                chatState = messages.length < 2 ? CHAT_STATE.INCOGNITO : CHAT_STATE.CONVERTED;
-                break;
-            case CHAT_STATE.INCOGNITO:
-                shouldSave = true;
-                // if we only have the system message, we can toggle as much as we want, we haven't "started" the chat yet
-                chatState = messages.length < 2 ? CHAT_STATE.NORMAL : CHAT_STATE.CONVERTED;
-                break;
-            case CHAT_STATE.CONVERTED:
-                simple_chat_restart();
-                shouldSave = false;
-                chatState = CHAT_STATE.INCOGNITO;
-                break;
-        }
+        const hasChatStarted = messages.length > 1;
+        stateManager.toggleChatState(hasChatStarted);
         updateHoverText(hoverText);
         updateButtonVisuals();
     });
 
-    // Initial state
     updateButtonVisuals();
 }
 
 
 function arena_toggle_button_update() {
     const button = document.querySelector('.arena-toggle-button');
-    button.textContent = settings.arena_mode ? '\u{2694}' : '\u{1F916}';
-    button.classList.toggle('arena-mode-on', settings.arena_mode === true);
+    button.textContent = stateManager.getSetting('arena_mode') ? '\u{2694}' : '\u{1F916}';
+    button.classList.toggle('arena-mode-on', stateManager.getSetting('arena_mode'));
 }
 
 
@@ -1302,19 +1231,15 @@ function remove_regenerate_buttons() {
 
 function handle_input(inputText) {
     // previously it was possible to open the sidepanel manually from above the bookmarks bar, but seems to not be possible anymore.
-    if (Object.keys(settings).length === 0 || messages[0].role !== "system") {
+    if (stateManager.isSettingsEmpty() || messages[0].role !== "system") {
         init_prompt({mode: "chat"}).then(() => {
-            get_mode(function(current_mode) {
-                if (is_on(current_mode)) {
-                    append_context(inputText, RoleEnum.user);
-                    api_call();
-                }
-            });
+            if (stateManager.isOn()) {
+                append_context(inputText, RoleEnum.user);
+                api_call();
+            }
         });
     } else {
         remove_regenerate_buttons();
-        const lockedThinkingMode = thinkingMode ? "thinking" : "none";
-        togglePrompt(lockedThinkingMode);
         api_call();
     }
 }
