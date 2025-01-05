@@ -267,6 +267,10 @@ export class SidepanelStateManager extends SettingsManager {
         this.state.isSidePanel = value;
     }
 
+    get isSidePanel() {
+        return this.state.isSidePanel;
+    }
+
     get shouldSave() {
         return this.state.shouldSave;
     }

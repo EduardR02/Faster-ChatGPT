@@ -481,7 +481,7 @@ function setup_message_listeners() {
             when_new_chat();
         } else if (msg.type === 'reconstruct_chat') {
             reconstruct_chat(msg.chat);
-            stateManager.isSidePanel = !!msg.isSidePanel;
+            stateManager.isSidePanel = msg.isSidePanel === false ? false : true;
         }
     });
 }
