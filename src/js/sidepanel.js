@@ -551,6 +551,7 @@ function reconstruct_chat(chat) {
         if (msg.role === RoleEnum.user && msg.files) {
             msg.files.forEach(file => {
                 if (isLast) file.tempId = chatManager.tempFileId++;
+                chatManager.pendingFiles.push(file);
                 chatManager.addFileToPrompt(file, isLast);
             });
             if (!isLast) chatManager.pendingFiles = [];
