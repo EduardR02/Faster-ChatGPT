@@ -120,6 +120,9 @@ export class SidepanelStateManager extends SettingsManager {
         this.state = {
             ...this.state,
             isArenaModeActive: false,
+            activeArenaModels: null,
+            currentContentDiv: null,
+            pendingResponses: 0,
             pendingThinkingMode: false,
             activeThinkingMode: false,
             chatState: CHAT_STATE.NORMAL,
@@ -249,6 +252,29 @@ export class SidepanelStateManager extends SettingsManager {
 
     toggleArenaMode() {
         this.updateSettingsLocal({ arena_mode: !this.getSetting('arena_mode') });
+    }
+
+    setCurrentContentDiv(div) {
+        this.state.currentContentDiv = div;
+    }
+
+    getCurrentContentDiv() {
+        return this.state.currentContentDiv;
+    }
+
+    initArenaResponse(modelA, modelB) {
+        this.state.pendingResponses = 2;
+        this.state.activeArenaModels = [modelA, modelB];
+    }
+
+    updatePendingResponses() {
+        this.state.pendingResponses--;
+    }
+
+    clearArenaState() {
+        this.state.pendingResponses = 0;
+        this.state.activeArenaModels = null;
+        this.state.isArenaModeActive = false;
     }
 
     get isArenaModeActive() {
