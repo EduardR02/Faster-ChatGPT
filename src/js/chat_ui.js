@@ -10,12 +10,8 @@ class ChatUI {
 
         this.conversationDiv = document.getElementById(conversationWrapperId);
         this.stateManager = stateManager;
+        this.pendingMediaDiv = null;
 
-        // Media handling state
-        this.pendingMedia = {};
-        this.resetPendingMedia();
-
-        // Role labels configuration
         this.roleLabels = {
             user: "You",
             assistant: "Assistant",
@@ -24,9 +20,8 @@ class ChatUI {
     }
 
     addMessage(role, content = '', options = {}) {
-        if (role === 'user' && this.pendingMedia.div) this.appendToExistingMessage(content);
+        if (role === 'user' && this.pendingMediaDiv) this.appendToExistingMessage(content);
         else this.conversationDiv.appendChild(this.createMessage(role, content, options));
-        this.scrollIntoView();
     }
 
     // Core message creation methods
@@ -42,15 +37,15 @@ class ChatUI {
         const wrapper = createElementWithClass('div', 'message-wrapper');
         const prefixWrapper = this.createPrefixWrapper(role, otherOptions);
         wrapper.appendChild(prefixWrapper);
-    
+
         if (images?.length)
             images.forEach(img => wrapper.appendChild(this.createImageContent(img, role)));
-    
+
         if (files?.length)
             files.forEach(file => wrapper.appendChild(this.createFileDisplay(file)));
-    
+
         wrapper.appendChild(this.createContentDiv(role, content));
-    
+
         return wrapper;
     }
 
@@ -85,11 +80,11 @@ class ChatUI {
                 case 'draw(bothbad)': prefix += ' ❌'; break;
                 case 'reveal': prefix += ' 👁️'; break;
                 case 'ignored': prefix += ' n/a'; break;
-                default: 
+                default:
                     if (modelKey !== choice) prefix += ' ❌';
             }
         }
-    
+
         return prefix;
     }
 
@@ -107,6 +102,95 @@ class ChatUI {
         return messageDiv;
     }
 
+    // reconstruction of the chat
+    buildChat(chat, options = {}) {
+        const { hideModels = false, continueFunc = null, startIndex = 0, endIndex = null, addSystemMsg = false } = options;
+
+        this.clearConversation();
+        let previousRole = null;
+
+        const messages = chat.messages.slice(
+            startIndex,
+            endIndex !== null ? endIndex + 1 : undefined
+        );
+
+        messages.forEach((message, index) => {
+            if (message.role === 'system' && addSystemMsg) {
+                const systemMsg = this.createSystemMessage(message.content);
+                this.conversationDiv.appendChild(systemMsg);
+                return;
+            }
+
+            if (message.responses) {
+                this.stateManager.initArenaResponse(message.responses['model_a'].name, message.responses['model_b'].name);
+                const arenaDivs = this.createArenaMessage(message, hideModels);
+                if (continueFunc) {
+                    arenaDivs.forEach((wrapper, wrapper_idx) => {
+                        const modelKey = wrapper_idx === 0 ? 'model_a' : 'model_b';
+                        wrapper.querySelectorAll('.prefix-wrapper').forEach((prefix, idx) => {
+                            button = this.createContinueButton(() => { continueFunc(index, idx, modelKey) });
+                            prefix.appendChild(button);
+                        });
+                    })
+                }
+                this.stateManager.clearArenaState();
+            } else {
+                const messageBlock = this.createMessage(message.role, message.content, {
+                    model: message.model,
+                    images: message.images,
+                    files: message.files,
+                    isRegeneration: previousRole === message.role,
+                    hideModels
+                });
+                if (continueFunc) {
+                    messageBlock.querySelector('.prefix-wrapper').appendChild(
+                        this.createContinueButton(() => continueFunc(index))
+                    );
+                }
+
+                this.conversationDiv.appendChild(messageBlock);
+            }
+            previousRole = message.role;
+            if (index !== messages.length - 1) this.resetPendingMedia();
+        });
+    }
+
+    // Arena Mode Methods
+    createArenaMessage(message = null, hideModels = true) {
+        const { responses, choice, continued_with, role } = message;
+        const messageBlock = createElementWithClass('div', `assistant-message`);
+        const container = createElementWithClass('div', 'arena-full-container');
+        messageBlock.appendChild(container);
+        const arenaDivs = [null, null];
+
+        ['model_a', 'model_b'].forEach((model, index) => {
+            const arenaDiv = createElementWithClass('div', 'arena-wrapper');
+            arenaDivs[index] = arenaDiv;
+            container.appendChild(arenaDiv);
+            let options = {
+                model: this.stateManager.getArenaModel(index),
+                modelKey: model,
+                isRegeneration: false,
+                hideModels
+            };
+            if (responses) {
+                responses[model].messages.forEach((msg, i) => {
+                    options.isRegeneration = i !== 0;
+                    options.choice = choice;
+                    const createdMessage = this.createMessage(role, msg, options);
+                    const className = continued_with === model ? 'arena-winner' : 'arena-loser';
+                    createdMessage.querySelector('.message-content').classList.add(className);
+                    arenaDiv.appendChild(createdMessage);
+                });
+            }
+            else {
+                arenaDiv.appendChild(this.createMessage('assistant', '', options));
+            }
+        });
+        this.conversationDiv.appendChild(messageBlock);
+        return arenaDivs;
+    }
+
     // UI Component Creation Methods
     createContentDiv(role, content) {
         const div = createElementWithClass('div', `message-content ${role}-content`);
@@ -122,16 +206,20 @@ class ChatUI {
         return wrapper;
     }
 
-    createFileDisplay(file, options = {}) {
-        const { addRemoveButton = false } = options;
+    createFileDisplay(file, onRemove) {
         const fileDiv = createElementWithClass('div', 'history-system-message collapsed');
         const buttonsWrapper = createElementWithClass('div', 'file-buttons-wrapper');
 
         const toggleButton = this.createFileToggleButton(file.name);
         buttonsWrapper.appendChild(toggleButton);
 
-        if (addRemoveButton) {
-            const removeButton = this.createRemoveFileButton(file.tempId);
+        if (onRemove) {
+            const removeButton = this.createRemoveFileButton(() => {
+                // Remove UI element
+                fileDiv.remove();
+                // Trigger external logic
+                onRemove(file.tempId);
+            });
             buttonsWrapper.appendChild(removeButton);
         }
 
@@ -141,53 +229,186 @@ class ChatUI {
         return fileDiv;
     }
 
-    // Arena Mode Methods
-    createArenaMessage(message = null, hideModels = true) {
-        const { responses, choice, continued_with, role } = message;
-        const messageBlock = createElementWithClass('div', `assistant-message`);
-        const container = createElementWithClass('div', 'arena-full-container');
-        messageBlock.appendChild(container);
-        let msgDivs = [null, null];
+    // Media Handling Methods
+    initPendingMedia() {
+        if (this.pendingMediaDiv) return;
+        this.pendingMediaDiv = this.createMessage('user', '');
+        this.pendingMediaDiv.querySelector('.message-content').remove();
+        this.conversationDiv.appendChild(this.pendingMediaDiv);
+    }
 
-        ['model_a', 'model_b'].forEach((model, index) => {
-            const arenaDiv = createElementWithClass('div', 'arena-wrapper');
-            container.appendChild(arenaDiv);
-            let options = { 
-                model: this.stateManager.state.activeArenaModels[index],
-                modelKey: model,
-                isRegeneration: false,
-                hideModels
-            };
-            if (responses) {
-                responses[model].messages.forEach((msg, i) => {
-                    options.isRegeneration = i !== 0;
-                    options.choice = choice;
-                    msgDivs[index] = this.createMessage(role, msg, options);
-                    const className = continued_with === model ? 'arena-winner' : 'arena-loser';
-                    msgDivs[index].querySelector('.message-content').classList.add(className);
-                    arenaDiv.appendChild(msgDivs[index]);
-                });
-            }
-            else {
-                msgDivs[index] = this.createMessage('assistant', '', options);
-                arenaDiv.appendChild(msgDivs[index]);
-            }
+    appendImage(imageBase64) {
+        this.initPendingMedia()
+        const wrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
+        const imgContent = this.createImageContent(imageBase64, 'user');
+        wrapper.appendChild(imgContent);
+    }
+
+    appendFile(file, onRemove = null) {
+        this.initPendingMedia()
+        const wrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
+        const fileDisplay = this.createFileDisplay(file, onRemove);
+        wrapper.appendChild(fileDisplay);
+    }
+
+    removeFile(fileId) {
+        const button = document.getElementById(`remove-file-${fileId}`);
+        if (button) button.closest('.history-system-message').remove();
+    }
+
+    appendToExistingMessage(content) {
+        if (!content.trim()) return;
+        const wrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
+        const contentDiv = this.createContentDiv('user', content);
+        wrapper.appendChild(contentDiv);
+        this.resetPendingMedia();
+    }
+
+    // Footer and Regeneration Methods
+    addMessageFooter(contentDiv, options) {
+        const footer = new Footer(
+            options.inputTokens,
+            options.outputTokens,
+            this.stateManager.isArenaModeActive,
+            options.thoughtProcessState,
+            () => options.onRegenerate(contentDiv)
+        );
+        footer.create(contentDiv);
+    }
+
+    // Utility Methods
+    createContinueButton(func) {
+        const button = createElementWithClass('button', 'unset-button continue-conversation-button', '\u{2197}');
+        button.onclick = () => func();
+        return button;
+    }
+
+    createFileToggleButton(fileName) {
+        const button = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
+        const icon = createElementWithClass('span', 'toggle-icon', '⯈');
+        button.append(icon, fileName);
+        button.onclick = () => button.closest('.history-system-message').classList.toggle('collapsed');
+        return button;
+    }
+
+    createRemoveFileButton(onClickHandler) {
+        const button = createElementWithClass('button', 'unset-button rename-cancel remove-file-button', '✕');
+        button.onclick = onClickHandler;
+        return button;
+    }
+
+    clearConversation() {
+        this.conversationDiv.innerHTML = '';
+        this.resetPendingMedia();
+    }
+}
+
+
+export class SidepanelChatUI extends ChatUI {
+    constructor(options) {
+        const {
+            inputWrapperId = '.textarea-wrapper',
+            scrollElementId = 'conversation',
+            ...baseOptions
+        } = options;
+
+        super(baseOptions);
+
+        // Scroll behavior
+        this.scrollToElement = document.getElementById(scrollElementId);
+        this.shouldScroll = true;
+        this.scrollListenerActive = false;
+
+        this.activeMessageDivs = null;  // Single div for normal mode, array [modelA, modelB] for arena
+        this.inputWrapper = document.querySelector(inputWrapperId);
+        this.initResize(this.inputWrapper.querySelector('textarea'));
+    }
+
+    initResize(textarea) {
+        textarea.addEventListener('input', () => this.updateTextareaHeight(textarea));
+    }
+
+    updateTextareaHeight(textarea) {
+        textarea.style.height = 'auto';
+        textarea.style.height = `${textarea.scrollHeight}px`;
+    }
+
+    createMessage(role, content, options = {}) {
+        const message = super.createMessage(role, content, options);
+        if (!this.stateManager.isArenaModeActive) {
+            this.activeMessageDivs = message;
+        }
+        return message;
+    }
+
+    createArenaMessage(message = null, hideModels = true) {
+        this.activeMessageDivs = super.createArenaMessage(message, hideModels);
+        return this.activeMessageDivs;
+    }
+
+    regenerateResponse(model) {
+        const newMessage = this.createMessage('assistant', '', {
+            model,
+            isRegeneration: true
         });
-        this.conversationDiv.appendChild(messageBlock);
-        this.scrollIntoView();
-        return msgDivs;
+        if (this.stateManager.isArenaModeActive) {
+            const modelIndex = this.getArenaIndex(model);
+            if (modelIndex === -1) return null;
+            this.activeMessageDivs[modelIndex].appendChild(newMessage);
+        } else {
+            this.conversationDiv.appendChild(newMessage);
+        }
+        return newMessage.querySelector('.message-content');
+    }
+
+    buildChat(chat) {
+        // Hide models and disable continue buttons for sidepanel
+        super.buildChat(chat, {
+            hideModels: true,
+            allowContinue: false
+        });
+    }
+
+    // Scroll Handling
+    scrollIntoView() {
+        if (this.shouldScroll) {
+            this.scrollToElement.scrollIntoView(false);
+        }
+    }
+
+    initScrollListener() {
+        if (!this.scrollListenerActive) {
+            window.addEventListener('wheel', this.handleScroll.bind(this));
+            this.scrollListenerActive = true;
+        }
+        this.shouldScroll = true;
+    }
+
+    handleScroll(event) {
+        if (this.shouldScroll && event.deltaY < 0) {
+            this.shouldScroll = false;
+        }
+
+        const threshold = 100;
+        const distanceFromBottom = Math.abs(
+            this.scrollToElement.scrollHeight - window.scrollY - window.innerHeight
+        );
+
+        if (!this.shouldScroll && event.deltaY > 0 && distanceFromBottom <= threshold) {
+            this.shouldScroll = true;
+        }
     }
 
     updateArenaResolution(choice) {
         const container = this.conversationDiv.querySelector('.arena-full-container');
         if (!container) return;
-    
+
         const arenaWrappers = container.querySelectorAll('.arena-wrapper');
         arenaWrappers.forEach((wrapper, index) => {
             const model = this.stateManager.state.activeArenaModels[index];
             const prefix = wrapper.querySelector('.message-prefix');
             const content = wrapper.querySelector('.message-content');
-    
+
             // Update prefix with choice indicator
             prefix.textContent = this.generateArenaPrefix({
                 modelName: prefix.textContent.split(' ')[0], // Keep existing model name
@@ -195,7 +416,7 @@ class ChatUI {
                 modelKey: `model_${index === 0 ? 'a' : 'b'}`,
                 hideModels: !prefix.textContent.includes('Assistant') // Preserve current hiding state
             });
-    
+
             // Update content classes
             if (choice === 'draw(bothbad)') {
                 content.classList.add('arena-loser');
@@ -235,7 +456,6 @@ class ChatUI {
         });
 
         container.parentElement.appendChild(footer);
-        this.scrollIntoView();
     }
 
     setupArenaButtonHover(button) {
@@ -281,153 +501,9 @@ class ChatUI {
         footer.addEventListener('transitionend', handleTransitionEnd);
     }
 
-    // Media Handling Methods
-    initPendingMedia() {
-        if (this.pendingMedia.div) return;
-        this.pendingMedia.div = this.createMessage('user', '');
-        this.pendingMedia.div.querySelector('.message-content').remove();
-        this.conversationDiv.appendChild(this.pendingMedia.div);
-    }
-
-    appendImage(imageBase64) {
-        this.initPendingMedia()
-        const wrapper = this.pendingMedia.div.querySelector('.message-wrapper');
-        const imgContent = this.createImageContent(imageBase64, 'user');
-        wrapper.appendChild(imgContent);
-        this.pendingMedia.images.push(imageBase64);
-    }
-
-    appendFile(file) {
-        this.initPendingMedia()
-        const wrapper = this.pendingMedia.div.querySelector('.message-wrapper');
-        const fileDisplay = this.createFileDisplay(file, {
-            addRemoveButton: true
-        });
-        wrapper.appendChild(fileDisplay);
-        this.pendingMedia.files.push(file);
-    }
-
-    removeFile(fileId) {
-        this.pendingMedia.files = this.pendingMedia.files.filter(f => f.tempId !== fileId);
-        const button = document.getElementById(`remove-file-${fileId}`);
-        if (button) button.closest('.history-system-message').remove();
-    }
-
-    appendToExistingMessage(content) {
-        if (!content.trim()) return;
-        const wrapper = this.pendingMedia.div.querySelector('.message-wrapper');
-        const contentDiv = this.createContentDiv('user', content);
-        wrapper.appendChild(contentDiv);
-        this.resetPendingMedia();
-    }
-
-    // Footer and Regeneration Methods
-    addMessageFooter(contentDiv, options) {
-        const footer = new Footer(
-            options.inputTokens,
-            options.outputTokens,
-            this.stateManager.isArenaModeActive,
-            options.thoughtProcessState,
-            () => options.onRegenerate(contentDiv)
-        );
-        footer.create(contentDiv);
-    }
-
-    // Utility Methods
-    createContinueButton(func) {
-        const button = createElementWithClass('button', 'unset-button continue-conversation-button', '\u{2197}');
-        button.onclick = () => func();
-        return button;
-    }
-
-    createFileToggleButton(fileName) {
-        const button = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
-        const icon = createElementWithClass('span', 'toggle-icon', '⯈');
-        button.append(icon, fileName);
-        button.onclick = () => button.closest('.history-system-message').classList.toggle('collapsed');
-        return button;
-    }
-
-    createRemoveFileButton(fileId) {
-        const button = createElementWithClass('button', 'unset-button rename-cancel remove-file-button', '✕');
-        button.id = `remove-file-${fileId}`;
-        button.onclick = () => this.removeFile(fileId);
-        return button;
-    }
-
-    clearConversation() {
-        this.conversationDiv.innerHTML = '';
-        this.resetPendingMedia();
-        this.stateManager.setCurrentContentDiv(null);
-    }
-
-    resetPendingMedia() {
-        this.pendingMedia = {
-            div: null,
-            media: [],
-            tempFileId: 0
-        };
-    }
-
-    buildChat(chat, options = {}) {
-        const {
-            hideModels = false,
-            continueFunc = null,
-            startIndex = 0,
-            endIndex = null,
-            addSystemMsg = false
-        } = options;
-    
-        this.clearConversation();
-        let previousRole = null;
-    
-        const messages = chat.messages.slice(
-            startIndex, 
-            endIndex !== null ? endIndex + 1 : undefined
-        );
-    
-        messages.forEach((message, index) => {
-            if (message.role === 'system' && addSystemMsg) {
-                const systemMsg = this.createSystemMessage(message.content);
-                this.conversationDiv.appendChild(systemMsg);
-                return;
-            }
-    
-            if (message.responses) {
-                this.stateManager.initArenaResponse(message.responses['model_a'].name, message.responses['model_b'].name);
-                const arenaDivs = this.createArenaMessage(message, hideModels);
-                if (continueFunc) {
-                    arenaDivs.forEach((wrapper, wrapper_idx) => {
-                        const modelKey = wrapper_idx === 0 ? 'model_a' : 'model_b';
-                        wrapper.querySelectorAll('.prefix-wrapper').forEach((prefix, idx) => {
-                            button = this.createContinueButton(() => {continueFunc(index, idx, modelKey)});
-                            prefix.appendChild(button);
-                        });
-                    })
-                }
-                this.stateManager.clearArenaState();
-            } else {
-                const messageBlock = this.createMessage(message.role, message.content, {
-                    model: hideModels ? null : message.model,
-                    images: message.images,
-                    files: message.files,
-                    isRegeneration: previousRole === message.role
-                });
-                messageBlock.querySelector('.prefix-wrapper').appendChild(
-                    this.createContinueButton(() => continueFunc(index))
-                );
-
-                this.conversationDiv.appendChild(messageBlock);
-            }
-            previousRole = message.role;
-        });
-    
-        this.scrollIntoView();
-    }
-
     handleArenaChoice(choice) {
         this.removeArenaFooter();
-        
+
         // Determine winner model for UI updates
         let winnerModel = null;
         if (choice === 'model_a' || choice === 'model_b') {
@@ -438,7 +514,7 @@ class ChatUI {
             const randomIndex = Math.floor(Math.random() * 2);
             winnerModel = this.stateManager.state.activeArenaModels[randomIndex];
         }
-    
+
         this.updateArenaResolution(choice, winnerModel);
         return { choice, winnerModel };
     }
@@ -449,235 +525,11 @@ class ChatUI {
 }
 
 
-export class SidepanelChatUI extends ChatUI {
-    constructor(options) {
-        const {
-            inputWrapperId = '.textarea-wrapper',
-            scrollElementId = 'conversation',
-            ...baseOptions
-        } = options;
-
-        super(baseOptions);
-
-        // Scroll behavior
-        this.scrollToElement = document.getElementById(scrollElementId);
-        this.shouldScroll = true;
-        this.scrollListenerActive = false;
-
-        this.activeMessageDivs = null;  // Single div for normal mode, array [modelA, modelB] for arena
-        this.inputWrapper = document.querySelector(inputWrapperId);
-        this.initInputHandling();
-    }
-
-    initInputHandling() {
-        const textarea = this.inputWrapper.querySelector('textarea');
-
-        // Initialize all input-related handlers
-        this.initDragDrop(textarea);
-        this.initPaste(textarea);
-        this.initResize(textarea);
-        this.initKeyboardHandler(textarea);
-    }
-
-    initDragDrop(textarea) {
-        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-            textarea.addEventListener(eventName, e => {
-                e.preventDefault();
-                e.stopPropagation();
-                textarea.classList.toggle('dragging',
-                    eventName === 'dragover' || eventName === 'dragenter'
-                );
-            });
-        });
-
-        textarea.addEventListener('drop', this.handleDrop.bind(this));
-    }
-
-    async handleDrop(e) {
-        const files = Array.from(e.dataTransfer.files);
-
-        // Handle local files
-        for (const file of files) {
-            if (file.type.match('image.*')) {
-                await this.handleImageFile(file);
-            } else if (!file.type.match('video.*')) {
-                await this.handleTextFile(file);
-            }
-        }
-
-        // Handle web images
-        const imgSrc = new DOMParser()
-            .parseFromString(e.dataTransfer.getData('text/html'), 'text/html')
-            .querySelector('img')?.src;
-
-        if (imgSrc) {
-            try {
-                const response = await fetch(imgSrc);
-                const blob = await response.blob();
-                await this.handleImageFile(blob);
-            } catch (error) {
-                console.error('Failed to load web image:', error);
-            }
-        }
-
-        // Handle text drops
-        const text = e.dataTransfer.getData('text');
-        if (text) {
-            const textarea = e.target;
-            const start = textarea.selectionStart;
-            textarea.value = textarea.value.slice(0, start) + text +
-                textarea.value.slice(textarea.selectionEnd);
-            this.updateTextareaHeight(textarea);
-        }
-    }
-
-    async handleImageFile(file) {
-        const reader = new FileReader();
-        reader.onload = e => this.appendImage(e.target.result);
-        reader.readAsDataURL(file);
-    }
-
-    async handleTextFile(file) {
-        const reader = new FileReader();
-        reader.onload = e => {
-            const fileData = {
-                tempId: this.pendingMedia.tempFileId++,
-                name: file.name,
-                content: e.target.result
-            };
-            this.appendFile(fileData);
-        };
-        reader.readAsText(file);
-    }
-
-    initPaste(textarea) {
-        textarea.addEventListener('paste', async e => {
-            const items = Array.from(e.clipboardData.items);
-            const imageItem = items.find(item => item.type.startsWith('image/'));
-
-            if (imageItem) {
-                e.preventDefault();
-                await this.handleImageFile(imageItem.getAsFile());
-            }
-        });
-    }
-
-    initResize(textarea) {
-        textarea.addEventListener('input', () => this.updateTextareaHeight(textarea));
-    }
-
-    updateTextareaHeight(textarea) {
-        textarea.style.height = 'auto';
-        textarea.style.height = `${textarea.scrollHeight}px`;
-    }
-
-    initKeyboardHandler(textarea) {
-        textarea.addEventListener('keydown', e => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                const text = textarea.value.trim();
-
-                if (text) {
-                    this.handleUserInput(text);
-                }
-
-                textarea.value = '';
-                this.updateTextareaHeight(textarea);
-            }
-        });
-    }
-
-    handleUserInput(text) {
-        // Handle any pending arena choices before new input
-        this.handleArenaDefault();
-
-        // Create the message and handle pending media
-        this.createMessage('user', text);
-
-        // Clear media state after message is created
-        this.clearPendingMedia();
-
-        return text;
-    }
-
-    regenerateResponse(contentDiv, model, options = {}) {
-        const parentMessage = contentDiv.closest('.assistant-message');
-        const isArenaMessage = parentMessage.querySelector('.arena-full-container');
-
-        if (isArenaMessage) {
-            return this.regenerateArenaResponse(model, contentDiv, options);
-        }
-
-        // Create new message with regeneration indicator
-        const newMessage = this.createMessage('assistant', '', {
-            ...options,
-            model,
-            isRegeneration: true
-        });
-
-        // Replace old message
-        parentMessage.replaceWith(newMessage);
-        return newMessage.querySelector('.message-content');
-    }
-
-    regenerateArenaResponse(model, contentDiv, options) {
-        const modelIndex = this.stateManager.state.activeArenaModels.findIndex(m => m === model);
-
-        if (modelIndex === -1) return null;
-
-        const arenaWrapper = contentDiv.closest('.arena-wrapper');
-        const newContentDiv = this.createContentDiv('assistant', '');
-
-        // Replace old content
-        contentDiv.replaceWith(newContentDiv);
-        return newContentDiv;
-    }
-
-    buildChat(chat) {
-        // Hide models and disable continue buttons for sidepanel
-        super.buildChat(chat, { 
-            hideModels: true, 
-            allowContinue: false 
-        });
-    }
-
-    // Scroll Handling
-    scrollIntoView() {
-        if (this.shouldScroll) {
-            this.scrollToElement.scrollIntoView(false);
-        }
-    }
-
-    initScrollListener() {
-        if (!this.scrollListenerActive) {
-            window.addEventListener('wheel', this.handleScroll.bind(this));
-            this.scrollListenerActive = true;
-        }
-        this.shouldScroll = true;
-    }
-
-    handleScroll(event) {
-        if (this.shouldScroll && event.deltaY < 0) {
-            this.shouldScroll = false;
-        }
-
-        const threshold = 100;
-        const distanceFromBottom = Math.abs(
-            this.scrollToElement.scrollHeight - window.scrollY - window.innerHeight
-        );
-
-        if (!this.shouldScroll && event.deltaY > 0 && distanceFromBottom <= threshold) {
-            this.shouldScroll = true;
-        }
-    }
-}
-
-
 export class HistoryChatUI extends ChatUI {
     constructor(options) {
         const {
             historyListId = '.history-list',
-            continueFunc = () => {},
+            continueFunc = () => { },
             ...baseOptions
         } = options;
 
@@ -794,12 +646,12 @@ export class HistoryChatUI extends ChatUI {
 
     buildChat(chat) {
         // Show models and enable continue buttons for history
-        super.buildChat(chat, { 
+        super.buildChat(chat, {
             hideModels: false,
             addSystemMsg: true,
             continueFunc: this.continueFunc
         });
-        
+
         // Additional history-specific updates
         this.updateChatHeader(chat.title);
         this.updateChatTimestamp(chat.timestamp);

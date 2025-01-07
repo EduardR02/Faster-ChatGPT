@@ -333,6 +333,11 @@ export class SidepanelStateManager extends SettingsManager {
         this.state.isArenaModeActive = false;
     }
 
+    getArenaModel(index) {
+        if (!this.state.activeArenaModels || !this.isArenaModeActive) throw new Error('Active arena models are not set!');
+        return this.state.activeArenaModels[index];
+    }
+
     get isArenaModeActive() {
         return this.state.isArenaModeActive;
     }
