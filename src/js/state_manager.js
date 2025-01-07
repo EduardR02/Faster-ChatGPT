@@ -121,10 +121,10 @@ export class SidepanelStateManager extends SettingsManager {
             ...this.state,
             isArenaModeActive: false,
             activeArenaModels: null,
-            currentContentDiv: null,
             pendingResponses: 0,
             pendingThinkingMode: false,
             activeThinkingMode: false,
+            thinkingStates: { default: THINKING_STATE.INACTIVE },
             chatState: CHAT_STATE.NORMAL,
             shouldSave: true,
             isSidePanel: true,
@@ -229,6 +229,16 @@ export class SidepanelStateManager extends SettingsManager {
         return this.state.chatState === CHAT_STATE.CONVERTED;
     }
 
+    isThinking(model = null) {
+        const state = getThinkingState(model);
+        return state === THINKING_STATE.THINKING;
+    }
+
+    isSolving(model = null) {
+        const state = getThinkingState(model);
+        return state === THINKING_STATE.SOLVING;
+    }
+
     subscribeToChatReset(callback) {
         this.chatResetListeners.push(callback);
     }
@@ -254,21 +264,67 @@ export class SidepanelStateManager extends SettingsManager {
         this.updateSettingsLocal({ arena_mode: !this.getSetting('arena_mode') });
     }
 
-    setCurrentContentDiv(div) {
-        this.state.currentContentDiv = div;
-    }
-
-    getCurrentContentDiv() {
-        return this.state.currentContentDiv;
-    }
-
     initArenaResponse(modelA, modelB) {
         this.state.pendingResponses = 2;
         this.state.activeArenaModels = [modelA, modelB];
+        this.state.isArenaModeActive = true;
     }
 
     updatePendingResponses() {
         this.state.pendingResponses--;
+        if (this.state.pendingResponses < 0) {
+            throw new Error('Pending responses cannot be negative!');
+        }
+        return this.state.pendingResponses === 0;
+    }
+
+    nextThinkingState(model = null) {
+        const currentState = getThinkingState(model);
+        let nextState;
+
+        if (currentState === THINKING_STATE.INACTIVE) {
+            nextState = THINKING_STATE.THINKING;
+        } else if (currentState === THINKING_STATE.THINKING) {
+            nextState = THINKING_STATE.SOLVING;
+        } else {
+            nextState = THINKING_STATE.INACTIVE;
+        }
+
+        setThinkingState(nextState, model);
+    }
+
+    initArenaThinkingStates(modelA, modelB) {
+        const thinkingState = this.state.activeThinkingMode ? THINKING_STATE.THINKING : THINKING_STATE.INACTIVE;
+        this.state.thinkingStates = {
+            [modelA]: thinkingState,
+            [modelB]: thinkingState
+        };
+    }
+
+    initThinkingState() {
+        const thinkingState = this.state.activeThinkingMode ? THINKING_STATE.THINKING : THINKING_STATE.INACTIVE;
+        this.state.thinkingStates = { default: thinkingState };
+    }
+
+    getThinkingState(model) {
+        if (this.isArenaModeActive) {
+            return this.state.thinkingStates[model] ?? THINKING_STATE.INACTIVE;
+        }
+        return this.state.thinkingStates.default;
+    }
+
+    setThinkingState(state, model = null) {
+        if (this.isArenaModeActive && model) {
+            this.state.thinkingStates[model] = state;
+        } else {
+            this.state.thinkingStates.default = state;
+        }
+    }
+
+    resetThinkingStates() {
+        this.state.thinkingStates = { 
+            default: THINKING_STATE.INACTIVE 
+        };
     }
 
     clearArenaState() {
@@ -320,6 +376,13 @@ export const CHAT_STATE = {
     NORMAL: 0,      // Fresh normal chat
     INCOGNITO: 1,   // Fresh incognito or continued as incognito
     CONVERTED: 2    // Used the one-time transition either way
+};
+
+
+const THINKING_STATE = {
+    INACTIVE: 0,
+    THINKING: 1,
+    SOLVING: 2
 };
 
 

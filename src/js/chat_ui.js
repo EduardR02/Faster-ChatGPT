@@ -5,27 +5,15 @@ class ChatUI {
     constructor(options) {
         const {
             conversationWrapperId = 'conversation-wrapper',
-            scrollElementId = 'conversation',
             stateManager,
-            onContinue = null,
         } = options;
 
         this.conversationDiv = document.getElementById(conversationWrapperId);
-        this.scrollToElement = document.getElementById(scrollElementId);
         this.stateManager = stateManager;
-        this.onContinue = onContinue;
-
-        // Scroll behavior
-        this.shouldScroll = true;
-        this.scrollListenerActive = false;
 
         // Media handling state
-        this.pendingMedia = {
-            div: null,
-            images: [],
-            files: [],
-            tempFileId: 0
-        };
+        this.pendingMedia = {};
+        this.resetPendingMedia();
 
         // Role labels configuration
         this.roleLabels = {
@@ -35,108 +23,74 @@ class ChatUI {
         };
     }
 
+    addMessage(role, content = '', options = {}) {
+        if (role === 'user' && this.pendingMedia.div) this.appendToExistingMessage(content);
+        else this.conversationDiv.appendChild(this.createMessage(role, content, options));
+        this.scrollIntoView();
+    }
+
     // Core message creation methods
     createMessage(role, content = '', options = {}) {
-        const {
-            thinkingState = null,
-            model = null,
-            isRegeneration = false,
-            messageIndex = null,
-            images = null,
-            files = null,
-        } = options;
-
-        // Handle pending media for user messages
-        if (role === 'user' && this.pendingMedia.div) {
-            this.appendToExistingMessage(content);
-            return;
-        }
-
-        const messageBlock = this.initMessageBlock(role);
-        const messageWrapper = this.createMessageWrapper(role, content, {
-            images,
-            files,
-            model,
-            thinkingState,
-            isRegeneration,
-            messageIndex
-        });
-
+        const messageBlock = createElementWithClass('div', `${role}-message`);
+        const messageWrapper = this.createMessageWrapper(role, content, options);
         messageBlock.appendChild(messageWrapper);
-        this.scrollIntoView();
-
-        // Store reference for assistant messages
-        if (role === 'assistant') {
-            const contentDiv = messageWrapper.querySelector('.message-content');
-            this.stateManager.setCurrentContentDiv(contentDiv);
-        }
-
         return messageBlock;
     }
 
     createMessageWrapper(role, content, options) {
+        const { files, images, ...otherOptions } = options;
         const wrapper = createElementWithClass('div', 'message-wrapper');
-        const prefixWrapper = this.createPrefixWrapper(role, options);
+        const prefixWrapper = this.createPrefixWrapper(role, otherOptions);
         wrapper.appendChild(prefixWrapper);
-
-        // Add media content if present
-        if (options.images?.length) {
-            options.images.forEach(img =>
-                wrapper.appendChild(this.createImageContent(img, role))
-            );
-        }
-
-        if (options.files?.length) {
-            options.files.forEach(file =>
-                wrapper.appendChild(this.createFileDisplay(file))
-            );
-        }
-
-        // Add text content
-        if (content) {
-            const contentDiv = this.createContentDiv(role, content);
-            wrapper.appendChild(contentDiv);
-        }
-
+    
+        if (images?.length)
+            images.forEach(img => wrapper.appendChild(this.createImageContent(img, role)));
+    
+        if (files?.length)
+            files.forEach(file => wrapper.appendChild(this.createFileDisplay(file)));
+    
+        wrapper.appendChild(this.createContentDiv(role, content));
+    
         return wrapper;
     }
 
     createPrefixWrapper(role, options) {
-        const {
-            model,
-            thinkingState,
-            messageIndex,
-        } = options;
-
         const wrapper = createElementWithClass('div', 'prefix-wrapper');
         const prefix = createElementWithClass('span', `message-prefix ${role}-prefix`);
-
-        prefix.textContent = this.generatePrefixText(role, {
-            model,
-            thinkingState
-        });
+        prefix.textContent = this.generatePrefixText(role, options);
 
         wrapper.appendChild(prefix);
-
-        // Add continue button for history view
-        if (this.onContinue && messageIndex !== null) {
-            const continueButton = this.createContinueButton(messageIndex);
-            wrapper.appendChild(continueButton);
-        }
-
         return wrapper;
     }
 
     generatePrefixText(role, options) {
-        const { model, thinkingState } = options;
-        let text = model || this.roleLabels[role];
+        const { model, isRegeneration = false, hideModels = true } = options;
+        let prefix = hideModels ? this.roleLabels[role] : model;
 
         if (role === 'assistant') {
-            if (thinkingState === 'thinking') text += ' 🧠';
-            else if (thinkingState === 'solver') text += ' 💡';
+            if (isRegeneration) prefix += ' ⟳';
+            if (this.stateManager.isThinking(model)) prefix += ' 🧠';
+            else if (this.stateManager.isSolving(model)) prefix += ' 💡';
+            if (this.stateManager.isArenaModeActive) prefix = this.generateArenaPrefix(options.choice, options.modelKey);
         }
 
-        return text;
+        return prefix;
+    }
+
+    generateArenaPrefix(choice, modelKey) {
+        if (choice) {
+            switch (choice) {
+                case modelKey: prefix += ' 🏆'; break;
+                case 'draw': prefix += ' 🤝'; break;
+                case 'draw(bothbad)': prefix += ' ❌'; break;
+                case 'reveal': prefix += ' 👁️'; break;
+                case 'ignored': prefix += ' n/a'; break;
+                default: 
+                    if (modelKey !== choice) prefix += ' ❌';
+            }
+        }
+    
+        return prefix;
     }
 
     createSystemMessage(content, title = 'System Prompt') {
@@ -156,7 +110,7 @@ class ChatUI {
     // UI Component Creation Methods
     createContentDiv(role, content) {
         const div = createElementWithClass('div', `message-content ${role}-content`);
-        div.innerHTML = add_codeblock_html(content);
+        if (content) div.innerHTML = add_codeblock_html(content);
         return div;
     }
 
@@ -188,24 +142,43 @@ class ChatUI {
     }
 
     // Arena Mode Methods
-    initArenaMode(modelA, modelB) {
-        this.stateManager.initArenaResponse(modelA, modelB);
-        const container = this.createArenaContainer();
+    createArenaMessage(message = null, hideModels = true) {
+        const { responses, choice, continued_with, role } = message;
+        const messageBlock = createElementWithClass('div', `assistant-message`);
+        const container = createElementWithClass('div', 'arena-full-container');
+        messageBlock.appendChild(container);
+        let msgDivs = [null, null];
 
-        ['model_a', 'model_b'].forEach((_, index) => {
+        ['model_a', 'model_b'].forEach((model, index) => {
             const arenaDiv = createElementWithClass('div', 'arena-wrapper');
-            const assistantWrapper = createElementWithClass('div', 'assistant-message');
-            const contentDiv = this.createMessage('assistant', '', {
-                model: this.stateManager.state.activeArenaModels[index]
-            });
-            arenaDiv.appendChild(assistantWrapper);
             container.appendChild(arenaDiv);
+            let options = { 
+                model: this.stateManager.state.activeArenaModels[index],
+                modelKey: model,
+                isRegeneration: false,
+                hideModels
+            };
+            if (responses) {
+                responses[model].messages.forEach((msg, i) => {
+                    options.isRegeneration = i !== 0;
+                    options.choice = choice;
+                    msgDivs[index] = this.createMessage(role, msg, options);
+                    const className = continued_with === model ? 'arena-winner' : 'arena-loser';
+                    msgDivs[index].querySelector('.message-content').classList.add(className);
+                    arenaDiv.appendChild(msgDivs[index]);
+                });
+            }
+            else {
+                msgDivs[index] = this.createMessage('assistant', '', options);
+                arenaDiv.appendChild(msgDivs[index]);
+            }
         });
-
-        return container;
+        this.conversationDiv.appendChild(messageBlock);
+        this.scrollIntoView();
+        return msgDivs;
     }
 
-    updateArenaResolution(choice, winnerModel = null) {
+    updateArenaResolution(choice) {
         const container = this.conversationDiv.querySelector('.arena-full-container');
         if (!container) return;
     
@@ -220,7 +193,7 @@ class ChatUI {
                 modelName: prefix.textContent.split(' ')[0], // Keep existing model name
                 choice,
                 modelKey: `model_${index === 0 ? 'a' : 'b'}`,
-                hideModels: !prefix.textContent.includes('gpt') // Preserve current hiding state
+                hideModels: !prefix.textContent.includes('Assistant') // Preserve current hiding state
             });
     
             // Update content classes
@@ -234,13 +207,6 @@ class ChatUI {
                 content.classList.toggle('arena-loser', !isWinner);
             }
         });
-    }
-
-    createArenaContainer() {
-        const messageBlock = this.initMessageBlock('assistant');
-        const container = createElementWithClass('div', 'arena-full-container');
-        messageBlock.appendChild(container);
-        return container;
     }
 
     addArenaFooter(onChoice) {
@@ -261,6 +227,7 @@ class ChatUI {
             button.textContent = btn.text;
             button.onclick = () => {
                 this.removeArenaFooter(footer);
+                this.updateArenaResolution(btn.choice);
                 onChoice(btn.choice);
             };
             this.setupArenaButtonHover(button);
@@ -316,23 +283,23 @@ class ChatUI {
 
     // Media Handling Methods
     initPendingMedia() {
-        if (!this.pendingMedia.div) {
-            this.pendingMedia.div = this.initMessageBlock('user');
-        }
-        return this.pendingMedia.div;
+        if (this.pendingMedia.div) return;
+        this.pendingMedia.div = this.createMessage('user', '');
+        this.pendingMedia.div.querySelector('.message-content').remove();
+        this.conversationDiv.appendChild(this.pendingMedia.div);
     }
 
     appendImage(imageBase64) {
-        const wrapper = this.initPendingMedia().querySelector('.message-wrapper')
-            || this.createMessageWrapper('user', '');
+        this.initPendingMedia()
+        const wrapper = this.pendingMedia.div.querySelector('.message-wrapper');
         const imgContent = this.createImageContent(imageBase64, 'user');
         wrapper.appendChild(imgContent);
         this.pendingMedia.images.push(imageBase64);
     }
 
     appendFile(file) {
-        const wrapper = this.initPendingMedia().querySelector('.message-wrapper')
-            || this.createMessageWrapper('user', '');
+        this.initPendingMedia()
+        const wrapper = this.pendingMedia.div.querySelector('.message-wrapper');
         const fileDisplay = this.createFileDisplay(file, {
             addRemoveButton: true
         });
@@ -351,7 +318,7 @@ class ChatUI {
         const wrapper = this.pendingMedia.div.querySelector('.message-wrapper');
         const contentDiv = this.createContentDiv('user', content);
         wrapper.appendChild(contentDiv);
-        this.pendingMedia.div = null;
+        this.resetPendingMedia();
     }
 
     // Footer and Regeneration Methods
@@ -367,15 +334,9 @@ class ChatUI {
     }
 
     // Utility Methods
-    initMessageBlock(role) {
-        const block = createElementWithClass('div', `${role}-message`);
-        this.conversationDiv.appendChild(block);
-        return block;
-    }
-
-    createContinueButton(messageIndex) {
+    createContinueButton(func) {
         const button = createElementWithClass('button', 'unset-button continue-conversation-button', '\u{2197}');
-        button.onclick = () => this.onContinue(messageIndex);
+        button.onclick = () => func();
         return button;
     }
 
@@ -396,138 +357,72 @@ class ChatUI {
 
     clearConversation() {
         this.conversationDiv.innerHTML = '';
-        this.pendingMedia = {
-            div: null,
-            images: [],
-            files: [],
-            tempFileId: this.pendingMedia.tempFileId
-        };
+        this.resetPendingMedia();
         this.stateManager.setCurrentContentDiv(null);
     }
 
-    // Scroll Handling
-    scrollIntoView() {
-        if (this.shouldScroll) {
-            this.scrollToElement.scrollIntoView(false);
-        }
-    }
-
-    initScrollListener() {
-        if (!this.scrollListenerActive) {
-            window.addEventListener('wheel', this.handleScroll.bind(this));
-            this.scrollListenerActive = true;
-        }
-        this.shouldScroll = true;
-    }
-
-    handleScroll(event) {
-        if (this.shouldScroll && event.deltaY < 0) {
-            this.shouldScroll = false;
-        }
-
-        const threshold = 100;
-        const distanceFromBottom = Math.abs(
-            this.scrollToElement.scrollHeight - window.scrollY - window.innerHeight
-        );
-
-        if (!this.shouldScroll && event.deltaY > 0 && distanceFromBottom <= threshold) {
-            this.shouldScroll = true;
-        }
+    resetPendingMedia() {
+        this.pendingMedia = {
+            div: null,
+            media: [],
+            tempFileId: 0
+        };
     }
 
     buildChat(chat, options = {}) {
         const {
             hideModels = false,
-            allowContinue = false,
+            continueFunc = null,
             startIndex = 0,
-            endIndex = null
+            endIndex = null,
+            addSystemMsg = false
         } = options;
     
         this.clearConversation();
         let previousRole = null;
     
-        // Get the slice of messages we want to process
         const messages = chat.messages.slice(
             startIndex, 
             endIndex !== null ? endIndex + 1 : undefined
         );
     
         messages.forEach((message, index) => {
-            if (message.role === 'system') {
+            if (message.role === 'system' && addSystemMsg) {
                 const systemMsg = this.createSystemMessage(message.content);
                 this.conversationDiv.appendChild(systemMsg);
                 return;
             }
     
             if (message.responses) {
-                this.buildArenaMessage(message, {
-                    messageIndex: index,
-                    hideModels,
-                    allowContinue
-                });
+                this.stateManager.initArenaResponse(message.responses['model_a'].name, message.responses['model_b'].name);
+                const arenaDivs = this.createArenaMessage(message, hideModels);
+                if (continueFunc) {
+                    arenaDivs.forEach((wrapper, wrapper_idx) => {
+                        const modelKey = wrapper_idx === 0 ? 'model_a' : 'model_b';
+                        wrapper.querySelectorAll('.prefix-wrapper').forEach((prefix, idx) => {
+                            button = this.createContinueButton(() => {continueFunc(index, idx, modelKey)});
+                            prefix.appendChild(button);
+                        });
+                    })
+                }
+                this.stateManager.clearArenaState();
             } else {
-                this.buildRegularMessage(message, {
-                    messageIndex: index,
-                    previousRole,
-                    hideModels,
-                    allowContinue
+                const messageBlock = this.createMessage(message.role, message.content, {
+                    model: hideModels ? null : message.model,
+                    images: message.images,
+                    files: message.files,
+                    isRegeneration: previousRole === message.role
                 });
-                previousRole = message.role;
+                messageBlock.querySelector('.prefix-wrapper').appendChild(
+                    this.createContinueButton(() => continueFunc(index))
+                );
+
+                this.conversationDiv.appendChild(messageBlock);
             }
+            previousRole = message.role;
         });
     
         this.scrollIntoView();
-    }
-    
-    buildRegularMessage(message, options) {
-        const {
-            messageIndex,
-            previousRole,
-            hideModels,
-            allowContinue
-        } = options;
-    
-        const messageBlock = this.createMessage(message.role, message.content, {
-            messageIndex: allowContinue ? messageIndex : null,
-            previousRole,
-            model: hideModels ? null : message.model,
-            images: message.images,
-            files: message.files
-        });
-    
-        if (allowContinue) {
-            const prefixWrapper = messageBlock.querySelector('.prefix-wrapper');
-            const continueButton = this.createContinueButton(messageIndex);
-            prefixWrapper.appendChild(continueButton);
-        }
-    }
-    
-    generateArenaPrefix(options) {
-        const {
-            modelName,
-            isRegeneration,
-            choice,
-            modelKey,
-            hideModels
-        } = options;
-    
-        let prefix = hideModels ? 'Assistant' : modelName;
-        if (isRegeneration) prefix += ' ⟳';
-    
-        // Add choice indicator - now used in both live chat and history
-        if (choice) {
-            switch (choice) {
-                case modelKey: prefix += ' 🏆'; break;
-                case 'draw': prefix += ' 🤝'; break;
-                case 'draw(bothbad)': prefix += ' ❌'; break;
-                case 'reveal': prefix += ' 👁️'; break;
-                case 'ignored': prefix += ' n/a'; break;
-                default: 
-                    if (modelKey !== choice) prefix += ' ❌';
-            }
-        }
-    
-        return prefix;
     }
 
     handleArenaChoice(choice) {
@@ -547,6 +442,10 @@ class ChatUI {
         this.updateArenaResolution(choice, winnerModel);
         return { choice, winnerModel };
     }
+
+    getArenaIndex(model) {
+        return this.stateManager.state.activeArenaModels.findIndex(m => m === model);
+    }
 }
 
 
@@ -554,10 +453,18 @@ export class SidepanelChatUI extends ChatUI {
     constructor(options) {
         const {
             inputWrapperId = '.textarea-wrapper',
+            scrollElementId = 'conversation',
             ...baseOptions
         } = options;
 
         super(baseOptions);
+
+        // Scroll behavior
+        this.scrollToElement = document.getElementById(scrollElementId);
+        this.shouldScroll = true;
+        this.scrollListenerActive = false;
+
+        this.activeMessageDivs = null;  // Single div for normal mode, array [modelA, modelB] for arena
         this.inputWrapper = document.querySelector(inputWrapperId);
         this.initInputHandling();
     }
@@ -721,11 +628,6 @@ export class SidepanelChatUI extends ChatUI {
         const arenaWrapper = contentDiv.closest('.arena-wrapper');
         const newContentDiv = this.createContentDiv('assistant', '');
 
-        // Update content div with thinking state if needed
-        if (options.thinkingState) {
-            newContentDiv.classList.add('thoughts');
-        }
-
         // Replace old content
         contentDiv.replaceWith(newContentDiv);
         return newContentDiv;
@@ -738,6 +640,36 @@ export class SidepanelChatUI extends ChatUI {
             allowContinue: false 
         });
     }
+
+    // Scroll Handling
+    scrollIntoView() {
+        if (this.shouldScroll) {
+            this.scrollToElement.scrollIntoView(false);
+        }
+    }
+
+    initScrollListener() {
+        if (!this.scrollListenerActive) {
+            window.addEventListener('wheel', this.handleScroll.bind(this));
+            this.scrollListenerActive = true;
+        }
+        this.shouldScroll = true;
+    }
+
+    handleScroll(event) {
+        if (this.shouldScroll && event.deltaY < 0) {
+            this.shouldScroll = false;
+        }
+
+        const threshold = 100;
+        const distanceFromBottom = Math.abs(
+            this.scrollToElement.scrollHeight - window.scrollY - window.innerHeight
+        );
+
+        if (!this.shouldScroll && event.deltaY > 0 && distanceFromBottom <= threshold) {
+            this.shouldScroll = true;
+        }
+    }
 }
 
 
@@ -745,10 +677,12 @@ export class HistoryChatUI extends ChatUI {
     constructor(options) {
         const {
             historyListId = '.history-list',
+            continueFunc = () => {},
             ...baseOptions
         } = options;
 
         super(baseOptions);
+        this.continueFun = continueFunc;
         this.historyList = document.querySelector(historyListId);
         this.lastDateCategory = null;
 
@@ -848,41 +782,6 @@ export class HistoryChatUI extends ChatUI {
         }
     }
 
-    displayChat(chat) {
-        this.clearConversation();
-
-        chat.messages.forEach((message, index) => {
-            if (message.responses) {
-                this.displayArenaMessage(message, index);
-            } else {
-                this.createMessage(message.role, message.content, {
-                    messageIndex: index,
-                    model: message.model,
-                    images: message.images,
-                    files: message.files
-                });
-            }
-        });
-
-        this.updateChatHeader(chat.title);
-        this.updateChatTimestamp(chat.timestamp);
-    }
-
-    displayArenaMessage(message, index) {
-        const container = this.createArenaContainer();
-
-        ['model_a', 'model_b'].forEach(modelKey => {
-            const response = message.responses[modelKey];
-            const wrapper = this.createArenaResponseWrapper(response, {
-                choice: message.choice,
-                continuedWith: message.continued_with,
-                messageIndex: index,
-                modelKey
-            });
-            container.appendChild(wrapper);
-        });
-    }
-
     updateChatHeader(title) {
         document.getElementById('history-chat-header').textContent = title;
     }
@@ -896,8 +795,9 @@ export class HistoryChatUI extends ChatUI {
     buildChat(chat) {
         // Show models and enable continue buttons for history
         super.buildChat(chat, { 
-            hideModels: false, 
-            allowContinue: true 
+            hideModels: false,
+            addSystemMsg: true,
+            continueFunc: this.continueFunc
         });
         
         // Additional history-specific updates
