@@ -50,7 +50,7 @@ class ChatUI {
     }
 
     createPrefixWrapper(role, options) {
-        const wrapper = createElementWithClass('div', 'prefix-wrapper');
+        const wrapper = createElementWithClass('div', 'history-prefix-wrapper');
         const prefix = createElementWithClass('span', `message-prefix ${role}-prefix`);
         prefix.textContent = this.generatePrefixText(role, options);
 
@@ -66,23 +66,6 @@ class ChatUI {
             if (isRegeneration) prefix += ' ⟳';
             if (this.stateManager.isThinking(model)) prefix += ' 🧠';
             else if (this.stateManager.isSolving(model)) prefix += ' 💡';
-            if (this.stateManager.isArenaModeActive) prefix = this.generateArenaPrefix(options.choice, options.modelKey);
-        }
-
-        return prefix;
-    }
-
-    generateArenaPrefix(choice, modelKey) {
-        if (choice) {
-            switch (choice) {
-                case modelKey: prefix += ' 🏆'; break;
-                case 'draw': prefix += ' 🤝'; break;
-                case 'draw(bothbad)': prefix += ' ❌'; break;
-                case 'reveal': prefix += ' 👁️'; break;
-                case 'ignored': prefix += ' n/a'; break;
-                default:
-                    if (modelKey !== choice) prefix += ' ❌';
-            }
         }
 
         return prefix;
@@ -123,16 +106,20 @@ class ChatUI {
 
             if (message.responses) {
                 this.stateManager.initArenaResponse(message.responses['model_a'].name, message.responses['model_b'].name);
-                const arenaDivs = this.createArenaMessage(message, hideModels);
+                const arenaDivs = this.createArenaMessage(message);
                 if (continueFunc) {
                     arenaDivs.forEach((wrapper, wrapper_idx) => {
                         const modelKey = wrapper_idx === 0 ? 'model_a' : 'model_b';
-                        wrapper.querySelectorAll('.prefix-wrapper').forEach((prefix, idx) => {
+                        wrapper.querySelectorAll('.history-prefix-wrapper').forEach((prefix, idx) => {
                             button = this.createContinueButton(() => { continueFunc(index, idx, modelKey) });
                             prefix.appendChild(button);
                         });
                     })
                 }
+                // this is kind of sneaky, because in sidepanel we override this method, as we already have access to arenaDivs,
+                // so due to the overwritten function only having two parameters, the third one gets ignored,
+                // which i conveniently made the one we don't need anymore
+                this.resolveArena(message.choice, message.continued_with, arenaDivs);
                 this.stateManager.clearArenaState();
             } else {
                 const messageBlock = this.createMessage(message.role, message.content, {
@@ -143,7 +130,7 @@ class ChatUI {
                     hideModels
                 });
                 if (continueFunc) {
-                    messageBlock.querySelector('.prefix-wrapper').appendChild(
+                    messageBlock.querySelector('.history-prefix-wrapper').appendChild(
                         this.createContinueButton(() => continueFunc(index))
                     );
                 }
@@ -151,13 +138,13 @@ class ChatUI {
                 this.conversationDiv.appendChild(messageBlock);
             }
             previousRole = message.role;
-            if (index !== messages.length - 1) this.resetPendingMedia();
+            if (index !== messages.length - 1) this.pendingMediaDiv = null;
         });
     }
 
     // Arena Mode Methods
-    createArenaMessage(message = null, hideModels = true) {
-        const { responses, choice, continued_with, role } = message;
+    createArenaMessage(message = null) {
+        const { responses, role } = message;
         const messageBlock = createElementWithClass('div', `assistant-message`);
         const container = createElementWithClass('div', 'arena-full-container');
         messageBlock.appendChild(container);
@@ -169,18 +156,13 @@ class ChatUI {
             container.appendChild(arenaDiv);
             let options = {
                 model: this.stateManager.getArenaModel(index),
-                modelKey: model,
                 isRegeneration: false,
-                hideModels
+                hideModels: true
             };
             if (responses) {
                 responses[model].messages.forEach((msg, i) => {
                     options.isRegeneration = i !== 0;
-                    options.choice = choice;
-                    const createdMessage = this.createMessage(role, msg, options);
-                    const className = continued_with === model ? 'arena-winner' : 'arena-loser';
-                    createdMessage.querySelector('.message-content').classList.add(className);
-                    arenaDiv.appendChild(createdMessage);
+                    arenaDiv.appendChild(this.createMessage(role, msg, options));
                 });
             }
             else {
@@ -189,6 +171,33 @@ class ChatUI {
         });
         this.conversationDiv.appendChild(messageBlock);
         return arenaDivs;
+    }
+
+    resolveArena(choice, continued_with, arenaDivs) {
+        // !!! sidepanel child function only has 2 params, uses class internal for arena divs
+        const modelKeys = ['model_a', 'model_b'];
+        arenaDivs.forEach((wrapper, index) => {
+            const className = continued_with === modelKeys[index] ? 'arena-winner' : 'arena-loser';
+            wrapper.querySelectorAll('.assistant-message').forEach(message => {
+                message.querySelector('message-content').classList.add(className);
+                const prefix = message.querySelector('.message-prefix');
+                prefix.textContent = this.formatArenaPrefix(prefix.textContent, this.stateManager.getArenaModel(index), choice, modelKeys[index]);
+            });
+        });
+    }
+
+    formatArenaPrefix(currentText, modelName, choice, modelKey) {
+        let suffix = '';
+        if (choice) {
+            switch (choice) {
+                case modelKey: suffix = ' 🏆'; break;
+                case 'draw': suffix = ' 🤝'; break;
+                case 'reveal': suffix = ' 👁️'; break;
+                case 'ignored': suffix = ' n/a'; break;
+                default: suffix = ' ❌';    // loser or bothbad
+            }
+        }
+        return currentText.replace(this.roleLabels.assistant, modelName) + suffix;
     }
 
     // UI Component Creation Methods
@@ -215,10 +224,8 @@ class ChatUI {
 
         if (onRemove) {
             const removeButton = this.createRemoveFileButton(() => {
-                // Remove UI element
                 fileDiv.remove();
-                // Trigger external logic
-                onRemove(file.tempId);
+                onRemove(file.tempId);  // handle file logic removal
             });
             buttonsWrapper.appendChild(removeButton);
         }
@@ -261,25 +268,13 @@ class ChatUI {
         const wrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
         const contentDiv = this.createContentDiv('user', content);
         wrapper.appendChild(contentDiv);
-        this.resetPendingMedia();
-    }
-
-    // Footer and Regeneration Methods
-    addMessageFooter(contentDiv, options) {
-        const footer = new Footer(
-            options.inputTokens,
-            options.outputTokens,
-            this.stateManager.isArenaModeActive,
-            options.thoughtProcessState,
-            () => options.onRegenerate(contentDiv)
-        );
-        footer.create(contentDiv);
+        this.pendingMediaDiv = null;
     }
 
     // Utility Methods
     createContinueButton(func) {
         const button = createElementWithClass('button', 'unset-button continue-conversation-button', '\u{2197}');
-        button.onclick = () => func();
+        button.onclick = func;
         return button;
     }
 
@@ -299,7 +294,7 @@ class ChatUI {
 
     clearConversation() {
         this.conversationDiv.innerHTML = '';
-        this.resetPendingMedia();
+        this.pendingMediaDiv = null;
     }
 }
 
@@ -333,6 +328,11 @@ export class SidepanelChatUI extends ChatUI {
         textarea.style.height = `${textarea.scrollHeight}px`;
     }
 
+    addMessage(role, content = '', options = {}) {
+        super.addMessage(role, content, options);
+        this.scrollIntoView();
+    }
+
     createMessage(role, content, options = {}) {
         const message = super.createMessage(role, content, options);
         if (!this.stateManager.isArenaModeActive) {
@@ -341,16 +341,14 @@ export class SidepanelChatUI extends ChatUI {
         return message;
     }
 
-    createArenaMessage(message = null, hideModels = true) {
-        this.activeMessageDivs = super.createArenaMessage(message, hideModels);
+    createArenaMessage(message = null) {
+        this.activeMessageDivs = super.createArenaMessage(message);
+        this.scrollIntoView();
         return this.activeMessageDivs;
     }
 
     regenerateResponse(model) {
-        const newMessage = this.createMessage('assistant', '', {
-            model,
-            isRegeneration: true
-        });
+        const newMessage = this.createMessage('assistant', '', { model, isRegeneration: true });
         if (this.stateManager.isArenaModeActive) {
             const modelIndex = this.getArenaIndex(model);
             if (modelIndex === -1) return null;
@@ -361,12 +359,24 @@ export class SidepanelChatUI extends ChatUI {
         return newMessage.querySelector('.message-content');
     }
 
+    addMessageFooter(contentDiv, options) {
+        const footer = new Footer(
+            options.inputTokens,
+            options.outputTokens,
+            this.stateManager.isArenaModeActive,
+            options.thoughtProcessState,
+            () => options.onRegenerate(contentDiv)
+        );
+        footer.create(contentDiv);
+    }
+
     buildChat(chat) {
         // Hide models and disable continue buttons for sidepanel
         super.buildChat(chat, {
             hideModels: true,
             allowContinue: false
         });
+        this.scrollIntoView();
     }
 
     // Scroll Handling
@@ -399,37 +409,6 @@ export class SidepanelChatUI extends ChatUI {
         }
     }
 
-    updateArenaResolution(choice) {
-        const container = this.conversationDiv.querySelector('.arena-full-container');
-        if (!container) return;
-
-        const arenaWrappers = container.querySelectorAll('.arena-wrapper');
-        arenaWrappers.forEach((wrapper, index) => {
-            const model = this.stateManager.state.activeArenaModels[index];
-            const prefix = wrapper.querySelector('.message-prefix');
-            const content = wrapper.querySelector('.message-content');
-
-            // Update prefix with choice indicator
-            prefix.textContent = this.generateArenaPrefix({
-                modelName: prefix.textContent.split(' ')[0], // Keep existing model name
-                choice,
-                modelKey: `model_${index === 0 ? 'a' : 'b'}`,
-                hideModels: !prefix.textContent.includes('Assistant') // Preserve current hiding state
-            });
-
-            // Update content classes
-            if (choice === 'draw(bothbad)') {
-                content.classList.add('arena-loser');
-            } else if (choice === 'draw' || choice === 'reveal' || choice === 'ignored') {
-                content.classList.toggle('arena-winner', model === winnerModel);
-            } else {
-                const isWinner = model === winnerModel;
-                content.classList.toggle('arena-winner', isWinner);
-                content.classList.toggle('arena-loser', !isWinner);
-            }
-        });
-    }
-
     addArenaFooter(onChoice) {
         const container = this.conversationDiv.querySelector('.arena-full-container');
         if (!container) return;
@@ -448,14 +427,19 @@ export class SidepanelChatUI extends ChatUI {
             button.textContent = btn.text;
             button.onclick = () => {
                 this.removeArenaFooter(footer);
-                this.updateArenaResolution(btn.choice);
-                onChoice(btn.choice);
+                onChoice(btn.choice);   // this should also call resolve arena after it's done, because here we don't know continued_with yet
             };
             this.setupArenaButtonHover(button);
             footer.appendChild(button);
         });
 
         container.parentElement.appendChild(footer);
+    }
+
+    resolveArena(choice, continued_with) {
+        super.resolveArena(choice, continued_with, this.activeMessageDivs);
+        this.scrollIntoView();
+        this.activeMessageDivs = null;
     }
 
     setupArenaButtonHover(button) {
@@ -501,26 +485,13 @@ export class SidepanelChatUI extends ChatUI {
         footer.addEventListener('transitionend', handleTransitionEnd);
     }
 
-    handleArenaChoice(choice) {
-        this.removeArenaFooter();
-
-        // Determine winner model for UI updates
-        let winnerModel = null;
-        if (choice === 'model_a' || choice === 'model_b') {
-            const modelIndex = choice === 'model_a' ? 0 : 1;
-            winnerModel = this.stateManager.state.activeArenaModels[modelIndex];
-        } else if (['draw', 'reveal', 'ignored'].includes(choice)) {
-            // For these cases, randomly select one path to continue with
-            const randomIndex = Math.floor(Math.random() * 2);
-            winnerModel = this.stateManager.state.activeArenaModels[randomIndex];
-        }
-
-        this.updateArenaResolution(choice, winnerModel);
-        return { choice, winnerModel };
-    }
-
     getArenaIndex(model) {
         return this.stateManager.state.activeArenaModels.findIndex(m => m === model);
+    }
+
+    clearConversation() {
+        super.clearConversation();
+        this.activeMessageDivs = null;
     }
 }
 
