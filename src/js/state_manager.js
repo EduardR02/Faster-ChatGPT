@@ -112,15 +112,66 @@ export class SettingsManager {
 }
 
 
-export class SidepanelStateManager extends SettingsManager {
+export class ArenaStateManager extends SettingsManager {
+    constructor(requestedSettings = []) {
+        super(requestedSettings);
+        
+        // Shared arena state
+        this.state = {
+            ...this.state,
+            isArenaModeActive: false,
+            activeArenaModels: null,
+        };
+    }
+
+    initArenaResponse(modelA, modelB) {
+        this.state.activeArenaModels = [modelA, modelB];
+        this.state.isArenaModeActive = true;
+    }
+
+    clearArenaState() {
+        this.state.activeArenaModels = null;
+        this.state.isArenaModeActive = false;
+    }
+
+    getArenaModel(index) {
+        if (!this.state.activeArenaModels || !this.isArenaModeActive) 
+            throw new Error('Active arena models are not set!');
+        return this.state.activeArenaModels[index];
+    }
+
+    get isArenaModeActive() {
+        return this.state.isArenaModeActive;
+    }
+}
+
+
+export class HistoryStateManager extends ArenaStateManager {
+    constructor() {
+        super();
+        // Direct properties for history management, so we don't have to call .state every time...
+        this.isLoading = false;
+        this.offset = 0;
+        this.limit = 20;
+        this.hasMoreItems = true;
+        this.lastDateCategory = null;
+        this.historyList = document.querySelector('.history-list');
+    }
+
+    shouldLoadMore() {
+        const { scrollHeight, clientHeight } = this.historyList;
+        return scrollHeight <= clientHeight && this.hasMoreItems;
+    }
+}
+
+
+export class SidepanelStateManager extends ArenaStateManager {
     constructor(requestedPrompt) {
         super(['loop_threshold', 'current_model', 'arena_models', 'stream_response', 'arena_mode']);
 
         // Additional state
         this.state = {
             ...this.state,
-            isArenaModeActive: false,
-            activeArenaModels: null,
             pendingResponses: 0,
             pendingThinkingMode: false,
             activeThinkingMode: false,
@@ -215,6 +266,8 @@ export class SidepanelStateManager extends SettingsManager {
         if (this.state.chatResetOngoing) return;
         this.state.chatState = CHAT_STATE.NORMAL;
         this.state.shouldSave = true;
+        this.clearArenaState();
+        this.resetThinkingStates();
     }
 
     isChatNormal() {
@@ -265,9 +318,8 @@ export class SidepanelStateManager extends SettingsManager {
     }
 
     initArenaResponse(modelA, modelB) {
+        super.initArenaResponse(modelA, modelB);
         this.state.pendingResponses = 2;
-        this.state.activeArenaModels = [modelA, modelB];
-        this.state.isArenaModeActive = true;
     }
 
     updatePendingResponses() {
@@ -328,18 +380,8 @@ export class SidepanelStateManager extends SettingsManager {
     }
 
     clearArenaState() {
+        super.clearArenaState();
         this.state.pendingResponses = 0;
-        this.state.activeArenaModels = null;
-        this.state.isArenaModeActive = false;
-    }
-
-    getArenaModel(index) {
-        if (!this.state.activeArenaModels || !this.isArenaModeActive) throw new Error('Active arena models are not set!');
-        return this.state.activeArenaModels[index];
-    }
-
-    get isArenaModeActive() {
-        return this.state.isArenaModeActive;
     }
 
     get thinkingMode() {

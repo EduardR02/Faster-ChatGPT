@@ -1,5 +1,7 @@
 import { ChatStorage, TokenCounter, StreamWriterBase, add_codeblock_html, createElementWithClass } from './utils.js';
 import { ApiManager } from './api_manager.js';
+import { HistoryChatUI } from './chat_ui.js';
+import { HistoryStateManager } from './state_manager.js';
 
 
 class PopupMenu {
@@ -176,6 +178,8 @@ class PopupMenu {
 
 const chatStorage = new ChatStorage();
 const apiManager = new ApiManager();
+const stateManager = new HistoryStateManager();
+const chatUI = new HistoryChatUI();
 let popupMenu = null;
 let currentChat = null;
 
@@ -206,7 +210,7 @@ function initMessageListeners() {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         switch (message.type) {
             case 'new_chat_saved':
-                handleNewChatSaved(message.chat);
+                chatUI.handleNewChatSaved(message.chat);
                 break;
             case 'appended_messages_to_saved_chat':
                 handleAppendedMessages(message.chatId, message.addedCount);
@@ -218,161 +222,32 @@ function initMessageListeners() {
     });
 }
 
-
-function handleAppendedMessages(chatId, addedCount) {
+async function handleAppendedMessages(chatId, addedCount) {
     if (!currentChat || currentChat.meta.chatId !== chatId) return;
-    chatStorage.getLatestMessages(chatId, addedCount).then(newMessages => {
-        if (!newMessages) return;
-        
-        const conversationWrapper = document.getElementById('conversation-wrapper');
-        
-        newMessages.forEach(message => {
-            let messageElement;
-            const previousRole = currentChat.messages[currentChat.messages.length - 1]?.role;
-            
-            if (message.responses) {
-                messageElement = createArenaMessage(message, currentChat.messages.length);
-            } else {
-                messageElement = createRegularMessage(message, currentChat.messages.length, previousRole);
-            }
-            
-            conversationWrapper.appendChild(messageElement);
-            currentChat.messages.push(message);
-        });
-    });
+    
+    const newMessages = await chatStorage.getLatestMessages(chatId, addedCount);
+    if (!newMessages) return;
+    
+    chatUI.appendMessages(newMessages, currentChat.messages.length);
+    currentChat.messages.push(...newMessages);
 }
 
-
-function handleArenaMessageUpdate(chatId, messageId) {
+async function handleArenaMessageUpdate(chatId, messageId) {
     if (!currentChat || currentChat.meta.chatId !== chatId) return;
-    chatStorage.getMessage(chatId, messageId).then(updatedMessage => {
-        if (!updatedMessage) return;
-        
-        const messageIndex = currentChat.messages.findIndex(m => m.messageId === messageId);
-        if (messageIndex === -1) {
-            // interaction where new arena messaages are not added through the addMessages function, but through updateArenaMessage function...
-            if (messageId === currentChat.messages[currentChat.messages.length - 1].messageId + 1) {
-                handleAppendedMessages(chatId, 1);
-            }
-            return;
-        }
-        
-        currentChat.messages[messageIndex] = updatedMessage;
-
-        const conversationWrapper = document.getElementById('conversation-wrapper');
-        const oldMessageElement = conversationWrapper.children[messageIndex];
-        
-        if (oldMessageElement) {
-            const newMessageElement = createArenaMessage(updatedMessage, messageIndex);;
-            conversationWrapper.replaceChild(newMessageElement, oldMessageElement);
-        }
-    });
-}
-
-
-function handleNewChatSaved(chat) {
-    const currentCategory = getDateCategory(chat.timestamp);
-    const firstItem = historyListContainer.firstElementChild;
     
-    if (firstItem?.classList.contains('history-divider') && firstItem.textContent === currentCategory) {
-        const newItem = createHistoryItem(chat);
-        historyListContainer.insertBefore(newItem, firstItem.nextSibling);
-    } else {
-        const newItem = createHistoryItem(chat);
-        const newDivider = createDivider(currentCategory, false);
-        
-        historyListContainer.prepend(newItem);
-        historyListContainer.prepend(newDivider);
-        
-        if (firstItem?.classList.contains('history-divider')) {
-            firstItem.style.paddingTop = '1rem';
+    const updatedMessage = await chatStorage.getMessage(chatId, messageId);
+    if (!updatedMessage) return;
+    
+    const messageIndex = currentChat.messages.findIndex(m => m.messageId === messageId);
+    if (messageIndex === -1) {
+        if (messageId === currentChat.messages[currentChat.messages.length - 1].messageId + 1) {
+            handleAppendedMessages(chatId, 1);
         }
+        return;
     }
-}
-
-// Function to create a divider
-function createDivider(category, padding_top = true) {
-    const divider = document.createElement('div');
-    divider.classList.add('history-divider');
-    divider.textContent = category;
-    if (!padding_top) divider.style.paddingTop = '0';
-    return divider;
-}
-
-
-function createHistoryItem(chat) {
-    const button = document.createElement('button');
-    button.classList.add('unset-button', 'history-sidebar-item');
-
-    const textSpan = document.createElement('span');
-    textSpan.classList.add('item-text');
-    textSpan.textContent = `${chat.title}`;
-
-    const dots = document.createElement('div');
-    dots.classList.add('action-dots');
-    dots.textContent = '\u{22EF}';
-
-    dots.onclick = (e) => e.stopPropagation();
-    button.id = chat.chatId;
-    button.dataset.name = chat.title;
-    button.onclick = () => displayChat(chat.chatId, button.dataset.name, new Date(chat.timestamp));
-
-    button.appendChild(textSpan);
-    button.appendChild(dots);
-
-    popupMenu.addHistoryItem(button);
-
-    return button;
-}
-
-async function populateHistory() {
-    if (isLoading || !hasMoreItems) return;
     
-    isLoading = true;
-    
-    try {
-        const chats = await chatStorage.getChatMetadata(limit, offset);
-        
-        if (chats.length === 0) {
-            hasMoreItems = false;
-            historyListContainer.removeEventListener('scroll', handleHistoryScroll);
-            return;
-        }
-
-        chats.forEach(chat => {
-            const currentCategory = getDateCategory(chat.timestamp);
-            
-            if (currentCategory !== lastDateCategory) {
-                historyListContainer.appendChild(createDivider(currentCategory, lastDateCategory !== null));
-                lastDateCategory = currentCategory;
-            }
-            
-            historyListContainer.appendChild(createHistoryItem(chat));
-        });
-
-        offset += chats.length;
-    } catch (error) {
-        console.error('Error loading chat history:', error);
-    } finally {
-        isLoading = false;
-        
-        if (shouldLoadMore()) {
-            populateHistory();
-        }
-    }
-}
-
-function shouldLoadMore() {
-    const { scrollHeight, clientHeight } = historyListContainer;
-    return scrollHeight <= clientHeight && hasMoreItems;
-}
-
-function handleHistoryScroll() {
-    const { scrollTop, scrollHeight, clientHeight } = historyListContainer;
-    
-    if (scrollHeight - (scrollTop + clientHeight) < 10 && !isLoading && hasMoreItems) {
-        populateHistory();
-    }
+    chatUI.updateArenaMessage(updatedMessage, messageIndex);
+    currentChat.messages[messageIndex] = updatedMessage;
 }
 
 

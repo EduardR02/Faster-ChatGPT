@@ -499,53 +499,59 @@ export class SidepanelChatUI extends ChatUI {
 export class HistoryChatUI extends ChatUI {
     constructor(options) {
         const {
-            historyListId = '.history-list',
             continueFunc = () => { },
+            loadHistoryItems,
             ...baseOptions
         } = options;
 
         super(baseOptions);
         this.continueFun = continueFunc;
-        this.historyList = document.querySelector(historyListId);
+        this.loadHistoryItems = loadHistoryItems;
+        this.historyList = this.stateManager.historyList;
         this.lastDateCategory = null;
+        this.loadMore = this.loadMore.bind(this);
+        this.handleHistoryScroll = this.handleHistoryScroll.bind(this);
 
         this.initHistoryListHandling();
     }
 
+    async loadMore() {
+        if (!this.stateManager.canLoadMore()) return;
+        this.stateManager.isLoading = true;
+
+        try {
+            const items = await this.loadHistoryItems(
+                this.stateManager.limit,
+                this.stateManager.offset
+            );
+
+            if (items.length === 0) {
+                this.stateManager.hasMoreItems = false;
+                this.historyList.removeEventListener('scroll', this.handleHistoryScroll);
+                return;
+            }
+
+            items.forEach(item => this.addHistoryItem(item));
+            this.stateManager.offset += items.length;
+        } finally {
+            this.stateManager.isLoading = false;
+            if (this.stateManager.shouldLoadMore()) {
+                this.loadMore();
+            }
+        }
+    }
+
     initHistoryListHandling() {
-        // Implement infinite scroll
-        let isLoading = false;
-        let offset = 0;
-        const limit = 20;
-        let hasMoreItems = true;
+        this.historyList.addEventListener('scroll', this.handleHistoryScroll);
+        this.loadMore();
+    }
 
-        const loadMore = async () => {
-            if (isLoading || !hasMoreItems) return;
-            isLoading = true;
+    handleHistoryScroll() {
+        const { scrollTop, scrollHeight, clientHeight } = this.historyList;
 
-            try {
-                const items = await this.options.loadHistoryItems(limit, offset);
-                if (items.length === 0) {
-                    hasMoreItems = false;
-                    return;
-                }
-
-                items.forEach(item => this.addHistoryItem(item));
-                offset += items.length;
-            } finally {
-                isLoading = false;
-            }
-        };
-
-        this.historyList.addEventListener('scroll', () => {
-            const { scrollTop, scrollHeight, clientHeight } = this.historyList;
-            if (scrollHeight - (scrollTop + clientHeight) < 50) {
-                loadMore();
-            }
-        });
-
-        // Initial load
-        loadMore();
+        if (scrollHeight - (scrollTop + clientHeight) < 10 && this.stateManager.canLoadMore()) {
+            this.loadMore();
+        }
     }
 
     addHistoryItem(chat) {
@@ -569,9 +575,64 @@ export class HistoryChatUI extends ChatUI {
         const dotsSpan = createElementWithClass('div', 'action-dots', '\u{22EF}');
 
         item.append(textSpan, dotsSpan);
-        item.onclick = () => this.options.onChatSelect(chat);
+        item.onclick = () => this.buildChat(chat);
 
         return item;
+    }
+
+    handleNewChatSaved(chat) {
+        const currentCategory = this.getDateCategory(chat.timestamp);
+        const firstItem = this.historyList.firstElementChild;
+        
+        if (firstItem?.classList.contains('history-divider') && 
+            firstItem.textContent === currentCategory) {
+            const newItem = this.createHistoryItem(chat);
+            this.historyList.insertBefore(newItem, firstItem.nextSibling);
+        } else {
+            const newItem = this.createHistoryItem(chat);
+            const newDivider = this.createDivider(currentCategory, false);
+            
+            this.historyList.prepend(newItem);
+            this.historyList.prepend(newDivider);
+            
+            if (firstItem?.classList.contains('history-divider')) {
+                firstItem.style.paddingTop = '1rem';
+            }
+        }
+    }
+
+    appendMessages(newMessages, currentMessageIndex) {
+        const conversationWrapper = document.getElementById('conversation-wrapper');
+        
+        newMessages.forEach(message => {
+            let messageElement;
+            const previousRole = currentMessageIndex > 0 ? 
+                this.currentChat.messages[currentMessageIndex - 1]?.role : null;
+            
+            if (message.responses) {
+                messageElement = this.createArenaMessage(message, currentMessageIndex);
+            } else {
+                messageElement = this.createMessage(message.role, message.content, {
+                    model: message.model,
+                    images: message.images,
+                    files: message.files,
+                    isRegeneration: previousRole === message.role
+                });
+            }
+            
+            conversationWrapper.appendChild(messageElement);
+            currentMessageIndex++;
+        });
+    }
+
+    updateArenaMessage(updatedMessage, messageIndex) {
+        const conversationWrapper = document.getElementById('conversation-wrapper');
+        const oldMessageElement = conversationWrapper.children[messageIndex];
+        
+        if (oldMessageElement) {
+            const newMessageElement = this.createArenaMessage(updatedMessage, messageIndex);
+            conversationWrapper.replaceChild(newMessageElement, oldMessageElement);
+        }
     }
 
     addDateDivider(category) {
@@ -579,6 +640,7 @@ export class HistoryChatUI extends ChatUI {
         if (this.lastDateCategory !== null) {
             divider.style.paddingTop = '1rem';
         }
+        if (!paddingTop) divider.style.paddingTop = '0';
         this.historyList.appendChild(divider);
     }
 
