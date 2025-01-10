@@ -1,11 +1,13 @@
-import { ChatStorage, TokenCounter, StreamWriterBase } from './utils.js';
+import { ChatStorage } from './utils.js';
 import { ApiManager } from './api_manager.js';
 import { HistoryChatUI } from './chat_ui.js';
 import { HistoryStateManager } from './state_manager.js';
+import { HistoryRenameManager } from './rename_manager.js';
 
 
 class PopupMenu {
-    constructor() {
+    constructor(renameManager) {
+        this.renameManager = renameManager;
         this.activePopup = null;
         this.init();
     }
@@ -149,28 +151,22 @@ class PopupMenu {
     }
 
     async autoRenameSingleChat(item) {
-        const chat = {
-            chatId: parseInt(item.id, 10),
-            title: item.dataset.name
-        };
-
-        const timeoutPromise = (promise, timeout = 15000) => {
-            return Promise.race([
-                promise,
-                new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error('Timeout')), timeout)
-                )
-            ]);
-        };
-
-        const tokenCounter = await renameSingleChat(chat, apiManager.getCurrentModel(), 
-            await prepareMessages(chat, customPromptForRename), timeoutPromise
-        );
-
-        if (tokenCounter) {
-            tokenCounter.updateLifetimeTokens();
+        const textSpan = item.querySelector('.item-text');
+        const result = await this.renameManager.renameSingleChat(parseInt(item.id, 10), textSpan);
+        
+        if (result?.tokenCounter) {
+            result.tokenCounter.updateLifetimeTokens();
+            
+            // Update current chat title if it's the active chat
+            if (currentChat?.meta?.chatId === parseInt(item.id, 10)) {
+                currentChat.meta.title = result.newName;
+                const chatHeader = document.getElementById('history-chat-header');
+                if (chatHeader) {
+                    chatHeader.textContent = result.newName;
+                }
+            }
         }
-
+        
         this.hidePopup();
     }
 }
@@ -179,7 +175,8 @@ class PopupMenu {
 let currentChat = null;
 const chatStorage = new ChatStorage();
 const apiManager = new ApiManager();
-const popupMenu = new PopupMenu();
+const renameManager = new HistoryRenameManager(chatStorage);
+const popupMenu = new PopupMenu(renameManager);
 const stateManager = new HistoryStateManager();
 const chatUI = new HistoryChatUI({
     stateManager,
@@ -193,14 +190,6 @@ const chatUI = new HistoryChatUI({
         return currentChat;
     },
 });
-
-
-const customPromptForRename = `Condense the input into a minimal title that captures the core action and intent. Focus on the essential elements—what is being done and why—while stripping all unnecessary details, filler words, and redundancy. Ensure the title is concise, descriptive, and reflects the purpose without explicitly stating it unless absolutely necessary.\n
-Examples:\n
-- User prompt: Can you help me debug this Python script? → Python Script Debugging\n
-- User prompt: The impact of climate change on polar bears → Climate Change and Polar Bears\n
-- User prompt: Write a short story about a robot discovering emotions → Robot Emotion Story\n\n
-Your task is to condense the user input that will follow. Only output the title, as specified, and nothing else.`;
 
 
 function initMessageListeners() {
@@ -323,88 +312,7 @@ function sendChatToSidepanel(chat) {
 }
 
 
-function extractSelectionAndUrl(systemMessage) {
-    const matches = systemMessage.match(/"""\[(.*?)\]"""\s*"""\[(.*?)\]"""/s);
-    if (!matches) return null;
-    return {
-        url: matches[1],
-        selection: matches[2]
-    };
-}
-
-
-async function prepareMessages(chat, customPrompt) {
-    const chatData = await chatStorage.loadChat(chat.chatId, 2);
-    if (!chatData?.messages?.length || chatData.messages.length < 2) return null;
-
-    const [systemMsg, userMsg] = chatData.messages;
-    if (systemMsg.role !== 'system' || userMsg.role !== 'user') return null;
-
-    const systemMessage = {
-        role: "system",
-        content: customPrompt
-    };
-
-    const extracted = extractSelectionAndUrl(systemMsg.content);
-
-    if (chat.title.startsWith("Selection from") || extracted !== null) {
-        if (!extracted) return null;
-        
-        const combinedContent = [
-            `Source URL: ${extracted.url}`,
-            `Selected text: ${extracted.selection}`,
-            `User prompt: ${userMsg.content}`
-        ].join('\n\n');
-
-        return [systemMessage, {
-            role: "user",
-            content: combinedContent,
-            ...(userMsg.files?.length > 0 && {files: userMsg.files})
-        }];
-    }
-
-    const combinedContent = `User prompt: ${userMsg.content}`;
-
-    return [systemMessage, {role: "user", content: combinedContent, ...(userMsg.files?.length > 0 && {files: userMsg.files})}];
-}
-
-
-async function renameSingleChat(chat, model, messages, timeoutPromise) {
-    const historyItem = document.getElementById(chat.chatId);
-    const contentDiv = historyItem?.querySelector('.item-text');
-    const streamWriter = new StreamWriterBase(contentDiv);
-    
-    if (contentDiv) {
-        contentDiv.textContent = 'Renaming...';
-    }
-
-    const tokenCounter = new TokenCounter(apiManager.getProviderForModel(model));
-
-    try {
-        await timeoutPromise(
-            apiManager.callApi(model, messages, tokenCounter, streamWriter)
-        );
-
-        const newName = streamWriter.done();
-        await chatStorage.renameChat(chat.chatId, newName);
-        if (historyItem?.dataset?.name) historyItem.dataset.name = newName;
-        return tokenCounter;
-    } catch (error) {
-        if (error.message === 'Timeout') {
-            console.warn(`Rename timeout for chat ${chat.chatId}`);
-        } else {
-            console.error(`Error renaming chat ${chat.chatId}:`, error);
-        }
-        if (contentDiv) {
-            contentDiv.textContent = chat.title;
-        }
-        return null;
-    }
-}
-
-
 async function autoRenameUnmodified() {
-    // if there are a lot of chats this will currently hit rate limits because we're trying to do every request at the same time...
     const button = document.getElementById('auto-rename');
     const model = apiManager.getCurrentModel();
 
@@ -423,10 +331,9 @@ async function autoRenameUnmodified() {
     delete button.dataset.confirmed;
     button.textContent = "renaming...";
 
-    const allChats = await chatStorage.getChatMetadata(Infinity, 0);
-    const unnamedChats = allChats.filter(chat => !chat.hasOwnProperty('renamed') || !chat.renamed);
+    const result = await renameManager.renameAllUnmodified();
 
-    if (unnamedChats.length === 0) {
+    if (result.status === 'no_chats') {
         button.textContent = "no chats to rename";
         setTimeout(() => {
             button.textContent = "auto-rename unmodified";
@@ -434,32 +341,8 @@ async function autoRenameUnmodified() {
         return;
     }
 
-    const timeoutPromise = (promise, timeout = 30000) => {
-        return Promise.race([
-            promise,
-            new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Timeout')), timeout)
-            )
-        ]);
-    };
-
-    const renameResults = await Promise.all(
-        await Promise.all(unnamedChats.map(async chat => {
-            const messages = await prepareMessages(chat, customPromptForRename);
-            if (!messages) return null;
-            return renameSingleChat(chat, model, messages, timeoutPromise);
-        }))
-    );
-
-    // Aggregate tokens
-    const finalTokenCounter = new TokenCounter(apiManager.getProviderForModel(model));
-    const validResults = renameResults.filter(counter => counter !== null);
-    
-    finalTokenCounter.inputTokens = validResults.reduce((sum, counter) => sum + counter.inputTokens, 0);
-    finalTokenCounter.outputTokens = validResults.reduce((sum, counter) => sum + counter.outputTokens, 0);
-    
-    finalTokenCounter.updateLifetimeTokens();
-    button.textContent = `${finalTokenCounter.inputTokens} | ${finalTokenCounter.outputTokens} tokens`;
+    result.tokenCounter.updateLifetimeTokens();
+    button.textContent = `${result.successCount}/${result.totalCount} renamed (${result.tokenCounter.inputTokens}|${result.tokenCounter.outputTokens} tokens)`;
 
     setTimeout(() => {
         button.textContent = "auto-rename unmodified";
