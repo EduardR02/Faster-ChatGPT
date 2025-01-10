@@ -306,7 +306,7 @@ export class StreamWriterSimple {
     }
 
     addThinkingCounter() {
-        const span = this.contentDiv.parentElement.querySelector('.message-prefix');
+        const span = this.contentDiv.parentElement.parentElement.querySelector('.message-prefix');
         if (!span) return;
 
         let seconds = 0;
