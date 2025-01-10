@@ -85,8 +85,7 @@ class PopupMenu {
                 deleteButton.style.display = 'none';
                 inputWrapper.style.display = 'flex';
                 autoRenameButton.style.display = 'none';
-
-                input.value = this.activePopup.dataset.name;
+                input.value = this.activePopup.querySelector('.item-text').textContent;
                 input.focus();
                 break;
             case 'delete':
@@ -125,11 +124,10 @@ class PopupMenu {
     confirmRename() {
         const newName = this.popup.querySelector('.rename-input').value.trim();
         if (newName) {
-            const oldName = this.activePopup.dataset.name;
-            this.activePopup.dataset.name = newName;
             const textSpan = this.activePopup.querySelector('.item-text');
+            const oldName = textSpan.textContent;
             textSpan.textContent = textSpan.textContent.replace(oldName, newName);
-
+            chatUI.autoUpdateChatHeader(currentChat);
             chatStorage.renameChat(parseInt(this.activePopup.id, 10), newName);
         }
         this.hidePopup();
@@ -156,15 +154,7 @@ class PopupMenu {
         
         if (result?.tokenCounter) {
             result.tokenCounter.updateLifetimeTokens();
-            
-            // Update current chat title if it's the active chat
-            if (currentChat?.meta?.chatId === parseInt(item.id, 10)) {
-                currentChat.meta.title = result.newName;
-                const chatHeader = document.getElementById('history-chat-header');
-                if (chatHeader) {
-                    chatHeader.textContent = result.newName;
-                }
-            }
+            currentChat.meta.title = chatUI.autoUpdateChatHeader(currentChat) || currentChat.meta.title;
         }
         
         this.hidePopup();
@@ -343,7 +333,7 @@ async function autoRenameUnmodified() {
 
     result.tokenCounter.updateLifetimeTokens();
     button.textContent = `${result.successCount}/${result.totalCount} renamed (${result.tokenCounter.inputTokens}|${result.tokenCounter.outputTokens} tokens)`;
-
+    currentChat.meta.title = chatUI.autoUpdateChatHeader(currentChat) || currentChat.meta.title;
     setTimeout(() => {
         button.textContent = "auto-rename unmodified";
     }, 15000);

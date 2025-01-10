@@ -580,7 +580,6 @@ export class HistoryChatUI extends ChatUI {
     createHistoryItem(chat) {
         const item = createElementWithClass('button', 'unset-button history-sidebar-item');
         item.id = chat.chatId;
-        item.dataset.name = chat.title;
 
         const textSpan = createElementWithClass('span', 'item-text', chat.title);
         const dotsSpan = createElementWithClass('div', 'action-dots', '\u{22EF}');
@@ -686,17 +685,17 @@ export class HistoryChatUI extends ChatUI {
         return `${date.getFullYear()}`;
     }
 
-
-    updateHistoryItemName(chatId, newName) {
-        const item = document.getElementById(chatId);
-        if (item) {
-            item.dataset.name = newName;
-            item.querySelector('.item-text').textContent = newName;
-        }
-    }
-
     updateChatHeader(title) {
         document.getElementById('history-chat-header').textContent = title;
+    }
+
+    autoUpdateChatHeader(currentChat) {
+        if (!currentChat) return null;
+        const historyItem = document.getElementById(currentChat.meta.chatId)?.querySelector('.item-text');
+        if (historyItem && historyItem.textContent !== "Renaming..." && historyItem.textContent !== "Rename failed") {
+            this.updateChatHeader(historyItem.textContent);
+            return historyItem.textContent;
+        }
     }
 
     updateChatTimestamp(timestamp) {
@@ -715,7 +714,7 @@ export class HistoryChatUI extends ChatUI {
         });
 
         // Additional history-specific updates
-        this.updateChatHeader(chat.title);
+        this.updateChatHeader(chatFull.meta.title);
         this.updateChatTimestamp(chat.timestamp);
     }
 }
