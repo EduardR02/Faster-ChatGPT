@@ -81,7 +81,7 @@ class ChatUI {
         const messageDiv = createElementWithClass('div', 'history-system-message collapsed');
         const toggleButton = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
         const toggleIcon = createElementWithClass('span', 'toggle-icon', '⯈');
-        const contentDiv = createElementWithClass('div', 'history-system-content');
+        const contentDiv = createElementWithClass('div', 'message-content history-system-content');
 
         contentDiv.innerHTML = add_codeblock_html(content);
         toggleButton.append(toggleIcon, title);
