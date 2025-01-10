@@ -162,6 +162,18 @@ export class HistoryStateManager extends ArenaStateManager {
         const { scrollHeight, clientHeight } = this.historyList;
         return scrollHeight <= clientHeight && this.hasMoreItems;
     }
+
+    canLoadMore() {
+        return !this.isLoading && this.hasMoreItems;
+    }
+
+    isThinking(_) {
+        return false;
+    }
+
+    isSolving(_) {
+        return false;
+    }
 }
 
 

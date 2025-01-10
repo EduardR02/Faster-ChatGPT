@@ -1,4 +1,4 @@
-import { ChatStorage, TokenCounter, StreamWriterBase, add_codeblock_html, createElementWithClass } from './utils.js';
+import { ChatStorage, TokenCounter, StreamWriterBase } from './utils.js';
 import { ApiManager } from './api_manager.js';
 import { HistoryChatUI } from './chat_ui.js';
 import { HistoryStateManager } from './state_manager.js';
@@ -176,19 +176,24 @@ class PopupMenu {
 }
 
 
+let currentChat = null;
 const chatStorage = new ChatStorage();
 const apiManager = new ApiManager();
+const popupMenu = new PopupMenu();
 const stateManager = new HistoryStateManager();
-const chatUI = new HistoryChatUI();
-let popupMenu = null;
-let currentChat = null;
+const chatUI = new HistoryChatUI({
+    stateManager,
+    popupMenu,
+    continueFunc: (index, arenaMessageIndex, modelChoice) => 
+        sendChatToSidepanel(buildChat(index, arenaMessageIndex, modelChoice)),
+    loadHistoryItems: chatStorage.getChatMetadata.bind(chatStorage),
+    addPopupActions: popupMenu.addHistoryItem.bind(popupMenu),
+    loadChat: async (chatId) => {
+        currentChat = await chatStorage.loadChat(chatId);
+        return currentChat;
+    },
+});
 
-let isLoading = false;
-let offset = 0;
-const limit = 20;
-let hasMoreItems = true;
-let historyListContainer = null;
-let lastDateCategory = null;
 
 const customPromptForRename = `Condense the input into a minimal title that captures the core action and intent. Focus on the essential elements—what is being done and why—while stripping all unnecessary details, filler words, and redundancy. Ensure the title is concise, descriptive, and reflects the purpose without explicitly stating it unless absolutely necessary.\n
 Examples:\n
@@ -196,14 +201,6 @@ Examples:\n
 - User prompt: The impact of climate change on polar bears → Climate Change and Polar Bears\n
 - User prompt: Write a short story about a robot discovering emotions → Robot Emotion Story\n\n
 Your task is to condense the user input that will follow. Only output the title, as specified, and nothing else.`;
-
-
-function initChatHistory() {
-    historyListContainer = document.querySelector('.history-list');
-    historyListContainer.addEventListener('scroll', handleHistoryScroll);
-    popupMenu = new PopupMenu();
-    populateHistory();
-}
 
 
 function initMessageListeners() {
@@ -228,7 +225,8 @@ async function handleAppendedMessages(chatId, addedCount) {
     const newMessages = await chatStorage.getLatestMessages(chatId, addedCount);
     if (!newMessages) return;
     
-    chatUI.appendMessages(newMessages, currentChat.messages.length);
+    const len = currentChat.messages.length;
+    chatUI.appendMessages(newMessages, len, currentChat.messages[len - 1]?.role);
     currentChat.messages.push(...newMessages);
 }
 
@@ -322,210 +320,6 @@ function sendChatToSidepanel(chat) {
                 });
             }
         });
-}
-
-
-function createSystemMessage(message) {
-    const messageDiv = createElementWithClass('div', 'history-system-message collapsed');
-
-    const toggleButton = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
-    const toggleIcon = createElementWithClass('span', 'toggle-icon', '⯈');
-
-    const contentDiv = createElementWithClass('div', 'message-content history-system-content');
-    contentDiv.innerHTML = add_codeblock_html(message?.content || "");
-
-    toggleButton.append(toggleIcon, 'System Prompt');
-    toggleButton.onclick = () => messageDiv.classList.toggle('collapsed');
-    messageDiv.append(toggleButton, contentDiv);
-
-    return messageDiv;
-}
-
-
-function createModelResponse(modelKey, message, msgIndex) {
-    const arenaWrapper = createElementWithClass('div', 'arena-wrapper');
-    const response = message.responses[modelKey];
-    const choice = message.choice;
-    const continuedWith = message.continued_with;
-
-    // Create a message wrapper for each message in the history
-    response.messages.forEach((msg, index) => {
-        const roleWrapper = createElementWithClass('div', 'assistant-message');
-        const modelWrapper = createElementWithClass('div', 'message-wrapper');
-        const prefixWrapper = createElementWithClass('div', 'history-prefix-wrapper');
-
-        // Determine symbol based on choice and model
-        let symbol = '';
-        switch (choice) {
-            case modelKey:
-                symbol = ' 🏆';
-                break;
-            case 'draw':
-                symbol = ' 🤝';
-                break;
-            case 'draw(bothbad)':
-                symbol = ' ❌';
-                break;
-            case 'reveal':
-                symbol = ' 👁️';
-                break;
-            case 'ignored':
-                symbol = ' n/a';
-                break;
-            default:
-                symbol = ' ❌';
-        }
-
-        const prefix = createElementWithClass('span', 'message-prefix assistant-prefix', response.name + (index > 0 ? ' ⟳' : '') + symbol);
-
-        const continueConversationButton = createElementWithClass('button', 'unset-button continue-conversation-button', '\u{2197}');
-        continueConversationButton.onclick = () => sendChatToSidepanel(buildChat(msgIndex, index, modelKey));
-
-        const contentDiv = createElementWithClass('div', 'message-content assistant-content');
-        contentDiv.innerHTML = add_codeblock_html(msg || "");
-
-        // Handle winner/loser classes
-        if (continuedWith === modelKey) {
-            contentDiv.classList.add('arena-winner');
-        } else {
-            contentDiv.classList.add('arena-loser');
-        }
-
-        prefixWrapper.append(prefix, continueConversationButton);
-        modelWrapper.append(contentDiv);
-        roleWrapper.append(prefixWrapper, modelWrapper);
-        arenaWrapper.appendChild(roleWrapper);
-    });
-
-    return arenaWrapper;
-}
-
-
-function createArenaMessage(message, index) {
-    const messageDiv = createElementWithClass('div', 'assistant-message');
-    const arenaContainer = createElementWithClass('div', 'arena-full-container');
-
-    ['model_a', 'model_b'].forEach(model => {
-        const modelResponse = createModelResponse(model, message, index);
-        arenaContainer.appendChild(modelResponse);
-    });
-
-    messageDiv.appendChild(arenaContainer);
-    return messageDiv;
-}
-
-
-function createRegularMessage(message, index, previousRole) {
-    const messageDiv = createElementWithClass('div', `${message.role}-message`);
-    const wrapperDiv = createElementWithClass('div', 'message-wrapper');
-
-    const prefixWrapper = createElementWithClass('div', 'history-prefix-wrapper');
-    const prefix = createElementWithClass('span', `message-prefix ${message.role}-prefix`);
-    prefix.textContent = message.role === 'user' ? 'You' : message.model || 'Assistant';
-    if (message.role === 'assistant' && message.role === previousRole) prefix.textContent += ' ⟳';
-
-    const continueConversationButton = createElementWithClass('button', 'unset-button continue-conversation-button', '\u{2197}');
-    continueConversationButton.onclick = () => sendChatToSidepanel(buildChat(index));
-
-    prefixWrapper.append(prefix, continueConversationButton);
-
-    if (message.images?.length) {
-        message.images.forEach(imageUrl => {
-            const imgWrapper = createElementWithClass('div', `image-content ${message.role}-content`);
-            const img = createElementWithClass('img');
-            img.src = imageUrl;
-            imgWrapper.appendChild(img);
-            wrapperDiv.appendChild(imgWrapper);
-        });
-    }
-
-    if (message.files?.length) {
-        message.files.forEach(file => {
-            const fileDiv = createElementWithClass('div', 'history-system-message collapsed');
-            const buttonsWrapper = createElementWithClass('div', 'file-buttons-wrapper');
-            const toggleButton = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
-            const toggleIcon = createElementWithClass('span', 'toggle-icon', '⯈');
-            const contentDiv = createElementWithClass('div', 'history-system-content user-file', file.content);
-
-            toggleButton.append(toggleIcon, file.name);
-            toggleButton.onclick = () => fileDiv.classList.toggle('collapsed');
-            buttonsWrapper.append(toggleButton);
-            fileDiv.append(buttonsWrapper, contentDiv);
-            wrapperDiv.appendChild(fileDiv);
-        });
-    }
-
-    const contentDiv = createElementWithClass('div', `message-content ${message.role}-content`);
-    contentDiv.innerHTML = add_codeblock_html(message?.content || "");
-    wrapperDiv.appendChild(contentDiv);
-    messageDiv.append(prefixWrapper, wrapperDiv);
-
-    return messageDiv;
-}
-
-
-function displayChat(chatId, title, timestamp) {
-    chatStorage.loadChat(chatId).then((chat) => {
-        currentChat = chat;
-        const conversationWrapper = document.getElementById('conversation-wrapper');
-        conversationWrapper.innerHTML = '';
-        let previousRole = null;
-        chat.messages.forEach((message, index) => {
-            let messageElement;
-
-            if (message.role === 'system') {
-                messageElement = createSystemMessage(message);
-            } else if (message.responses) {
-                messageElement = createArenaMessage(message, index);
-            } else {
-                messageElement = createRegularMessage(message, index, previousRole);
-                previousRole = message.role;
-            }
-
-            conversationWrapper.appendChild(messageElement);
-        });
-
-        document.getElementById('history-chat-header').textContent = title;
-        document.getElementById('history-chat-footer').textContent = timestamp.toString().split(' GMT')[0];
-    });
-}
-
-
-function getDateCategory(timestamp) {
-    const date = new Date(timestamp);
-    const now = new Date();
-    
-    // Helper function to get midnight of a date
-    const getMidnight = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-    
-    const todayMidnight = getMidnight(now);
-    const yesterdayMidnight = new Date(todayMidnight);
-    yesterdayMidnight.setDate(yesterdayMidnight.getDate() - 1);
-    
-    const dateMidnight = getMidnight(date);
-    
-    if (dateMidnight.getTime() === todayMidnight.getTime()) return 'Today';
-    if (dateMidnight.getTime() === yesterdayMidnight.getTime()) return 'Yesterday';
-    
-    // Last Week = Last 7 full calendar days (excluding today and yesterday)
-    const lastWeekStart = new Date(todayMidnight);
-    lastWeekStart.setDate(lastWeekStart.getDate() - 7);
-    
-    if (dateMidnight >= lastWeekStart) return 'Last 7 Days';
-    
-    // Last 30 Days = Last 30 full calendar days (excluding the above)
-    const last30DaysStart = new Date(todayMidnight);
-    last30DaysStart.setDate(last30DaysStart.getDate() - 30);
-    
-    if (dateMidnight >= last30DaysStart) return 'Last 30 Days';
-    
-    // Months within the current year
-    if (date.getFullYear() === now.getFullYear()) {
-        return date.toLocaleString('default', { month: 'long' });
-    }
-    
-    // Older than current year
-    return `${date.getFullYear()}`;
 }
 
 
@@ -674,7 +468,6 @@ async function autoRenameUnmodified() {
 
 
 function init() {
-    initChatHistory();
     initMessageListeners();
     document.getElementById('auto-rename').onclick = autoRenameUnmodified;
 }

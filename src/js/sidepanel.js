@@ -2,7 +2,7 @@ import {
     ArenaRatingManager, StreamWriter, StreamWriterSimple, Footer, TokenCounter, createElementWithClass,
     auto_resize_textfield_listener, update_textfield_height, ChatStorage, add_codeblock_html } from "./utils.js";
 import { ApiManager } from "./api_manager.js";
-import { SidepanelStateManager, CHAT_STATE } from './state_manager.js';
+import { SidepanelStateManager } from './state_manager.js';
 
 
 class ChatManager {
@@ -27,7 +27,7 @@ class ChatManager {
     }
 
     initArenaMode() {
-        stateManager.isArenaModeActive = true;
+        stateManager.updateArenaMode();
         this.arenaContainer = null;
         this.arenaFooter = null;
         this.arenaDivs = [];
@@ -380,7 +380,7 @@ class ChatManager {
         }
 
         this.arenaDivs = [];
-        stateManager.isArenaModeActive = false;
+        stateManager.clearArenaState();
         this.arenaContainer = null;
         if (isNoChoice) {
             api_call();
