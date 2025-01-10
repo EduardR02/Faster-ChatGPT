@@ -6,9 +6,11 @@ import { HistoryRenameManager } from './rename_manager.js';
 
 
 class PopupMenu {
-    constructor(renameManager) {
+    constructor(renameManager, chatStorage) {
         this.renameManager = renameManager;
+        this.chatStorage = chatStorage;
         this.activePopup = null;
+        this.autoRenameHeaderFunc = null;
         this.init();
     }
 
@@ -127,8 +129,9 @@ class PopupMenu {
             const textSpan = this.activePopup.querySelector('.item-text');
             const oldName = textSpan.textContent;
             textSpan.textContent = textSpan.textContent.replace(oldName, newName);
-            chatUI.autoUpdateChatHeader(currentChat);
-            chatStorage.renameChat(parseInt(this.activePopup.id, 10), newName);
+            if (currentChat)
+                currentChat.meta.title = this.autoRenameHeaderFunc(currentChat) || currentChat.meta.title;
+            this.chatStorage.renameChat(parseInt(this.activePopup.id, 10), newName);
         }
         this.hidePopup();
     }
@@ -140,7 +143,7 @@ class PopupMenu {
             document.getElementById('conversation-wrapper').innerHTML = '';
             document.getElementById('history-chat-footer').textContent = '';
 
-            chatStorage.deleteChat(parseInt(item.id, 10));
+            this.chatStorage.deleteChat(parseInt(item.id, 10));
             this.hidePopup();
         } else {
             popupItem.classList.add('delete-confirm');
@@ -154,7 +157,8 @@ class PopupMenu {
         
         if (result?.tokenCounter) {
             result.tokenCounter.updateLifetimeTokens();
-            currentChat.meta.title = chatUI.autoUpdateChatHeader(currentChat) || currentChat.meta.title;
+            if (currentChat)
+                currentChat.meta.title = this.autoRenameHeaderFunc(currentChat) || currentChat.meta.title;
         }
         
         this.hidePopup();
@@ -166,7 +170,7 @@ let currentChat = null;
 const chatStorage = new ChatStorage();
 const apiManager = new ApiManager();
 const renameManager = new HistoryRenameManager(chatStorage);
-const popupMenu = new PopupMenu(renameManager);
+const popupMenu = new PopupMenu(renameManager, chatStorage);
 const stateManager = new HistoryStateManager();
 const chatUI = new HistoryChatUI({
     stateManager,
@@ -180,6 +184,7 @@ const chatUI = new HistoryChatUI({
         return currentChat;
     },
 });
+popupMenu.autoRenameHeaderFunc = chatUI.autoUpdateChatHeader.bind(chatUI);
 
 
 function initMessageListeners() {
@@ -333,7 +338,7 @@ async function autoRenameUnmodified() {
 
     result.tokenCounter.updateLifetimeTokens();
     button.textContent = `${result.successCount}/${result.totalCount} renamed (${result.tokenCounter.inputTokens}|${result.tokenCounter.outputTokens} tokens)`;
-    currentChat.meta.title = chatUI.autoUpdateChatHeader(currentChat) || currentChat.meta.title;
+    if (currentChat) currentChat.meta.title = chatUI.autoUpdateChatHeader(currentChat) || currentChat.meta.title;
     setTimeout(() => {
         button.textContent = "auto-rename unmodified";
     }, 15000);
