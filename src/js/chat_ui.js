@@ -651,37 +651,21 @@ export class HistoryChatUI extends ChatUI {
     getDateCategory(timestamp) {
         const date = new Date(timestamp);
         const now = new Date();
-
-        // Helper function to get midnight of a date
-        const getMidnight = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
-
-        const todayMidnight = getMidnight(now);
-        const yesterdayMidnight = new Date(todayMidnight);
-        yesterdayMidnight.setDate(yesterdayMidnight.getDate() - 1);
-
-        const dateMidnight = getMidnight(date);
-
-        if (dateMidnight.getTime() === todayMidnight.getTime()) return 'Today';
-        if (dateMidnight.getTime() === yesterdayMidnight.getTime()) return 'Yesterday';
-
-        // Last Week = Last 7 full calendar days (excluding today and yesterday)
-        const lastWeekStart = new Date(todayMidnight);
-        lastWeekStart.setDate(lastWeekStart.getDate() - 7);
-
-        if (dateMidnight >= lastWeekStart) return 'Last 7 Days';
-
-        // Last 30 Days = Last 30 full calendar days (excluding the above)
-        const last30DaysStart = new Date(todayMidnight);
-        last30DaysStart.setDate(last30DaysStart.getDate() - 30);
-
-        if (dateMidnight >= last30DaysStart) return 'Last 30 Days';
-
-        // Months within the current year
+        
+        // Get timestamps for midnights
+        const dateMidnight = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+        const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+        const dayDiff = (todayMidnight - dateMidnight) / (1000 * 60 * 60 * 24);
+        
+        if (dayDiff === 0) return 'Today';
+        if (dayDiff === 1) return 'Yesterday';
+        if (dayDiff <= 7) return 'Last 7 Days';
+        if (dayDiff <= 30) return 'Last 30 Days';
+        
         if (date.getFullYear() === now.getFullYear()) {
             return date.toLocaleString('default', { month: 'long' });
         }
-
-        // Older than current year
+        
         return `${date.getFullYear()}`;
     }
 
