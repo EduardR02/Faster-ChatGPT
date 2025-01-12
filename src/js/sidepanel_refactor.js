@@ -294,7 +294,7 @@ class SidepanelApp {
         // Send chat data to new tab
         chrome.runtime.sendMessage({
             type: "reconstruct_chat",
-            chat: this.controller.currentChat,
+            chatId: this.controller.currentChat?.meta?.id,
             isSidePanel: false
         });
 
@@ -302,18 +302,24 @@ class SidepanelApp {
     }
 
     async handleTabToSidepanel() {
-        const response = await chrome.runtime.sendMessage({ type: "is_sidepanel_open" });
-
-        if (!response.isOpen) {
+        const [tabCount, { isOpen }] = await Promise.all([
+            chrome.tabs.query({ windowId: chrome.windows.WINDOW_ID_CURRENT }).then(tabs => tabs.length),
+            chrome.runtime.sendMessage({ type: "is_sidepanel_open" })
+        ]);
+    
+        if (!isOpen) {
             await chrome.runtime.sendMessage({ type: "open_side_panel" });
         }
-
+    
         await chrome.runtime.sendMessage({
             type: "reconstruct_chat",
-            chat: this.controller.currentChat,
+            chatId: this.controller.currentChat?.meta?.id,
             isSidePanel: true
         });
-
+    
+        if (tabCount === 1) {
+            await chrome.tabs.create({ url: 'chrome://newtab' });
+        }
         window.close();
     }
 
@@ -338,15 +344,17 @@ class SidepanelApp {
 
     setupPasteListener(textarea) {
         textarea.addEventListener('paste', async (e) => {
-            const items = e.clipboardData.items;
-            const imageItem = Array.from(items).find(item => item.type.startsWith('image/'));
+            const items = Array.from(e.clipboardData.items);
+    
+            // Extract all files from the paste event
+            const files = items
+                .filter(item => item.kind === 'file') // Ensure it's a file
+                .map(item => item.getAsFile())        // Convert to File objects
+                .filter(file => file !== null);       // Filter out null values
 
-            if (imageItem) {
+            if (files.length > 0) {
                 e.preventDefault();
-                const file = imageItem.getAsFile();
-                const reader = new FileReader();
-                reader.onload = e => this.chatUI.appendImage(e.target.result);
-                reader.readAsDataURL(file);
+                this.handleFilesDrop(files);
             }
         });
     }
@@ -362,7 +370,7 @@ class SidepanelApp {
             if (imgSrc) {
                 const base64String = await this.urlToBase64(imgSrc);
                 if (base64String) {
-                    this.chatUI.appendImage(base64String);
+                    this.controller.appendPendingImages([base64String]);
                     return;
                 }
             }
@@ -385,7 +393,7 @@ class SidepanelApp {
         return new Promise(resolve => {
             const reader = new FileReader();
             reader.onload = e => {
-                this.chatUI.appendImage(e.target.result);
+                this.controller.appendPendingImages([e.target.result]);
                 resolve();
             };
             reader.readAsDataURL(file);
@@ -396,13 +404,7 @@ class SidepanelApp {
         return new Promise(resolve => {
             const reader = new FileReader();
             reader.onload = e => {
-                const fileData = {
-                    tempId: this.controller.tempMediaId++,
-                    name: file.name,
-                    content: e.target.result
-                };
-                this.controller.pendingFiles.push(fileData);
-                this.chatUI.appendFile(fileData);
+                this.controller.appendPendingFiles([{ name: file.name, data: e.target.result }]);
                 resolve();
             };
             reader.onerror = error => {
@@ -441,10 +443,10 @@ class SidepanelApp {
         const text = e.dataTransfer.getData('text');
         if (text) {
             const start = textarea.selectionStart;
-            textarea.value = textarea.value.slice(0, start) + 
+            const value = textarea.value.slice(0, start) + 
                            text + 
                            textarea.value.slice(textarea.selectionEnd);
-            this.chatUI.updateTextareaHeight(textarea);
+            this.chatUI.setTextareaText(value);
         }
     }
 }

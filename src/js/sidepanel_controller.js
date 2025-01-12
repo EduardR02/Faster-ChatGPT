@@ -19,7 +19,7 @@ export class SidepanelController {
         this.currentChat = null;
         this.initialPrompt = "";
         this.thoughtLoops = [0, 0];
-        this.pendingFiles = [];
+        this.pendingFiles = {};
         this.pendingImages = [];
         this.tempMediaId = 0;
     }
@@ -31,7 +31,7 @@ export class SidepanelController {
         this.currentChat = this.chatStorage.createNewChatTracking(chatName);
         this.pendingMessage = {};
         this.messages = [];
-        this.pendingFiles = [];
+        this.pendingFiles = {};
         this.pendingImages = [];
         this.tempMediaId = 0;
 
@@ -307,7 +307,7 @@ export class SidepanelController {
     
     appendContext(message, role) {
         this.messages.push({ role, content: message });
-        this.addPendingFiles(role);
+        this.realizePendingFiles(role);
     
         if (this.currentChat && role === 'user') {
             if (this.currentChat.id === null) {
@@ -334,7 +334,7 @@ export class SidepanelController {
         }
     }
     
-    addPendingFiles(role) {
+    realizePendingFiles(role) {
         if (role !== 'user') return;
         
         if (this.pendingImages.length > 0) {
@@ -343,16 +343,34 @@ export class SidepanelController {
         } 
         
         if (this.pendingFiles.length > 0) {
-            this.messages[this.messages.length - 1].files = 
-                this.pendingFiles.map(({ tempId, ...rest }) => rest);
-    
-            this.pendingFiles.forEach(file => {
-                const removeButton = document.getElementById(`remove-file-button-${file.tempId}`);
-                if (removeButton) removeButton.remove();
-            });
-            
-            this.pendingFiles = [];
+            this.messages[this.messages.length - 1].files = [];
+            for (const [key, value] of Object.entries(this.pendingFiles)) {
+                this.messages[this.messages.length - 1].files.push(value);
+            }
+            this.chatUI.removeCurrentRemoveMediaButtons();
+            this.pendingFiles = {};
         }
+    }
+
+    appendPendingImages(images) {
+        images.forEach(image => {
+            this.pendingImages.push(image);
+            this.chatUI.addImage(image);
+        });
+    }
+
+    appendPendingFiles(files) {
+        files.forEach(file => {
+            const currentId = this.tempMediaId;     // ensure that the callback function gets the correct id
+            this.pendingFiles[currentId] = file;
+            this.chatUI.appendFile(file, () => this.removeFile(currentId));
+            this.tempMediaId++;
+        });
+    }
+
+    removeFile(tempId) {
+        // write this function as if the pending files is an object instead, with tempid as key
+        delete this.pendingFiles[tempId];
     }
 
     getCurrentArenaMessage() {

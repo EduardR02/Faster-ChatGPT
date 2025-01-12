@@ -220,7 +220,7 @@ class ChatUI {
         if (onRemove) {
             const removeButton = this.createRemoveFileButton(() => {
                 fileDiv.remove();
-                onRemove(file.tempId);  // handle file logic removal
+                onRemove();  // handle file logic removal
             });
             buttonsWrapper.appendChild(removeButton);
         }
@@ -374,6 +374,12 @@ export class SidepanelChatUI extends ChatUI {
         }
         return newMessage.querySelector('.message-content');
     }
+
+    removeCurrentRemoveMediaButtons() {
+        const buttons = this.conversationDiv.lastChild.querySelectorAll('.remove-file-button');
+        buttons.forEach(button => button.remove());
+    }
+
 
     addMessageFooter(contentDiv, options) {
         const footer = new Footer(
