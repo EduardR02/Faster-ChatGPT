@@ -344,14 +344,10 @@ export class SidepanelStateManager extends ArenaStateManager {
 
     nextThinkingState(model = null) {
         const currentState = getThinkingState(model);
-        let nextState;
+        let nextState = THINKING_STATE.INACTIVE;
 
-        if (currentState === THINKING_STATE.INACTIVE) {
-            nextState = THINKING_STATE.THINKING;
-        } else if (currentState === THINKING_STATE.THINKING) {
+        if (currentState === THINKING_STATE.THINKING) {
             nextState = THINKING_STATE.SOLVING;
-        } else {
-            nextState = THINKING_STATE.INACTIVE;
         }
 
         setThinkingState(nextState, model);

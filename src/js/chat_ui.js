@@ -528,6 +528,17 @@ export class SidepanelChatUI extends ChatUI {
         return this.stateManager.state.activeArenaModels.findIndex(m => m === model);
     }
 
+    getContentDiv(model) {
+        let nodes = null;
+        if (!this.stateManager.isArenaModeActive) {
+            nodes = this.activeMessageDivs.querySelectorAll('.message-content');
+        } else {
+            const modelIndex = this.getArenaIndex(model);
+            nodes =  this.activeMessageDivs[modelIndex].querySelectorAll('.message-content');
+        }
+        return nodes[nodes.length - 1];
+    }
+
     clearConversation() {
         super.clearConversation();
         this.activeMessageDivs = null;

@@ -219,6 +219,7 @@ export class SidepanelController {
             this.makeApiCall(model1, thinkingState),
             this.makeApiCall(model2, thinkingState)
         ]);
+        this.chatUI.addArenaFooter(this.handleArenaChoice.bind(this));
     }
 
     getRandomArenaModels(models) {
@@ -480,7 +481,6 @@ export class SidepanelController {
                     // which means this can't be the last message before a user message
                     if (!isLastMessage && model === 'none') continue;
                     const messages = msg.responses[model].messages;
-                    const modelString = msg.responses[model].name;
                     const index = (isLastMessage && arenaMessageIndex !== null) ? arenaMessageIndex : messages.length - 1;
     
                     this.messages.push({
