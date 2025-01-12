@@ -449,7 +449,7 @@ export class SidepanelChatUI extends ChatUI {
     }
 
     addArenaFooter(onChoice) {
-        const container = this.conversationDiv.querySelector('.arena-full-container');
+        const container = this.activeMessageDivs[0].parentElement.parentElement;
         if (!container) return;
 
         const footer = createElementWithClass('div', 'arena-footer');
@@ -466,13 +466,14 @@ export class SidepanelChatUI extends ChatUI {
             button.textContent = btn.text;
             button.onclick = () => {
                 this.removeArenaFooter(footer);
+                this.removeRegenerateButtons();
                 onChoice(btn.choice);   // this should also call resolve arena after it's done, because here we don't know continued_with yet
             };
             this.setupArenaButtonHover(button);
             footer.appendChild(button);
         });
 
-        container.parentElement.appendChild(footer);
+        container.appendChild(footer);
     }
 
     resolveArena(choice, continued_with) {

@@ -140,6 +140,12 @@ export class ArenaStateManager extends SettingsManager {
         return this.state.activeArenaModels[index];
     }
 
+    getArenaModelKey(model) {
+        if (!this.state.activeArenaModels || !this.isArenaModeActive) 
+            throw new Error('Active arena models are not set!');
+        return this.state.activeArenaModels.indexOf(model) === 0 ? 'model_a' : 'model_b';
+    }  
+
     get isArenaModeActive() {
         return this.state.isArenaModeActive;
     }

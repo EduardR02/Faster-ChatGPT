@@ -210,6 +210,7 @@ export class SidepanelController {
         
         this.stateManager.initArenaResponse(model1, model2);
         this.chatUI.createArenaMessage();
+        this.currentChat.messages.push(this.chatStorage.initArenaMessage(model1, model2));
         
         await Promise.all([
             this.makeApiCall(model1, thinkingState),
@@ -244,12 +245,8 @@ export class SidepanelController {
     }
 
     addToArenaPending(message, model) {
-        const currentMessage = this.getCurrentArenaMessage();
-        const modelKey = Object.keys(currentMessage.responses).find(
-            key => currentMessage.responses[key].name === model
-        );
-        
-        currentMessage.responses[modelKey].messages.push(message);
+        const currentMessage = this.getCurrentArenaMessage();        
+        currentMessage.responses[this.stateManager.getArenaModelKey(model)].messages.push(message);
         
         if (this.currentChat.id !== null && this.stateManager.shouldSave) {
             this.chatStorage.updateArenaMessage(
