@@ -175,8 +175,8 @@ const stateManager = new HistoryStateManager();
 const chatUI = new HistoryChatUI({
     stateManager,
     popupMenu,
-    continueFunc: (index, arenaMessageIndex, modelChoice) => 
-        sendChatToSidepanel(buildChat(index, arenaMessageIndex, modelChoice)),
+    continueFunc: (index, arenaMessageIndex = null, modelChoice = null) => 
+        sendChatToSidepanel({ chatId: currentChat?.meta?.chatId, index, arenaMessageIndex, modelChoice }),
     loadHistoryItems: chatStorage.getChatMetadata.bind(chatStorage),
     addPopupActions: popupMenu.addHistoryItem.bind(popupMenu),
     loadChat: async (chatId) => {
@@ -233,75 +233,20 @@ async function handleArenaMessageUpdate(chatId, messageId) {
 }
 
 
-function buildChat(continueFromIndex, arenaMessageIndex = null, modelChoice = null) {
-    const workingMessages = currentChat.messages.slice(0, continueFromIndex + 1);
-
-    const simplifiedChat = [];
-    for (let i = 0; i < workingMessages.length; i++) {
-        const msg = workingMessages[i];
-        const isLastMessage = i === continueFromIndex;
-
-        // If it's not an assistant message, add it
-        if (msg.role !== 'assistant') {
-            const { chatId, messageId, timestamp, ...rest } = msg;
-            simplifiedChat.push(rest);
-            continue;
-        }
-
-        // Find next user message
-        let nextUserIndex = workingMessages.findIndex((m, idx) =>
-            idx > i && ('content' in m && m.role === 'user')
-        );
-
-        // For assistant messages (both regular and arena), 
-        // take if it's the last one before next user (or end of messages)
-        if (nextUserIndex === -1 ? (i === workingMessages.length - 1) : (i === nextUserIndex - 1)) {
-            if ('content' in msg) {
-                simplifiedChat.push({
-                    role: 'assistant',
-                    content: msg.content,
-                    ...(msg.model && {model: msg.model})
-                });
-            } else {  // arena message
-                // If it's the last message and we're continuing from it, use modelChoice and arenaMessageIndex
-                const model = (isLastMessage ? modelChoice : msg.continued_with) || 'model_a';
-                // this case should actually not be possible, because 'none' means draw(bothbad), which means the arena is full regenerated,
-                // which means this can't be the last message before a user message
-                if (!isLastMessage && model === 'none') continue;
-                const messages = msg.responses[model].messages;
-                const modelString = msg.responses[model].name;
-                const index = (isLastMessage && arenaMessageIndex !== null) ? arenaMessageIndex : messages.length - 1;
-
-                simplifiedChat.push({
-                    role: 'assistant',
-                    content: messages[index],
-                    ...(modelString && {model: modelString})
-                });
-            }
-            // Skip to the next user message to avoid duplicates
-            i = nextUserIndex !== -1 ? nextUserIndex - 1 : i;
-        }
-    }
-
-    return simplifiedChat;
-}
-
-function sendChatToSidepanel(chat) {
+function sendChatToSidepanel(options) {
+    message = {
+        type: "reconstruct_chat",
+        options,
+    };
     chrome.runtime.sendMessage({ type: "is_sidepanel_open" })
         .then(response => {
             if (!response.isOpen) {
                 return chrome.runtime.sendMessage({ type: "open_side_panel" })
                     .then(() => {
-                        return chrome.runtime.sendMessage({
-                            type: "reconstruct_chat",
-                            chat: chat,
-                        });
+                        return chrome.runtime.sendMessage(message);
                     });
             } else {
-                return chrome.runtime.sendMessage({
-                    type: "reconstruct_chat",
-                    chat: chat,
-                });
+                return chrome.runtime.sendMessage(message);
             }
         });
 }

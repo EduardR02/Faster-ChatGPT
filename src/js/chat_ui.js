@@ -93,7 +93,7 @@ class ChatUI {
 
     // reconstruction of the chat
     buildChat(chat, options = {}) {
-        const { hideModels = false, continueFunc = null, startIndex = 0, endIndex = null, addSystemMsg = false } = options;
+        const { hideModels = false, continueFunc = null, startIndex = 0, endIndex = null, addSystemMsg = false, skipLastUserMessage = false } = options;
 
         this.clearConversation();
         let previousRole = null;
@@ -104,6 +104,8 @@ class ChatUI {
         );
 
         messages.forEach((message, index) => {
+            if (message.role === 'user' && skipLastUserMessage && index === messages.length - 1) return;
+
             if (message.role === 'system' && addSystemMsg) {
                 const systemMsg = this.createSystemMessage(message.content);
                 this.conversationDiv.appendChild(systemMsg);
@@ -331,7 +333,15 @@ export class SidepanelChatUI extends ChatUI {
 
     updateTextareaHeight(textarea) {
         textarea.style.height = 'auto';
-        textarea.style.height = `${textarea.scrollHeight}px`;
+        let buttonArea = document.querySelector('.chatbox-button-container');
+        let buttonAreaHeight = buttonArea ? buttonArea.offsetHeight : 0;
+        textarea.style.height = (Math.max(textarea.scrollHeight, buttonAreaHeight)) + 'px';
+    }
+
+    setTextareaText(text) {
+        const textarea = this.inputWrapper.querySelector('textarea');
+        textarea.value = text;
+        this.updateTextareaHeight(textarea);
     }
 
     addMessage(role, content = '', options = {}) {
@@ -379,9 +389,27 @@ export class SidepanelChatUI extends ChatUI {
     buildChat(chat) {
         // Hide models and disable continue buttons for sidepanel
         super.buildChat(chat, {
-            hideModels: true
+            hideModels: true,
+            skipLastUserMessage: true
         });
         this.scrollIntoView();
+    }
+
+    addErrorMessage(message) {
+        this.conversationDiv.appendChild(this.createSystemMessage(message, 'System Message: Error'));
+    }
+
+    addWarningMessage(message) {
+        this.conversationDiv.appendChild(this.createSystemMessage(message, 'System Message: Warning'));
+    }
+    
+    removeRegenerateButtons() {
+        const buttons = document.querySelectorAll('.regenerate-button');
+        buttons.forEach(button => {
+            const parent = button.parentElement;
+            button.remove();
+            parent.classList.add('centered');
+        });
     }
 
     // Scroll Handling

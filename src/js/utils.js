@@ -1,22 +1,22 @@
 export function get_mode(callback) {
-	chrome.storage.local.get('mode', function(res) {
-		callback(res.mode);
-	});
+    chrome.storage.local.get('mode', function (res) {
+        callback(res.mode);
+    });
 }
 
 
 export function set_mode(new_mode) {
-    chrome.storage.local.set({mode: new_mode});
+    chrome.storage.local.set({ mode: new_mode });
 }
 
 
 export function is_on(mode) {
-	return mode !== ModeEnum.Off;
+    return mode !== ModeEnum.Off;
 }
 
 
 export function get_lifetime_tokens(callback) {
-    chrome.storage.local.get(['lifetime_input_tokens', 'lifetime_output_tokens'], function(res) {
+    chrome.storage.local.get(['lifetime_input_tokens', 'lifetime_output_tokens'], function (res) {
         callback({
             input: res.lifetime_input_tokens || 0,
             output: res.lifetime_output_tokens || 0
@@ -26,7 +26,7 @@ export function get_lifetime_tokens(callback) {
 
 
 export function set_lifetime_tokens(newInputTokens, newOutputTokens) {
-    get_lifetime_tokens(function(currentTokens) {
+    get_lifetime_tokens(function (currentTokens) {
         chrome.storage.local.set({
             lifetime_input_tokens: currentTokens.input + newInputTokens,
             lifetime_output_tokens: currentTokens.output + newOutputTokens
@@ -37,7 +37,7 @@ export function set_lifetime_tokens(newInputTokens, newOutputTokens) {
 
 export function get_stored_models() {
     return new Promise((resolve) => {
-        chrome.storage.local.get(['models'], function(result) {
+        chrome.storage.local.get(['models'], function (result) {
             resolve(result.models || {});
         });
     });
@@ -177,11 +177,11 @@ export function set_defaults() {
         new Promise((resolve) => chrome.storage.local.set(settings, resolve)),
         // for some reason relative path does not work, only full path.
         // possibly because function is called on startup in background worker, and maybe the context is the base dir then.
-        loadTextFromFile("src/prompts/prompt.txt").then((text) => 
-            new Promise((resolve) => chrome.storage.local.set({selection_prompt: text.trim()}, resolve))
+        loadTextFromFile("src/prompts/prompt.txt").then((text) =>
+            new Promise((resolve) => chrome.storage.local.set({ selection_prompt: text.trim() }, resolve))
         ),
-        loadTextFromFile("src/prompts/chat_prompt.txt").then((text) => 
-            new Promise((resolve) => chrome.storage.local.set({chat_prompt: text.trim()}, resolve))
+        loadTextFromFile("src/prompts/chat_prompt.txt").then((text) =>
+            new Promise((resolve) => chrome.storage.local.set({ chat_prompt: text.trim() }, resolve))
         )
     ]);
 }
@@ -225,7 +225,7 @@ export class Footer {
         footerDiv.classList.add("message-footer");
         // need span to be able to calculate the width of the text in css for the centering animation
         let tokensSpan = document.createElement('span');
-        tokensSpan.textContent = `${ this.isArenaMode ? "~": this.inputTokens} | ${this.outputTokens}`;
+        tokensSpan.textContent = `${this.isArenaMode ? "~" : this.inputTokens} | ${this.outputTokens}`;
         footerDiv.setAttribute('input-tokens', this.inputTokens);
         footerDiv.appendChild(tokensSpan);
         if (this.thoughtProcessState !== "thinking") {
@@ -250,11 +250,11 @@ export class Footer {
                     footerDiv.classList.add('centered');
                 }
             };
-        
+
             regerateButton.addEventListener('transitionend', handleTransitionEnd);
         });
         footerDiv.appendChild(regerateButton);
-    }   
+    }
 }
 
 
@@ -291,7 +291,7 @@ export class StreamWriterBase {
 
 
 export class StreamWriterSimple {
-    constructor(contentDiv, scrollFunc = () => {}) {
+    constructor(contentDiv, scrollFunc = () => { }) {
         this.contentDiv = contentDiv;
         this.scrollFunc = scrollFunc;
         this.message = [];
@@ -312,20 +312,20 @@ export class StreamWriterSimple {
         let seconds = 0;
         let intervalId = null;
         let hasProcessed = false;
-    
+
         // Split and preserve all parts of the text
         const originalText = span.textContent;
         const [firstWord, ...remainingWords] = originalText.split(' ');
         const remainingText = remainingWords.length ? ' ' + remainingWords.join(' ') : '';
-    
+
         const updateCounter = () => {
             if (hasProcessed) return;
             seconds++;
             span.textContent = `${firstWord} thinking for ${seconds} seconds...${remainingText}`;
         };
-    
+
         intervalId = setInterval(updateCounter, 1000);
-    
+
         // Override processContent to catch first content
         const originalProcessContent = this.processContent.bind(this);
         this.processContent = (content) => {
@@ -363,7 +363,7 @@ export class StreamWriterSimple {
     addFooter(footer, add_pending) {
         // Use responseMessage for context, don't include model "thinking" in context
         this.fullMessage = this.responseMessage.join('');
-        
+
         // still show everything, even the thinking part
         this.contentDiv.innerHTML = add_codeblock_html(this.responseMessage.join(''));
 
@@ -401,7 +401,7 @@ export class StreamWriter extends StreamWriterSimple {
                 this.pendingSwitch = true;
             }
         }
-        
+
         if (this.pendingSwitch) {
             this.pendingQueue.push(...content.split(""));
         }
@@ -446,7 +446,7 @@ export class StreamWriter extends StreamWriterSimple {
             } else {
                 this.isProcessing = false;
                 if (this.pendingFooter) {
-                    const {footer, add_pending, resolve} = this.pendingFooter;
+                    const { footer, add_pending, resolve } = this.pendingFooter;
                     super.addFooter(footer, add_pending).then(resolve);  // Resolve the promise after processing the footer
                     this.pendingFooter = null;
                 }
@@ -457,7 +457,7 @@ export class StreamWriter extends StreamWriterSimple {
     addFooter(footer, add_pending) {
         if (this.isProcessing) {
             return new Promise((resolve) => {
-                this.pendingFooter = {footer, add_pending, resolve}; // Save the resolve function to call later
+                this.pendingFooter = { footer, add_pending, resolve }; // Save the resolve function to call later
             });
         } else {
             return super.addFooter(footer, add_pending);
@@ -475,24 +475,24 @@ export class ChatStorage {
     async getDB() {
         return new Promise((resolve, reject) => {
             const request = indexedDB.open(this.dbName, this.dbVersion);
-            
+
             request.onerror = () => reject(request.error);
             request.onsuccess = () => resolve(request.result);
-            
+
             request.onupgradeneeded = (event) => {
                 const db = event.target.result;
-                
+
                 if (!db.objectStoreNames.contains('messages')) {
-                    const messageStore = db.createObjectStore('messages', { 
+                    const messageStore = db.createObjectStore('messages', {
                         keyPath: ['chatId', 'messageId']
                     });
                     messageStore.createIndex('chatId', 'chatId');
                 }
-                
+
                 if (!db.objectStoreNames.contains('chatMeta')) {
-                    const metaStore = db.createObjectStore('chatMeta', { 
+                    const metaStore = db.createObjectStore('chatMeta', {
                         keyPath: 'chatId',
-                        autoIncrement: true 
+                        autoIncrement: true
                     });
                 }
             };
@@ -513,10 +513,10 @@ export class ChatStorage {
             };
 
             const metaRequest = metaStore.add(chatMeta);
-            
+
             metaRequest.onsuccess = () => {
                 const chatId = metaRequest.result;
-                const messagePromises = messages.map((message, index) => 
+                const messagePromises = messages.map((message, index) =>
                     messageStore.add({
                         chatId,
                         messageId: index,
@@ -535,7 +535,7 @@ export class ChatStorage {
                                 ...chatMeta,
                             }
                         });
-                        
+
                         resolve({
                             chatId,
                             ...chatMeta
@@ -543,7 +543,7 @@ export class ChatStorage {
                     })
                     .catch(reject);
             };
-            
+
             metaRequest.onerror = () => reject(metaRequest.error);
         });
     }
@@ -578,7 +578,7 @@ export class ChatStorage {
         const db = await this.getDB();
         const tx = db.transaction(['messages'], 'readwrite');
         const store = tx.objectStore('messages');
-        
+
         return new Promise((resolve, reject) => {
             const request = store.put({
                 chatId,
@@ -602,7 +602,7 @@ export class ChatStorage {
         const db = await this.getDB();
         const tx = db.transaction(['messages'], 'readonly');
         const store = tx.objectStore('messages');
-        
+
         return new Promise((resolve, reject) => {
             const request = store.get([chatId, messageId]);
             request.onsuccess = () => resolve(request.result);
@@ -615,17 +615,17 @@ export class ChatStorage {
         const tx = db.transaction(['messages', 'chatMeta'], 'readonly');
         const messageStore = tx.objectStore('messages');
         const metaStore = tx.objectStore('chatMeta');
-        
+
         return new Promise((resolve) => {
             const messages = [];
             let count = 0;
-            
+
             const index = messageStore.index('chatId');
             const request = index.openCursor(IDBKeyRange.only(chatId));
-            
+
             request.onsuccess = (event) => {
                 const cursor = event.target.result;
-                
+
                 if (!cursor || (messageLimit !== null && count >= messageLimit)) {
                     metaStore.get(chatId).onsuccess = (event) => {
                         resolve({
@@ -635,12 +635,12 @@ export class ChatStorage {
                     };
                     return;
                 }
-    
+
                 messages.push(cursor.value);
                 count++;
                 cursor.continue();
             };
-    
+
             request.onerror = () => {
                 resolve({ meta: null, messages: [] });
             };
@@ -651,28 +651,28 @@ export class ChatStorage {
         const db = await this.getDB();
         const tx = db.transaction(['messages'], 'readonly');
         const messageStore = tx.objectStore('messages');
-        
+
         return new Promise((resolve) => {
             const messages = [];
             let count = 0;
-            
+
             const index = messageStore.index('chatId');
             const cursorRequest = index.openCursor(IDBKeyRange.only(chatId), 'prev');
-            
+
             cursorRequest.onsuccess = (event) => {
                 const cursor = event.target.result;
-                
+
                 if (!cursor || count >= limit) {
                     // Reverse to maintain chronological order
                     resolve(messages.reverse());
                     return;
                 }
-    
+
                 messages.push(cursor.value);
                 count++;
                 cursor.continue();
             };
-    
+
             cursorRequest.onerror = () => {
                 resolve([]);
             };
@@ -708,10 +708,10 @@ export class ChatStorage {
     async deleteChat(chatId) {
         const db = await this.getDB();
         const tx = db.transaction(['messages', 'chatMeta'], 'readwrite');
-        
+
         const messageStore = tx.objectStore('messages');
         const metaStore = tx.objectStore('chatMeta');
-        
+
         const index = messageStore.index('chatId');
         await Promise.all([
             new Promise((resolve) => {
@@ -739,9 +739,9 @@ export class ChatStorage {
         return new Promise((resolve) => {
             const metadata = [];
             let skipped = 0;
-            
+
             const request = index.openCursor(null, 'prev');  // newest first
-            
+
             request.onsuccess = (event) => {
                 const cursor = event.target.result;
                 if (!cursor) {
@@ -996,7 +996,7 @@ export class ArenaRatingManager {
             const transaction = this.db.transaction([this.storeName], 'readwrite');
             const objectStore = transaction.objectStore(this.storeName);
             const request = objectStore.clear();
-    
+
             request.onerror = (event) => reject(`Error clearing IndexedDB: ${event.target.error}`);
             request.onsuccess = () => {
                 console.log("Match history successfully deleted and rating has been reset.");
@@ -1017,7 +1017,7 @@ export class ArenaRatingManager {
                 console.log('---');
             });
             console.log(`Total matches: ${matchHistory.length}`);
-    
+
             // Also print current ratings
             console.log('Current Ratings:');
             Object.entries(this.cachedRatings).forEach(([model, data]) => {
@@ -1030,4 +1030,4 @@ export class ArenaRatingManager {
 }
 
 
-export const ModeEnum = {"InstantPromptMode": 0, "PromptMode": 1, "Off": 2};
+export const ModeEnum = { "InstantPromptMode": 0, "PromptMode": 1, "Off": 2 };
