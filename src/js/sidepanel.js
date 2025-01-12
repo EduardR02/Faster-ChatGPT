@@ -1,4 +1,4 @@
-import { ChatStorage, auto_resize_textfield_listener } from "./utils.js";
+import { ChatStorage, auto_resize_textfield_listener, ArenaRatingManager } from "./utils.js";
 import { ApiManager } from "./api_manager.js";
 import { SidepanelStateManager } from './state_manager.js';
 import { SidepanelChatUI } from './chat_ui.js';

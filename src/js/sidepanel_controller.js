@@ -102,10 +102,6 @@ export class SidepanelController {
         } else {
             this.addToArenaPending(message, model);
         }
-
-        if (done) {
-            this.chatUI.updatePendingResponses();
-        }
     }
 
     resolvePending(model = null) {
@@ -197,7 +193,7 @@ export class SidepanelController {
         if (this.stateManager.isArenaModeActive) {
             await this.initArenaCall();
         } else {
-            this.chatUI.initMessageBlock('assistant', thinkingState);
+            this.chatUI.addMessage('assistant');
             await this.makeApiCall(this.stateManager.getSetting('current_model'), thinkingState);
         }
     }
@@ -212,8 +208,8 @@ export class SidepanelController {
         const [model1, model2] = this.getRandomArenaModels(enabledModels);
         const thinkingState = this.stateManager.thinkingMode ? "thinking" : "none";
         
-        this.chatUI.initMessageBlock('assistant', thinkingState);
         this.stateManager.initArenaResponse(model1, model2);
+        this.chatUI.createArenaMessage();
         
         await Promise.all([
             this.makeApiCall(model1, thinkingState),
@@ -388,7 +384,7 @@ export class SidepanelController {
     }
 
     handleDefaultArenaChoice() {
-        if (this.chatUI.activeMessageDivs) {
+        if (this.stateManager.isArenaModeActive) {
             this.handleArenaChoice('ignored');
         }
     }

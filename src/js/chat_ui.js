@@ -138,8 +138,8 @@ class ChatUI {
     }
 
     // Arena Mode Methods
-    createArenaMessage(message = null) {
-        const { responses, role } = message;
+    createArenaMessage(message = {}) {
+        const { responses, role } = message || {};
         const messageBlock = createElementWithClass('div', `assistant-message`);
         const container = createElementWithClass('div', 'arena-full-container');
         messageBlock.appendChild(container);
@@ -526,6 +526,11 @@ export class SidepanelChatUI extends ChatUI {
 
     getArenaIndex(model) {
         return this.stateManager.state.activeArenaModels.findIndex(m => m === model);
+    }
+
+    getContentDivIndex(model) {
+        if (!this.stateManager.isArenaModeActive) return 0;
+        return this.getArenaIndex(model);
     }
 
     getContentDiv(model) {

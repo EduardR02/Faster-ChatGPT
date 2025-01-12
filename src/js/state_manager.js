@@ -295,12 +295,12 @@ export class SidepanelStateManager extends ArenaStateManager {
     }
 
     isThinking(model = null) {
-        const state = getThinkingState(model);
+        const state = this.getThinkingState(model);
         return state === THINKING_STATE.THINKING;
     }
 
     isSolving(model = null) {
-        const state = getThinkingState(model);
+        const state = this.getThinkingState(model);
         return state === THINKING_STATE.SOLVING;
     }
 
