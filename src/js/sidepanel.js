@@ -175,14 +175,14 @@ class SidepanelApp {
                     this.handleNewChat();
                     break;
                 case 'reconstruct_chat':
-                    this.handleReconstructChat(msg.options, msg.isSidePanel);
+                    this.handleReconstructChat(msg.options);
                     break;
             }
         });
     }
 
     async handleNewSelection(text, url) {
-        await this.controller.initStates(`Selection from ${url}`);
+        this.controller.initStates(`Selection from ${url}`);
         this.chatUI.createSystemMessage(text, "Selected text");
         
         await this.initPrompt({ mode: "selection", text, url });
@@ -202,15 +202,30 @@ class SidepanelApp {
         this.initPrompt({ mode: "chat" });
     }
 
-    async handleReconstructChat(options, isSidePanel) {
+    async handleReconstructChat(options) {
+        const newChatName = options.chatId ? "Continued Chat" : "New Chat";
+        this.controller.initStates(newChatName);
+        this.stateManager.isContinuedChat = options.chatId ? true : false;
+        this.stateManager.isSidePanel = options.isSidePanel === false ? false : true;
         if (!options.chatId) return;
-        
-        await this.controller.initStates("Continued Chat");
-        this.stateManager.isSidePanel = isSidePanel === false ? false : true;
 
-        const chat = await this.chatStorage.loadChat(options.chatId);
-        this.controller.buildAPIChatFromHistoryFormat(chat, options.index, options.arenaMessageIndex, options.modelChoice);
+        const lastMessageIndex = options.index ? options.index + 1 : null;
+        const chat = await this.chatStorage.loadChat(options.chatId, lastMessageIndex);
         this.chatUI.buildChat(chat);
+        this.controller.buildAPIChatFromHistoryFormat(chat, null, options.arenaMessageIndex, options.modelChoice);
+        this.handleIfLastUserMessage(chat);
+    }
+
+    handleIfLastUserMessage(chat) {
+        const lastMessage = chat.messages[chat.messages.length - 1];
+        if (lastMessage.role === "user") {
+            if (lastMessage.images) this.controller.appendPendingImages(lastMessage.images);
+            if (lastMessage.files) this.controller.appendPendingFiles(lastMessage.files);
+            if (lastMessage.content) this.chatUI.setTextareaText(lastMessage.content);
+        }
+        else {
+            this.chatUI.setTextareaText('');
+        }
     }
 
     // Incognito handling methods
@@ -260,12 +275,8 @@ class SidepanelApp {
     async handlePopoutToggle() {
         this.controller.resolvePending();
         
-        if (this.controller.currentChat && this.controller.currentChat.messages.length === 0) {
-            this.controller.currentChat.messages = [...this.controller.messages];
-        }
-        
         if (!this.controller.currentChat) {
-            this.controller.currentChat = [];
+            this.controller.currentChat = {};
         }
 
         if (this.stateManager.isSidePanel) {
@@ -294,8 +305,10 @@ class SidepanelApp {
         // Send chat data to new tab
         chrome.runtime.sendMessage({
             type: "reconstruct_chat",
-            chatId: this.controller.currentChat?.meta?.id,
-            isSidePanel: false
+            options: {
+                chatId: this.controller.currentChat?.id,
+                isSidePanel: false
+            }
         });
 
         window.close();
@@ -313,8 +326,10 @@ class SidepanelApp {
     
         await chrome.runtime.sendMessage({
             type: "reconstruct_chat",
-            chatId: this.controller.currentChat?.meta?.id,
-            isSidePanel: true
+            options: {
+                chatId: this.controller.currentChat?.id,
+                isSidePanel: true
+            }
         });
     
         if (tabCount === 1) {
@@ -404,7 +419,7 @@ class SidepanelApp {
         return new Promise(resolve => {
             const reader = new FileReader();
             reader.onload = e => {
-                this.controller.appendPendingFiles([{ name: file.name, data: e.target.result }]);
+                this.controller.appendPendingFiles([{ name: file.name, content: e.target.result }]);
                 resolve();
             };
             reader.onerror = error => {

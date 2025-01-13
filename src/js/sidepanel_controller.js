@@ -24,18 +24,17 @@ export class SidepanelController {
         this.tempMediaId = 0;
     }
 
-    async initStates(chatName) {
+    initStates(chatName) {
         this.handleDefaultArenaChoice();
         this.thoughtLoops = [0, 0];
         this.stateManager.resetChatState();
+        this.chatUI.clearConversation();
         this.currentChat = this.chatStorage.createNewChatTracking(chatName);
         this.pendingMessage = {};
         this.messages = [];
         this.pendingFiles = {};
         this.pendingImages = [];
         this.tempMediaId = 0;
-
-        this.chatUI.clearConversation();
     }
 
     async makeApiCall(model, thoughtProcessState) {
@@ -304,8 +303,14 @@ export class SidepanelController {
         this.realizePendingFiles(role);
     
         if (this.currentChat && role === 'user') {
-            if (this.currentChat.id === null) {
-                this.currentChat.messages = [...this.messages];
+            if (this.currentChat.id === null || this.stateManager.isContinuedChat) {
+                if (this.stateManager.isContinuedChat) {
+                    this.currentChat.messages.push(this.messages[this.messages.length - 1]);
+                }
+                else {
+                    this.currentChat.messages = [...this.messages];
+                }
+                this.stateManager.isContinuedChat = false;
                 
                 if (this.stateManager.shouldSave) {
                     this.chatStorage.createChatWithMessages(
@@ -334,9 +339,9 @@ export class SidepanelController {
         if (this.pendingImages.length > 0) {
             this.messages[this.messages.length - 1].images = this.pendingImages;
             this.pendingImages = [];
-        } 
-        
-        if (this.pendingFiles.length > 0) {
+        }
+
+        if (Object.keys(this.pendingFiles).length > 0) {
             this.messages[this.messages.length - 1].files = [];
             for (const [key, value] of Object.entries(this.pendingFiles)) {
                 this.messages[this.messages.length - 1].files.push(value);
@@ -363,7 +368,6 @@ export class SidepanelController {
     }
 
     removeFile(tempId) {
-        // write this function as if the pending files is an object instead, with tempid as key
         delete this.pendingFiles[tempId];
     }
 
@@ -431,9 +435,10 @@ export class SidepanelController {
 
     buildAPIChatFromHistoryFormat(historyChat, continueFromIndex = null, arenaMessageIndex = null, modelChoice = null) {
         this.currentChat = {
-            id: null,
-            title: historyChat.title + " (Continued)",
-            messages: continueFromIndex ? historyChat.messages.slice(0, continueFromIndex + 1) : [...historyChat.messages]
+            id: historyChat.meta.chatId,
+            title: historyChat.meta.title + " (Continued)",
+            messages: (continueFromIndex ? historyChat.messages.slice(0, continueFromIndex + 1) : historyChat.messages)
+                .map(({ messageId, timestamp, chatId, ...msg }) => msg)
         };
         const workingMessages = this.currentChat.messages;
     
@@ -444,6 +449,7 @@ export class SidepanelController {
             const isLastMessage = i === workingMessages.length - 1;
 
             if (isLastMessage && msg.role === 'user') {
+                this.currentChat.messages.pop();
                 return;
             }
     

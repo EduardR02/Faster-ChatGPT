@@ -234,7 +234,7 @@ async function handleArenaMessageUpdate(chatId, messageId) {
 
 
 function sendChatToSidepanel(options) {
-    message = {
+    const message = {
         type: "reconstruct_chat",
         options,
     };

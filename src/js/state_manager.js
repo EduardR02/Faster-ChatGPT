@@ -197,6 +197,7 @@ export class SidepanelStateManager extends ArenaStateManager {
             chatState: CHAT_STATE.NORMAL,
             shouldSave: true,
             isSidePanel: true,
+            isContinuedChat: false,
             chatResetOngoing: false,
             prompts: {
                 active_prompt: {},
@@ -400,6 +401,14 @@ export class SidepanelStateManager extends ArenaStateManager {
 
     get thinkingMode() {
         return this.state.activeThinkingMode;
+    }
+
+    get isContinuedChat() {
+        return this.state.isContinuedChat;
+    }
+
+    set isContinuedChat(value) {
+        this.state.isContinuedChat = value;
     }
 
     get pendingThinkingMode() {

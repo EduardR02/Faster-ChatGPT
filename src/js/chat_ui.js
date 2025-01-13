@@ -60,6 +60,10 @@ class ChatUI {
         prefix.textContent = this.generatePrefixText(role, options);
 
         wrapper.appendChild(prefix);
+        if (options.continueFunc) {
+            const button = this.createContinueButton(options.continueFunc);
+            wrapper.appendChild(button);
+        }
         return wrapper;
     }
 
@@ -106,30 +110,19 @@ class ChatUI {
         messages.forEach((message, index) => {
             if (message.role === 'user' && skipLastUserMessage && index === messages.length - 1) return;
 
-            if (message.role === 'system' && addSystemMsg) {
+            if (message.role === 'system') {
+                if (!addSystemMsg) return;
                 const systemMsg = this.createSystemMessage(message.content);
                 this.conversationDiv.appendChild(systemMsg);
                 return;
             }
 
             if (message.responses) {
-                const arenaDivs = this.createArenaMessageWrapperFunc(message);
-                if (continueFunc) {
-                    arenaDivs.forEach((wrapper, wrapper_idx) => {
-                        const modelKey = wrapper_idx === 0 ? 'model_a' : 'model_b';
-                        wrapper.querySelectorAll('.history-prefix-wrapper').forEach((prefix, idx) => {
-                            const button = this.createContinueButton(() => { continueFunc(index, idx, modelKey) });
-                            prefix.appendChild(button);
-                        });
-                    })
-                }
+                this.createArenaMessageWrapperFunc(message, { continueFunc, messageIndex: index });
             } else {
-                const messageBlock = this.createMessageWrapperFunc(message, previousRole === message.role, hideModels);
-                if (continueFunc) {
-                    messageBlock.querySelector('.history-prefix-wrapper').appendChild(
-                        this.createContinueButton(() => continueFunc(index))
-                    );
-                }
+                const new_options = { isRegeneration: previousRole === message.role, hideModels };
+                if (continueFunc) new_options.continueFunc = () => continueFunc(index);
+                const messageBlock = this.createMessageWrapperFunc(message, new_options);
                 this.conversationDiv.appendChild(messageBlock);
             }
             previousRole = message.role;
@@ -138,7 +131,7 @@ class ChatUI {
     }
 
     // Arena Mode Methods
-    createArenaMessage(message = {}) {
+    createArenaMessage(message = {}, options = {}) {
         const { responses, role } = message || {};
         const messageBlock = createElementWithClass('div', `assistant-message`);
         const container = createElementWithClass('div', 'arena-full-container');
@@ -149,19 +142,21 @@ class ChatUI {
             const arenaDiv = createElementWithClass('div', 'arena-wrapper');
             arenaDivs[index] = arenaDiv;
             container.appendChild(arenaDiv);
-            let options = {
+            let new_options = {
                 model: this.stateManager.getArenaModel(index),
                 isRegeneration: false,
                 hideModels: true
             };
             if (responses) {
                 responses[model].messages.forEach((msg, i) => {
-                    options.isRegeneration = i !== 0;
-                    arenaDiv.appendChild(this.createMessage(role, msg, options));
+                    new_options.isRegeneration = i !== 0;
+                    if (options.continueFunc) new_options.continueFunc = () => options.continueFunc(options.messageIndex, i, model);
+                    arenaDiv.appendChild(this.createMessage(role, msg, new_options));
                 });
             }
             else {
-                arenaDiv.appendChild(this.createMessage('assistant', '', options));
+                if (options.continueFunc) new_options.continueFunc = () => options.continueFunc(options.messageIndex, 0, model);
+                arenaDiv.appendChild(this.createMessage('assistant', '', new_options));
             }
         });
         this.conversationDiv.appendChild(messageBlock);
@@ -292,17 +287,17 @@ class ChatUI {
         this.pendingMediaDiv = null;
     }
 
-    createArenaMessageWrapperFunc(message) {
+    createArenaMessageWrapperFunc(message, options = {}) {
         this.stateManager.initArenaResponse(message.responses['model_a'].name, message.responses['model_b'].name);
-        const arenaDivs = this.createArenaMessage(message);
+        const arenaDivs = this.createArenaMessage(message, options);
         this.resolveArena(message.choice, message.continued_with, arenaDivs);
         this.stateManager.clearArenaState();
         return arenaDivs;
     }
 
-    createMessageWrapperFunc(message, isRegeneration = false, hideModels = true) {
-        const { role, content, model, images, files } = message;
-        return this.createMessage(role, content, { model, images, files, isRegeneration, hideModels });
+    createMessageWrapperFunc(message, options = {}) {
+        const { role, content, ...rest } = message;
+        return this.createMessage(role, content, { ...rest, ...options});
     }
 }
 
@@ -357,8 +352,8 @@ export class SidepanelChatUI extends ChatUI {
         return message;
     }
 
-    createArenaMessage(message = null) {
-        this.activeMessageDivs = super.createArenaMessage(message);
+    createArenaMessage(message = null, options = {}) {
+        this.activeMessageDivs = super.createArenaMessage(message, options);
         this.scrollIntoView();
         return this.activeMessageDivs;
     }
@@ -668,9 +663,10 @@ export class HistoryChatUI extends ChatUI {
 
         newMessages.forEach(message => {
             if (message.responses) {
-                this.createArenaMessageWrapperFunc(message);
+                this.createArenaMessageWrapperFunc(message, { continueFunc: this.continueFunc, messageIndex: currentMessageIndex });
             } else {
-                const messageBlock = this.createMessageWrapperFunc(message, previousRole === message.role, false);
+                const options = { isRegeneration: previousRole === message.role, hideModels: false, continueFunc: () => this.continueFunc(currentMessageIndex) };
+                const messageBlock = this.createMessageWrapperFunc(message, options);
                 this.conversationDiv.appendChild(messageBlock);
             }
             currentMessageIndex++;
@@ -683,7 +679,7 @@ export class HistoryChatUI extends ChatUI {
         const oldMessageElement = this.conversationDiv.children[messageIndex];
 
         if (oldMessageElement) {
-            const newMessageElement = this.createArenaMessageWrapperFunc(updatedMessage)[0].parentElement.parentElement;
+            const newMessageElement = this.createArenaMessageWrapperFunc(updatedMessage, { continueFunc: this.continueFunc, messageIndex })[0].parentElement.parentElement;
             newMessageElement.remove(); // because createArenaMessage adds to conversationDiv
             this.conversationDiv.replaceChild(newMessageElement, oldMessageElement);
         }
