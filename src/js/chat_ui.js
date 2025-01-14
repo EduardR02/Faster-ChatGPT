@@ -95,6 +95,10 @@ class ChatUI {
         return messageDiv;
     }
 
+    addSystemMessage(content, title = 'System Prompt') {
+        this.conversationDiv.appendChild(this.createSystemMessage(content, title));
+    }
+
     // reconstruction of the chat
     buildChat(chat, options = {}) {
         const { hideModels = false, continueFunc = null, startIndex = 0, endIndex = null, addSystemMsg = false, skipLastUserMessage = false } = options;
@@ -112,8 +116,7 @@ class ChatUI {
 
             if (message.role === 'system') {
                 if (!addSystemMsg) return;
-                const systemMsg = this.createSystemMessage(message.content);
-                this.conversationDiv.appendChild(systemMsg);
+                this.addSystemMessage(message.content);
                 return;
             }
 
@@ -319,24 +322,24 @@ export class SidepanelChatUI extends ChatUI {
 
         this.activeMessageDivs = null;  // Single div for normal mode, array [modelA, modelB] for arena
         this.inputWrapper = document.querySelector(inputWrapperId);
-        this.initResize(this.inputWrapper.querySelector('textarea'));
+        this.textarea = this.inputWrapper.querySelector('textarea');
+        this.initResize();
     }
 
-    initResize(textarea) {
-        textarea.addEventListener('input', () => this.updateTextareaHeight(textarea));
+    initResize() {
+        this.textarea.addEventListener('input', () => this.updateTextareaHeight());
     }
 
-    updateTextareaHeight(textarea) {
-        textarea.style.height = 'auto';
+    updateTextareaHeight() {
+        this.textarea.style.height = 'auto';
         let buttonArea = document.querySelector('.chatbox-button-container');
         let buttonAreaHeight = buttonArea ? buttonArea.offsetHeight : 0;
-        textarea.style.height = (Math.max(textarea.scrollHeight, buttonAreaHeight)) + 'px';
+        this.textarea.style.height = (Math.max(this.textarea.scrollHeight, buttonAreaHeight)) + 'px';
     }
 
     setTextareaText(text) {
-        const textarea = this.inputWrapper.querySelector('textarea');
-        textarea.value = text;
-        this.updateTextareaHeight(textarea);
+        this.textarea.value = text;
+        this.updateTextareaHeight();
     }
 
     addMessage(role, content = '', options = {}) {
@@ -545,6 +548,7 @@ export class SidepanelChatUI extends ChatUI {
     clearConversation() {
         super.clearConversation();
         this.activeMessageDivs = null;
+        this.setTextareaText('');
     }
 }
 

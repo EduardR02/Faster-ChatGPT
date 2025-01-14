@@ -63,7 +63,7 @@ class SidepanelApp {
         this.controller.appendContext(inputText, 'user');
         
         if (this.stateManager.isSettingsEmpty() || this.controller.messages[0]?.role !== "system") {
-            this.initPrompt("chat").then(() => {
+            this.initPrompt({ mode: "chat" }).then(() => {
                 if (this.stateManager.isOn()) {
                     this.controller.appendContext(inputText, 'user');
                     this.controller.initApiCall();
@@ -78,8 +78,7 @@ class SidepanelApp {
         this.chatUI.updateTextareaHeight(inputField);
     }
 
-    async initPrompt(mode) {
-        const context = { mode };
+    async initPrompt(context) {
         return this.controller.initPrompt(context);
     }
 
@@ -182,8 +181,10 @@ class SidepanelApp {
     }
 
     async handleNewSelection(text, url) {
-        this.controller.initStates(`Selection from ${url}`);
-        this.chatUI.createSystemMessage(text, "Selected text");
+        const hostname = new URL(url).hostname;
+        this.controller.initStates(`Selection from ${hostname}`);
+        this.chatUI.clearConversation();
+        this.chatUI.addSystemMessage(text, `Selected Text - site:${hostname}`);
         
         await this.initPrompt({ mode: "selection", text, url });
         
@@ -194,20 +195,25 @@ class SidepanelApp {
     }
 
     handleNewChat() {
+        this.controller.messages = [];
+        this.controller.initStates("New Chat");
+        this.chatUI.clearConversation();
         if (this.stateManager.isInstantPromptMode()) {
             this.chatUI.addWarningMessage("Warning: Instant prompt mode does not make sense in chat mode and will be ignored.");
         }
-        this.controller.messages = [];
-        this.controller.initStates("New Chat");
         this.initPrompt({ mode: "chat" });
     }
 
     async handleReconstructChat(options) {
         const newChatName = options.chatId ? "Continued Chat" : "New Chat";
         this.controller.initStates(newChatName);
+        // no clearConversation here because it's handled in buildChat, and we want to do it as late as possible to avoid a flicker
         this.stateManager.isContinuedChat = options.chatId ? true : false;
         this.stateManager.isSidePanel = options.isSidePanel === false ? false : true;
-        if (!options.chatId) return;
+        if (!options.chatId) {
+            this.chatUI.clearConversation();
+            return;
+        }
 
         const lastMessageIndex = options.index ? options.index + 1 : null;
         const chat = await this.chatStorage.loadChat(options.chatId, lastMessageIndex);

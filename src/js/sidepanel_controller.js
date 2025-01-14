@@ -28,7 +28,6 @@ export class SidepanelController {
         this.handleDefaultArenaChoice();
         this.thoughtLoops = [0, 0];
         this.stateManager.resetChatState();
-        this.chatUI.clearConversation();
         this.currentChat = this.chatStorage.createNewChatTracking(chatName);
         this.pendingMessage = {};
         this.messages = [];
@@ -279,7 +278,6 @@ export class SidepanelController {
 
     async initPrompt(context) {
         let promptString = context.mode + "_prompt";
-    
         try {
             await this.stateManager.loadPrompt(promptString);
             this.messages = [];
