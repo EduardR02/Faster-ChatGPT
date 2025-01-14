@@ -390,10 +390,29 @@ export class SidepanelChatUI extends ChatUI {
         footer.create(contentDiv);
     }
 
-    buildChat(chat) {
+    buildChat(chat, options) {
         // Hide models and disable continue buttons for sidepanel
         this.shouldScroll = false;
-        super.buildChat(chat, {
+        let modifiedChat = chat;
+        if (typeof options?.arenaMessageIndex === 'number') {
+            // avoid modifiying the original chat object
+            modifiedChat = { 
+                ...chat,
+                messages: [...chat.messages]
+            };
+            const lastIndex = modifiedChat.messages.length - 1;
+            modifiedChat.messages[lastIndex] = { 
+                ...chat.messages[lastIndex] 
+            };
+
+            // modify last arena message to only show up to the selected continue message
+            // additionally set the continued_with field to the continued model
+            modifiedChat.messages[lastIndex].continued_with = options.modelChoice;
+            modifiedChat.messages[lastIndex].responses[options.modelChoice].messages =
+                modifiedChat.messages[lastIndex].responses[options.modelChoice].messages
+                    .slice(0, options.arenaMessageIndex + 1);
+        }
+        super.buildChat(modifiedChat, {
             hideModels: true,
             skipLastUserMessage: true
         });

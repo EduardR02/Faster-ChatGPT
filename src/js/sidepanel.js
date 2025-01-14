@@ -217,7 +217,7 @@ class SidepanelApp {
 
         const lastMessageIndex = options.index ? options.index + 1 : null;
         const chat = await this.chatStorage.loadChat(options.chatId, lastMessageIndex);
-        this.chatUI.buildChat(chat);
+        this.chatUI.buildChat(chat, options);
         this.controller.buildAPIChatFromHistoryFormat(chat, null, options.arenaMessageIndex, options.modelChoice);
         this.handleIfLastUserMessage(chat);
     }
