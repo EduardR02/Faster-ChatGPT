@@ -389,10 +389,12 @@ export class SidepanelChatUI extends ChatUI {
 
     buildChat(chat) {
         // Hide models and disable continue buttons for sidepanel
+        this.shouldScroll = false;
         super.buildChat(chat, {
             hideModels: true,
             skipLastUserMessage: true
         });
+        this.shouldScroll = true;
         this.scrollIntoView();
     }
 

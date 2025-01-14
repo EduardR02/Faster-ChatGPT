@@ -354,7 +354,7 @@ export class SidepanelController {
     appendPendingImages(images) {
         images.forEach(image => {
             this.pendingImages.push(image);
-            this.chatUI.addImage(image);
+            this.chatUI.appendImage(image);
         });
     }
 
