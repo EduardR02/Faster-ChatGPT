@@ -342,6 +342,10 @@ export class SidepanelChatUI extends ChatUI {
         this.updateTextareaHeight();
     }
 
+    getTextAreaText() {
+        return this.textarea.value;
+    }
+
     addMessage(role, content = '', options = {}) {
         super.addMessage(role, content, options);
         this.scrollIntoView();

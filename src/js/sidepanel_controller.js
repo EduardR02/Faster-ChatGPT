@@ -295,6 +295,22 @@ export class SidepanelController {
             throw error;
         }
     }
+
+    getSystemPrompt() {
+        return this.messages[0]?.role === 'system' ? this.messages[0].content : null;
+    }
+    
+    setSystemPrompt(prompt) {
+        if (!prompt) return;
+        
+        if (this.messages.length === 0) {
+            this.messages.push({ role: 'system', content: prompt });
+        } else if (this.messages[0].role === 'system') {
+            this.messages[0].content = prompt;
+        } else {
+            this.messages.unshift({ role: 'system', content: prompt });
+        }
+    }
     
     appendContext(message, role) {
         this.messages.push({ role, content: message });
@@ -329,6 +345,23 @@ export class SidepanelController {
                 }
             }
         }
+    }
+
+    collectPendingUserMessage() {
+        const text = this.chatUI.getTextAreaText().trim();
+        const hasImages = this.pendingImages.length > 0;
+        const hasFiles = Object.keys(this.pendingFiles).length > 0;
+    
+        if (!text && !hasImages && !hasFiles) {
+            return null;
+        }
+    
+        const message = { role: 'user' };
+    
+        if (text) message.content = text;
+        if (hasImages) message.images = this.pendingImages;
+        if (hasFiles) message.files = Object.values(this.pendingFiles);
+        return message;
     }
     
     realizePendingFiles(role) {

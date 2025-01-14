@@ -60,7 +60,6 @@ class SidepanelApp {
         this.controller.handleDefaultArenaChoice();
         this.chatUI.addMessage('user', inputText);
         this.controller.resolvePending();
-        this.controller.appendContext(inputText, 'user');
         
         if (this.stateManager.isSettingsEmpty() || this.controller.messages[0]?.role !== "system") {
             this.initPrompt({ mode: "chat" }).then(() => {
@@ -70,12 +69,12 @@ class SidepanelApp {
                 }
             });
         } else {
+            this.controller.appendContext(inputText, 'user');
             this.chatUI.removeRegenerateButtons();
             this.controller.initApiCall();
         }
 
         this.chatUI.setTextareaText('');
-        this.chatUI.updateTextareaHeight(inputField);
     }
 
     async initPrompt(context) {
@@ -210,15 +209,23 @@ class SidepanelApp {
         // no clearConversation here because it's handled in buildChat, and we want to do it as late as possible to avoid a flicker
         this.stateManager.isContinuedChat = options.chatId ? true : false;
         this.stateManager.isSidePanel = options.isSidePanel === false ? false : true;
-        if (!options.chatId) {
+        if (!options.chatId && !options.pendingUserMessage) {
             this.chatUI.clearConversation();
             return;
         }
 
-        const lastMessageIndex = options.index ? options.index + 1 : null;
-        const chat = await this.chatStorage.loadChat(options.chatId, lastMessageIndex);
-        this.chatUI.buildChat(chat, options);
-        this.controller.buildAPIChatFromHistoryFormat(chat, null, options.arenaMessageIndex, options.modelChoice);
+        let chat = { messages: [] };
+
+        if (options.chatId) {
+            const lastMessageIndex = options.index ? options.index + 1 : null;
+            chat = await this.chatStorage.loadChat(options.chatId, lastMessageIndex);
+            this.chatUI.buildChat(chat, options);
+            this.controller.buildAPIChatFromHistoryFormat(chat, null, options.arenaMessageIndex, options.modelChoice);
+        }
+
+        if (options.systemPrompt) this.controller.setSystemPrompt(options.systemPrompt);
+        if (options.pendingUserMessage) chat.messages.push(options.pendingUserMessage);
+
         this.handleIfLastUserMessage(chat);
     }
 
@@ -285,14 +292,22 @@ class SidepanelApp {
             this.controller.currentChat = {};
         }
 
+        const options = {
+            chatId: this.controller.currentChat?.id,
+            isSidePanel: !this.stateManager.isSidePanel,
+            pendingUserMessage: this.controller.collectPendingUserMessage()
+        };
+
+        if (!options.chatId) options.systemPrompt = this.controller.getSystemPrompt();
+
         if (this.stateManager.isSidePanel) {
-            await this.handleSidepanelToTab();
+            await this.handleSidepanelToTab(options);
         } else {
-            await this.handleTabToSidepanel();
+            await this.handleTabToSidepanel(options);
         }
     }
 
-    async handleSidepanelToTab() {
+    async handleSidepanelToTab(options) {
         // Create new tab
         chrome.tabs.create({
             url: chrome.runtime.getURL('src/html/sidepanel.html')
@@ -311,16 +326,13 @@ class SidepanelApp {
         // Send chat data to new tab
         chrome.runtime.sendMessage({
             type: "reconstruct_chat",
-            options: {
-                chatId: this.controller.currentChat?.id,
-                isSidePanel: false
-            }
+            options: options
         });
 
         window.close();
     }
 
-    async handleTabToSidepanel() {
+    async handleTabToSidepanel(options) {
         const [tabCount, { isOpen }] = await Promise.all([
             chrome.tabs.query({ windowId: chrome.windows.WINDOW_ID_CURRENT }).then(tabs => tabs.length),
             chrome.runtime.sendMessage({ type: "is_sidepanel_open" })
@@ -332,10 +344,7 @@ class SidepanelApp {
     
         await chrome.runtime.sendMessage({
             type: "reconstruct_chat",
-            options: {
-                chatId: this.controller.currentChat?.id,
-                isSidePanel: true
-            }
+            options: options
         });
     
         if (tabCount === 1) {
