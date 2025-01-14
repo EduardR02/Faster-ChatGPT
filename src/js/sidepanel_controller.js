@@ -310,12 +310,13 @@ export class SidepanelController {
         } else {
             this.messages.unshift({ role: 'system', content: prompt });
         }
+        this.initialPrompt = prompt;
     }
     
     appendContext(message, role) {
         this.messages.push({ role, content: message });
         this.realizePendingFiles(role);
-    
+        
         if (this.currentChat && role === 'user') {
             if (this.currentChat.id === null || this.stateManager.isContinuedChat) {
                 if (this.stateManager.isContinuedChat) {
@@ -325,7 +326,7 @@ export class SidepanelController {
                     this.currentChat.messages = [...this.messages];
                 }
                 this.stateManager.isContinuedChat = false;
-                
+
                 if (this.stateManager.shouldSave) {
                     this.chatStorage.createChatWithMessages(
                         this.currentChat.title, 

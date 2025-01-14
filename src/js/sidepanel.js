@@ -210,6 +210,7 @@ class SidepanelApp {
         this.stateManager.isContinuedChat = options.chatId ? true : false;
         this.stateManager.isSidePanel = options.isSidePanel === false ? false : true;
         if (!options.chatId && !options.pendingUserMessage) {
+            if (options.systemPrompt) this.controller.setSystemPrompt(options.systemPrompt);
             this.chatUI.clearConversation();
             return;
         }
@@ -308,12 +309,10 @@ class SidepanelApp {
     }
 
     async handleSidepanelToTab(options) {
-        // Create new tab
         chrome.tabs.create({
             url: chrome.runtime.getURL('src/html/sidepanel.html')
         });
 
-        // Wait for the new tab to be ready
         await new Promise(resolve => {
             chrome.runtime.onMessage.addListener(function listener(message) {
                 if (message.type === "sidepanel_ready") {
@@ -323,7 +322,6 @@ class SidepanelApp {
             });
         });
 
-        // Send chat data to new tab
         chrome.runtime.sendMessage({
             type: "reconstruct_chat",
             options: options
