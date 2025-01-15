@@ -144,11 +144,19 @@ export class ArenaStateManager extends SettingsManager {
         if (!this.state.activeArenaModels || !this.isArenaModeActive) 
             throw new Error('Active arena models are not set!');
         return this.state.activeArenaModels.indexOf(model) === 0 ? 'model_a' : 'model_b';
-    }  
+    }
+
+    getModelIndex(model) {
+        if (!this.state.activeArenaModels || !this.isArenaModeActive)
+            return 0;
+        return this.state.activeArenaModels.indexOf(model);
+    }
 
     get isArenaModeActive() {
         return this.state.isArenaModeActive;
     }
+
+
 }
 
 
@@ -190,7 +198,6 @@ export class SidepanelStateManager extends ArenaStateManager {
         // Additional state
         this.state = {
             ...this.state,
-            pendingResponses: 0,
             pendingThinkingMode: false,
             activeThinkingMode: false,
             thinkingStates: { default: THINKING_STATE.INACTIVE },
@@ -286,7 +293,7 @@ export class SidepanelStateManager extends ArenaStateManager {
         this.state.chatState = CHAT_STATE.NORMAL;
         this.state.shouldSave = true;
         this.clearArenaState();
-        this.resetThinkingStates();
+        this.initThinkingStateDefault();
     }
 
     isChatNormal() {
@@ -321,7 +328,6 @@ export class SidepanelStateManager extends ArenaStateManager {
 
     updateThinkingMode() {
         this.state.activeThinkingMode = this.state.pendingThinkingMode;
-        this.state.pendingThinkingMode = false;
     }
     
     toggleThinkingMode() {
@@ -336,46 +342,43 @@ export class SidepanelStateManager extends ArenaStateManager {
         this.updateSettingsLocal({ arena_mode: !this.getSetting('arena_mode') });
     }
 
-    initArenaResponse(modelA, modelB) {
-        super.initArenaResponse(modelA, modelB);
-        this.state.pendingResponses = 2;
-    }
-
-    updatePendingResponses() {
-        this.state.pendingResponses--;
-        if (this.state.pendingResponses < 0) {
-            throw new Error('Pending responses cannot be negative!');
-        }
-        return this.state.pendingResponses === 0;
-    }
-
     nextThinkingState(model = null) {
-        const currentState = getThinkingState(model);
+        const currentState = this.getThinkingState(model);
         let nextState = THINKING_STATE.INACTIVE;
 
         if (currentState === THINKING_STATE.THINKING) {
             nextState = THINKING_STATE.SOLVING;
         }
 
-        setThinkingState(nextState, model);
+        this.setThinkingState(nextState, model);
     }
 
-    initArenaThinkingStates(modelA, modelB) {
-        const thinkingState = this.state.activeThinkingMode ? THINKING_STATE.THINKING : THINKING_STATE.INACTIVE;
-        this.state.thinkingStates = {
-            [modelA]: thinkingState,
-            [modelB]: thinkingState
-        };
+    initArenaThinkingStates(model = null) {
+        const thinkingState = this.thinkingMode ? THINKING_STATE.THINKING : THINKING_STATE.INACTIVE;
+        if (model) {
+            this.setThinkingState(thinkingState, model);
+            return;
+        }
+        const [modelA, modelB] = this.state.activeArenaModels;
+        this.state.thinkingStates = { [modelA]: thinkingState, [modelB]: thinkingState };
     }
 
-    initThinkingState() {
-        const thinkingState = this.state.activeThinkingMode ? THINKING_STATE.THINKING : THINKING_STATE.INACTIVE;
+    initThinkingStateDefault() {
+        const thinkingState = this.thinkingMode ? THINKING_STATE.THINKING : THINKING_STATE.INACTIVE;
         this.state.thinkingStates = { default: thinkingState };
+    }
+
+    initThinkingState(model = null) {
+        if (this.isArenaModeActive) {
+            this.initArenaThinkingStates(model);
+        } else {
+            this.initThinkingStateDefault();
+        }
     }
 
     getThinkingState(model) {
         if (this.isArenaModeActive) {
-            return this.state.thinkingStates[model] ?? THINKING_STATE.INACTIVE;
+            return this.state.thinkingStates[model];
         }
         return this.state.thinkingStates.default;
     }
@@ -386,17 +389,6 @@ export class SidepanelStateManager extends ArenaStateManager {
         } else {
             this.state.thinkingStates.default = state;
         }
-    }
-
-    resetThinkingStates() {
-        this.state.thinkingStates = { 
-            default: THINKING_STATE.INACTIVE 
-        };
-    }
-
-    clearArenaState() {
-        super.clearArenaState();
-        this.state.pendingResponses = 0;
     }
 
     get thinkingMode() {

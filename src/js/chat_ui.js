@@ -351,7 +351,7 @@ export class SidepanelChatUI extends ChatUI {
         this.scrollIntoView();
     }
 
-    createMessage(role, content, options = {}) {
+    createMessage(role, content = '', options = {}) {
         const message = super.createMessage(role, content, options);
         if (!this.stateManager.isArenaModeActive) {
             this.activeMessageDivs = message;
@@ -365,33 +365,20 @@ export class SidepanelChatUI extends ChatUI {
         return this.activeMessageDivs;
     }
 
-    regenerateResponse(model) {
-        const newMessage = this.createMessage('assistant', '', { model, isRegeneration: true });
+    regenerateResponse(model, isRegeneration = true) {
+        const newMessage = this.createMessage('assistant', '', { model, isRegeneration });
         if (this.stateManager.isArenaModeActive) {
-            const modelIndex = this.getArenaIndex(model);
+            const modelIndex = this.stateManager.getModelIndex(model);
             if (modelIndex === -1) return null;
             this.activeMessageDivs[modelIndex].appendChild(newMessage);
         } else {
             this.conversationDiv.appendChild(newMessage);
         }
-        return newMessage.querySelector('.message-content');
     }
 
     removeCurrentRemoveMediaButtons() {
         const buttons = this.conversationDiv.lastChild.querySelectorAll('.remove-file-button');
         buttons.forEach(button => button.remove());
-    }
-
-
-    addMessageFooter(contentDiv, options) {
-        const footer = new Footer(
-            options.inputTokens,
-            options.outputTokens,
-            this.stateManager.isArenaModeActive,
-            options.thoughtProcessState,
-            () => options.onRegenerate(contentDiv)
-        );
-        footer.create(contentDiv);
     }
 
     buildChat(chat, options) {
@@ -488,7 +475,7 @@ export class SidepanelChatUI extends ChatUI {
             const button = createElementWithClass('button', `button arena-button ${btn.class}`);
             button.textContent = btn.text;
             button.onclick = () => {
-                this.removeArenaFooter(footer);
+                this.removeArenaFooterWithParam(footer);
                 this.removeRegenerateButtons();
                 onChoice(btn.choice);   // this should also call resolve arena after it's done, because here we don't know continued_with yet
             };
@@ -533,7 +520,14 @@ export class SidepanelChatUI extends ChatUI {
         button.addEventListener('mouseleave', () => updateOtherButtons(false));
     }
 
-    removeArenaFooter(footer) {
+    removeArenaFooter() {
+        const footer = this.activeMessageDivs[0].parentElement.parentElement.querySelector('.arena-footer');
+        if (footer) {
+            this.removeArenaFooterWithParam(footer);
+        }
+    }
+
+    removeArenaFooterWithParam(footer) {
         footer.classList.add('slide-left');
 
         const handleTransitionEnd = (event) => {
@@ -548,21 +542,12 @@ export class SidepanelChatUI extends ChatUI {
         footer.addEventListener('transitionend', handleTransitionEnd);
     }
 
-    getArenaIndex(model) {
-        return this.stateManager.state.activeArenaModels.findIndex(m => m === model);
-    }
-
-    getContentDivIndex(model) {
-        if (!this.stateManager.isArenaModeActive) return 0;
-        return this.getArenaIndex(model);
-    }
-
     getContentDiv(model) {
         let nodes = null;
         if (!this.stateManager.isArenaModeActive) {
             nodes = this.activeMessageDivs.querySelectorAll('.message-content');
         } else {
-            const modelIndex = this.getArenaIndex(model);
+            const modelIndex = this.stateManager.getModelIndex(model);
             nodes =  this.activeMessageDivs[modelIndex].querySelectorAll('.message-content');
         }
         return nodes[nodes.length - 1];

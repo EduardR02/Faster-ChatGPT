@@ -212,11 +212,11 @@ export class TokenCounter {
 
 
 export class Footer {
-    constructor(inputTokens, outputTokens, isArenaMode, thoughtProcessState, regenerate_response) {
+    constructor(inputTokens, outputTokens, isArenaMode, isThinkingFunc, regenerate_response) {
         this.inputTokens = inputTokens;
         this.outputTokens = outputTokens;
         this.isArenaMode = isArenaMode;
-        this.thoughtProcessState = thoughtProcessState;
+        this.isThinkingFunc = isThinkingFunc;
         this.regenerate_response = regenerate_response;
     }
 
@@ -228,8 +228,8 @@ export class Footer {
         tokensSpan.textContent = `${this.isArenaMode ? "~" : this.inputTokens} | ${this.outputTokens}`;
         footerDiv.setAttribute('input-tokens', this.inputTokens);
         footerDiv.appendChild(tokensSpan);
-        if (this.thoughtProcessState !== "thinking") {
-            this.createRegenerateButton(footerDiv, contentDiv);
+        if (!this.isThinkingFunc()) {
+            this.createRegenerateButton(footerDiv);
         }
         else {
             footerDiv.classList.add('centered');
@@ -237,12 +237,12 @@ export class Footer {
         contentDiv.appendChild(footerDiv);
     }
 
-    createRegenerateButton(footerDiv, contentDiv) {
+    createRegenerateButton(footerDiv) {
         let regerateButton = document.createElement("button");
         regerateButton.textContent = '\u{21BB}'; // refresh symbol
         regerateButton.classList.add("button", "regenerate-button");
         regerateButton.addEventListener('click', () => {
-            this.regenerate_response(contentDiv);
+            this.regenerate_response();
             regerateButton.classList.add('fade-out');
             const handleTransitionEnd = (event) => {
                 if (event.propertyName === 'opacity') {
@@ -369,8 +369,7 @@ export class StreamWriterSimple {
 
         footer.create(this.contentDiv);
         this.scrollFunc();
-        const done = footer.thoughtProcessState !== "thinking";
-        add_pending(this.fullMessage, done);
+        add_pending(this.fullMessage);
         return new Promise((resolve) => resolve());
     }
 }

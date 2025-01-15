@@ -36,23 +36,23 @@ export class SidepanelController {
         this.tempMediaId = 0;
     }
 
-    async makeApiCall(model, thoughtProcessState) {
+    async makeApiCall(model) {
         const contentDiv = this.chatUI.getContentDiv(model);
-        const msgs = this.messages.concat(this.resolvePendingHandler(model));
         const api_provider = this.apiManager.getProviderForModel(model);
         const tokenCounter = new TokenCounter(api_provider);
         const isArenaMode = this.stateManager.isArenaModeActive;
+        const messages = this.togglePrompt(model, this.messages.concat(this.resolvePendingHandler(model)));
 
         try {
             let streamWriter = this.createStreamWriter(contentDiv, isArenaMode, api_provider);
             const response = await this.apiManager.callApi(
                 model, 
-                msgs, 
+                messages, 
                 tokenCounter, 
                 this.stateManager.getSetting('stream_response') ? streamWriter : null
             );
 
-            await this.processApiResponse(response, streamWriter, tokenCounter, thoughtProcessState, model);
+            await this.processApiResponse(response, streamWriter, tokenCounter, model);
             
         } catch (error) {
             this.chatUI.addErrorMessage(`Error: ${error.message}`);
@@ -61,6 +61,7 @@ export class SidepanelController {
 
     handleArenaChoice(choice) {;
         const currentMessage = this.getCurrentArenaMessage();
+        this.chatUI.removeArenaFooter();
         
         // Update message state
         currentMessage.choice = choice;
@@ -83,22 +84,22 @@ export class SidepanelController {
             );
         }
 
-        // Clear arena state
         this.stateManager.clearArenaState();
         
         // Handle continuation
         if (choice === 'no_choice(bothbad)') {
+            this.pendingMessage = {};
             this.initApiCall();
         } else if (winner) {
             this.resolvePending(winner);
         }
     }
 
-    addToPending(message, model, done = true, role = 'assistant') {
-        if (!this.stateManager.isArenaModeActive) {
-            this.addToNormalPending(message, model, role);
-        } else {
+    addToPending(message, model, role = 'assistant') {
+        if (this.stateManager.isArenaModeActive) {
             this.addToArenaPending(message, model);
+        } else {
+            this.addToNormalPending(message, model, role);
         }
     }
 
@@ -123,7 +124,7 @@ export class SidepanelController {
         );
     }
 
-    async processApiResponse(response, streamWriter, tokenCounter, thoughtProcessState, model) {
+    async processApiResponse(response, streamWriter, tokenCounter, model) {
         if (!this.stateManager.getSetting('stream_response')) {
             if (response?.thoughts !== undefined) {
                 streamWriter.setThinkingModel();
@@ -134,49 +135,47 @@ export class SidepanelController {
             }
         }
 
-        const msgFooter = this.createMessageFooter(tokenCounter, thoughtProcessState, model);
+        const msgFooter = this.createMessageFooter(tokenCounter, model);
         await streamWriter.addFooter(
             msgFooter,
-            (msg, done) => this.addToPending(msg, model, done)
+            (msg) => this.addToPending(msg, model)
         );
 
         tokenCounter.updateLifetimeTokens();
-        this.handleThinkingMode(streamWriter.fullMessage, thoughtProcessState, model);
+        this.handleThinkingMode(streamWriter.fullMessage, model);
     }
 
-    createMessageFooter(tokenCounter, thoughtProcessState, model) {
+    createMessageFooter(tokenCounter, model) {
         return new Footer(
             tokenCounter.inputTokens,
             tokenCounter.outputTokens,
             this.stateManager.isArenaModeActive,
-            thoughtProcessState,
+            () => this.stateManager.isThinking(model),
             () => this.regenerateResponse(model)
         );
     }
 
-    handleThinkingMode(msg, thoughtProcessState, model) {
-        if (thoughtProcessState !== "thinking") return;
+    handleThinkingMode(msg, model) {
+        if (!this.stateManager.isThinking(model)) return;
         
-        const idx = this.chatUI.getContentDivIndex(model);
+        const idx = this.stateManager.getModelIndex(model);
         this.thoughtLoops[idx]++;
         
         const thinkMore = msg.includes("*continue*");
         const maxItersReached = this.thoughtLoops[idx] >= this.stateManager.getSetting('loop_threshold');
         
-        let nextThinkingState = thinkMore && !maxItersReached ? "thinking" : "solver";
-        
         if (thinkMore && !maxItersReached) {
-            this.addToPending("*System message: continue thinking*", model, false, 'user');
+            this.addToPending("*System message: continue thinking*", model, 'user');
         } else {
             const systemMsg = maxItersReached ? 
                 "*System message: max iterations reached, solve now*" : 
                 "*System message: solve now*";
-            this.addToPending(systemMsg, model, false, 'user');
-            this.togglePrompt("solver");
+            this.addToPending(systemMsg, model, 'user');
+            this.stateManager.nextThinkingState(model);
         }
         
-        this.chatUI.onContinue(this.chatUI.getContentDiv(model), nextThinkingState);
-        this.makeApiCall(model, nextThinkingState);
+        this.chatUI.regenerateResponse(model, false);
+        this.makeApiCall(model);
     }
 
     async initApiCall() {
@@ -184,15 +183,14 @@ export class SidepanelController {
         this.stateManager.updateThinkingMode();
         this.stateManager.updateArenaMode();
         
-        const thinkingState = this.stateManager.thinkingMode ? "thinking" : "none";
-        this.togglePrompt(thinkingState);
         this.thoughtLoops = [0, 0];
 
         if (this.stateManager.isArenaModeActive) {
             await this.initArenaCall();
         } else {
+            this.stateManager.initThinkingState();
             this.chatUI.addMessage('assistant');
-            await this.makeApiCall(this.stateManager.getSetting('current_model'), thinkingState);
+            await this.makeApiCall(this.stateManager.getSetting('current_model'));
         }
     }
 
@@ -204,15 +202,15 @@ export class SidepanelController {
         }
 
         const [model1, model2] = this.getRandomArenaModels(enabledModels);
-        const thinkingState = this.stateManager.thinkingMode ? "thinking" : "none";
         
         this.stateManager.initArenaResponse(model1, model2);
+        this.stateManager.initThinkingState();
         this.chatUI.createArenaMessage();
         this.currentChat.messages.push(this.chatStorage.initArenaMessage(model1, model2));
         
         await Promise.all([
-            this.makeApiCall(model1, thinkingState),
-            this.makeApiCall(model2, thinkingState)
+            this.makeApiCall(model1),
+            this.makeApiCall(model2)
         ]);
         this.chatUI.addArenaFooter(this.handleArenaChoice.bind(this));
     }
@@ -422,30 +420,31 @@ export class SidepanelController {
         }
     }
 
-    togglePrompt(promptType = "none") {
+    togglePrompt(model, messages) {
         if (this.messages.length === 0) return;
-        
-        switch (promptType) {
-            case "thinking":
-                this.messages[0].content = this.initialPrompt + "\n\n" + 
-                    this.stateManager.getPrompt('thinking');
-                break;
-            case "solver":
-                this.messages[0].content = this.initialPrompt + "\n\n" + 
-                    this.stateManager.getPrompt('solver');
-                break;
-            case "none":
-                this.messages[0].content = this.initialPrompt;
+    
+        let prompt = this.initialPrompt;
+    
+        if (this.stateManager.isThinking(model)) {
+            prompt += "\n\n" + this.stateManager.getPrompt('thinking');
+        } else if (this.stateManager.isSolving(model)) {
+            prompt += "\n\n" + this.stateManager.getPrompt('solver');
         }
+        
+        if (messages[0].role === 'system') {
+            messages[0].content = prompt;
+        } else {
+            messages.unshift({ role: 'system', content: prompt });
+        }
+        return messages;
     }
 
     regenerateResponse(model) {
         this.stateManager.updateThinkingMode();
-        const thinkingState = this.stateManager.thinkingMode ? "thinking" : "none";
-        this.thoughtLoops[this.chatUI.getContentDivIndex(model)] = 0;
+        this.thoughtLoops[this.stateManager.getModelIndex(model)] = 0;
+        this.stateManager.initThinkingState(model);
         
-        const contentDiv = this.chatUI.regenerateResponse(model);
-        if (!contentDiv) return;
+        this.chatUI.regenerateResponse(model);
 
         this.chatUI.initScrollListener();
         this.discardPending(model);
@@ -454,7 +453,7 @@ export class SidepanelController {
             model : 
             this.stateManager.getSetting('current_model');
             
-        this.makeApiCall(actualModel, thinkingState);
+        this.makeApiCall(actualModel);
     }
 
     discardPending(model = null) {
