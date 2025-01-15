@@ -472,7 +472,8 @@ export class SidepanelController {
                 .map(({ messageId, timestamp, chatId, ...msg }) => msg)
         };
         const workingMessages = this.currentChat.messages;
-    
+        if (workingMessages.length) this.initialPrompt = workingMessages[0].content;
+
         this.messages = [];
         this.pendingMessage = {};
         for (let i = 0; i < workingMessages.length; i++) {

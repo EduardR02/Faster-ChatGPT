@@ -218,8 +218,8 @@ class SidepanelApp {
         let chat = { messages: [] };
 
         if (options.chatId) {
-            const lastMessageIndex = options.index !== undefined ? options.index + 1 : null;
-            chat = await this.chatStorage.loadChat(options.chatId, lastMessageIndex);
+            const messageLimit = options.index !== undefined ? options.index + 1 : null;
+            chat = await this.chatStorage.loadChat(options.chatId, messageLimit);
             this.chatUI.buildChat(chat, options);
             this.controller.buildAPIChatFromHistoryFormat(chat, null, options.arenaMessageIndex, options.modelChoice);
         }
@@ -292,11 +292,11 @@ class SidepanelApp {
         if (!this.controller.currentChat) {
             this.controller.currentChat = {};
         }
-
+        const index = Math.max(this.controller.currentChat.messages?.length - 1, 0);
         const options = {
             chatId: this.controller.currentChat?.id,
             isSidePanel: !this.stateManager.isSidePanel,
-            index: this.controller.currentChat?.messages?.length - 1,
+            index,
             pendingUserMessage: this.controller.collectPendingUserMessage()
         };
 
