@@ -409,6 +409,10 @@ body {
   text-align: center;
 }
 
+.side-panel .conversation-title {
+  padding: 0.5em 0;
+}
+
 .history-title {
   color: #fdaaaa;
   font-size: 1.5em;

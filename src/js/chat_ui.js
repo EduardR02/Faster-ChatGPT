@@ -408,6 +408,7 @@ export class SidepanelChatUI extends ChatUI {
             skipLastUserMessage: true
         });
         this.shouldScroll = true;
+        this.updateChatHeader(modifiedChat.meta.title);
         this.scrollIntoView();
     }
 
@@ -553,9 +554,14 @@ export class SidepanelChatUI extends ChatUI {
         return nodes[nodes.length - 1];
     }
 
+    updateChatHeader(title) {
+        document.getElementById('conversation-title').textContent = title;
+    }
+
     clearConversation() {
         super.clearConversation();
         this.activeMessageDivs = null;
+        this.updateChatHeader('conversation');
         this.setTextareaText('');
     }
 }
@@ -758,8 +764,7 @@ export class HistoryChatUI extends ChatUI {
             continueFunc: this.continueFunc
         });
 
-        // Additional history-specific updates
         this.updateChatHeader(chatFull.meta.title);
-        this.updateChatTimestamp(chat.timestamp);
+        this.updateChatTimestamp(chatFull.meta.timestamp);
     }
 }
