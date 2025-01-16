@@ -107,7 +107,7 @@ export class ApiManager {
     }
 
     formatMessagesForAnthropic(messages) {
-        return messages.map(msg => {
+        const new_messages = messages.map(msg => {
             if (msg.role === RoleEnum.user && msg.images) {
                 const imgDict = msg.images.map(img => ({
                     type: 'image',
@@ -115,8 +115,16 @@ export class ApiManager {
                 }));
                 return { role: msg.role, content: [{ type: 'text', text: msg.content }, ...imgDict] };
             }
-            return { role: msg.role, content: msg.content };
+            return {
+                role: msg.role,
+                content: [{ type: 'text', text: msg.content }]
+            };
         });
+
+        // add message caching
+        new_messages.at(-1).content.at(-1).cache_control = { "type": "ephemeral" };
+        
+        return new_messages;
     }
 
     formatMessagesForGemini(messages) {
@@ -221,7 +229,7 @@ export class ApiManager {
             },
             body: JSON.stringify({
                 model: model,
-                system: messages[0].content,
+                system: [messages[0].content[0]],
                 messages: messages.slice(1),
                 max_tokens: this.settings.max_tokens,
                 temperature: Math.min(this.settings.temperature, MaxTemp.anthropic),
@@ -347,7 +355,10 @@ export class ApiManager {
     }
 
     handleAnthropicNonStreamResponse(data, tokenCounter) {
-        tokenCounter.update(data.usage.input_tokens, data.usage.output_tokens);
+        const totalInputTokens = data.usage.input_tokens + 
+            (data.usage.cache_creation_input_tokens || 0) + 
+            (data.usage.cache_read_input_tokens || 0);
+        tokenCounter.update(totalInputTokens, data.usage.output_tokens);
         return data.content[0].text;
     }
 
@@ -406,8 +417,10 @@ export class ApiManager {
                 }
                 break;
             case 'message_start':
-                if (parsed.message && parsed.message.usage && parsed.message.usage.input_tokens) {
-                    tokenCounter.update(parsed.message.usage.input_tokens, parsed.message.usage.output_tokens);
+                if (parsed.message && parsed.message.usage) {
+                    const {input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens} = parsed.message.usage;
+                    const totalInputTokens = input_tokens + (cache_creation_input_tokens || 0) + (cache_read_input_tokens || 0);
+                    tokenCounter.update(totalInputTokens, output_tokens);
                 }
                 break;
             case 'message_delta':
