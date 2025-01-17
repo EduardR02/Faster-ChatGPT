@@ -115,6 +115,109 @@ export class SettingsManager {
 }
 
 
+export class SettingsStateManager extends SettingsManager {
+    constructor() {
+        super(['api_keys', 'max_tokens', 'temperature', 'loop_threshold', 'current_model', 'close_on_deselect',
+            'stream_response', 'arena_mode', 'arena_models', 'auto_rename', 'auto_rename_model', 'models'
+        ]);
+
+        this.tempState = {
+            api_keys: {},
+            prompts: {}
+        };
+        this.pendingChanges = {};
+        this.initialize();
+    }
+
+    queueSettingChange(key, value) {
+        if (typeof key === 'object') {
+            Object.entries(key).forEach(([k, v]) => this.queueSingleSetting(k, v));
+        } else {
+            this.queueSingleSetting(key, value);
+        }
+    }
+
+    queueSingleSetting(key, value) {
+        if (value === this.state.settings[key]) {
+            delete this.pendingChanges[key];
+        } else {
+            this.pendingChanges[key] = value;
+        }
+    }
+
+    setTempState(category, key, value) {
+        this.tempState[category][key] = value;
+    }
+
+    commitChanges() {
+        // Merge temp states into pending changes
+        if (Object.keys(this.tempState.api_keys).length) {
+            this.pendingChanges.api_keys = {
+                ...this.state.settings.api_keys,
+                ...this.tempState.api_keys
+            };
+        }
+        
+        if (Object.keys(this.tempState.prompts).length) {
+            Object.entries(this.tempState.prompts).forEach(([key, value]) => {
+                this.pendingChanges[key] = value;
+            });
+        }
+
+        // Commit all pending changes
+        if (Object.keys(this.pendingChanges).length) {
+            this.updateSettingsPersistent(this.pendingChanges);
+            this.pendingChanges = {};
+            this.tempState = { api_keys: {}, prompts: {} };
+        }
+    }
+
+    async addModel(provider, apiName, displayName) {
+        const updatedModels = await add_model_to_storage(provider, apiName, displayName);
+        this.state.settings.models = updatedModels;
+    }
+
+    async removeModel(apiName) {
+        const updatedModels = await remove_model_from_storage(apiName);
+        this.state.settings.models = updatedModels;
+
+        // Update related settings if necessary
+        if (this.state.settings.current_model === apiName) {
+            const firstAvailableModel = document.querySelector('input[name="model-select"]');
+            if (firstAvailableModel) {
+                this.updateSettingsPersistent({ current_model: firstAvailableModel.value });
+            }
+        }
+        
+        if (this.state.settings.auto_rename_model === apiName) {
+            this.updateSettingsPersistent({ auto_rename_model: null });
+        }
+        
+        if (this.state.settings.arena_models?.includes(apiName)) {
+            const newArenaModels = this.state.settings.arena_models.filter(model => model !== apiName);
+            this.updateSettingsPersistent({ arena_models: newArenaModels });
+        }
+    }
+
+    async loadModels() {
+        const models = await get_stored_models();
+        this.state.settings.models = models;
+        return models;
+    }
+
+    async loadPrompt(promptType) {
+        const result = await this.loadFromStorage([promptType]);
+        if (result[promptType]) {
+            this.setTempState('prompts', promptType, result[promptType]);
+        }
+    }
+
+    getPrompt(promptType) {
+        return this.tempState.prompts[promptType] || this.state.settings[promptType];
+    }
+}
+
+
 export class ArenaStateManager extends SettingsManager {
     constructor(requestedSettings = []) {
         super(requestedSettings);

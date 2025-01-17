@@ -40,9 +40,23 @@
                 </div>
             </div>
             <div class="setting">
-                <label for="arena-mode" class="setting-label">Arena Mode:</label>
+                <label class="setting-label">Auto Rename Chats:</label>
+                <div class="models-dummy">
+                    <input type="checkbox" id="auto-rename" class="checkbox">
+                    <label class="checkbox-label">Enable Rename</label>
+                    <input type="checkbox" id="rename-select" class="checkbox arena-checkbox">
+                    <label class="checkbox-label">Select Model</label>
+                </div>
+            </div>
+            <div class="setting">
+                <label class="setting-label">Arena Mode:</label>
                 <div class="row-align">
-                    <input type="checkbox" id="arena-mode" class="checkbox arena-checkbox">
+                    <div class="models-dummy">
+                        <input type="checkbox" id="arena-mode" class="checkbox">
+                        <label class="checkbox-label">Enable Arena</label>
+                        <input type="checkbox" id="arena-select" class="checkbox arena-checkbox">
+                        <label class="checkbox-label">Select Models</label>
+                    </div>
                     <button id="button-delete-arena" class="button delete-arena"><span>Reset Arena Matches </span></button>
                 </div>
             </div>

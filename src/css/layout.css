@@ -592,6 +592,12 @@ a:visited {
   outline:none;
 }
 
+.checkbox.rename-model:checked {
+  border-color: #98c379;
+  background-color:#98c379;
+  outline:none;
+}
+
 @keyframes wiggle {
   0%, 100% { transform: translateX(0); }
   25% { transform: translateX(-5px); }
