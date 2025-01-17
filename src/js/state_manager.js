@@ -1,3 +1,6 @@
+import { add_model_to_storage, get_stored_models, remove_model_from_storage } from './utils.js';
+
+
 export class SettingsManager {
     constructor(requestedSettings = []) {
         this.isReady = false;
@@ -204,7 +207,7 @@ export class SidepanelStateManager extends ArenaStateManager {
             chatState: CHAT_STATE.NORMAL,
             shouldSave: true,
             isSidePanel: true,
-            isContinuedChat: false,
+            continuedChatOptions: {},
             chatResetOngoing: false,
             prompts: {
                 active_prompt: {},
@@ -292,6 +295,7 @@ export class SidepanelStateManager extends ArenaStateManager {
         if (this.state.chatResetOngoing) return;
         this.state.chatState = CHAT_STATE.NORMAL;
         this.state.shouldSave = true;
+        this.clearContinuedChat();
         this.clearArenaState();
         this.initThinkingStateDefault();
     }
@@ -391,16 +395,20 @@ export class SidepanelStateManager extends ArenaStateManager {
         }
     }
 
+    clearContinuedChat() {
+        this.continuedChatOptions = {};
+    }
+
     get thinkingMode() {
         return this.state.activeThinkingMode;
     }
 
-    get isContinuedChat() {
-        return this.state.isContinuedChat;
+    get continuedChatOptions() {
+        return this.state.continuedChatOptions;
     }
 
-    set isContinuedChat(value) {
-        this.state.isContinuedChat = value;
+    set continuedChatOptions(options) {
+        this.state.continuedChatOptions = options;
     }
 
     get pendingThinkingMode() {

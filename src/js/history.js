@@ -11,6 +11,7 @@ class PopupMenu {
         this.chatStorage = chatStorage;
         this.activePopup = null;
         this.autoRenameHeaderFunc = null;
+        this.resetHeader = null;
         this.init();
     }
 
@@ -144,6 +145,10 @@ class PopupMenu {
             document.getElementById('history-chat-footer').textContent = '';
 
             this.chatStorage.deleteChat(parseInt(item.id, 10));
+            if (currentChat && currentChat.meta.chatId === parseInt(item.id, 10)) {
+                currentChat = null;
+                this.resetHeader();
+            }
             this.hidePopup();
         } else {
             popupItem.classList.add('delete-confirm');
@@ -185,6 +190,7 @@ const chatUI = new HistoryChatUI({
     },
 });
 popupMenu.autoRenameHeaderFunc = chatUI.autoUpdateChatHeader.bind(chatUI);
+popupMenu.resetHeader = () => chatUI.updateChatHeader('conversation'); 
 
 
 function initMessageListeners() {
@@ -199,6 +205,8 @@ function initMessageListeners() {
             case 'saved_arena_message_updated':
                 handleArenaMessageUpdate(message.chatId, message.messageId);
                 break;
+            case 'chat_renamed':
+                handleChatRenamed(message.chatId, message.title);
         }
     });
 }
@@ -230,6 +238,14 @@ async function handleArenaMessageUpdate(chatId, messageId) {
     
     chatUI.updateArenaMessage(updatedMessage, messageIndex);
     currentChat.messages[messageIndex] = updatedMessage;
+}
+
+function handleChatRenamed(chatId, title) {
+    chatUI.handleChatRenamed(chatId, title);
+    if (currentChat && currentChat.meta.chatId === chatId) {
+        currentChat.meta.title = title;
+        chatUI.autoUpdateChatHeader(currentChat);
+    }
 }
 
 

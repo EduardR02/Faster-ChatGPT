@@ -1,4 +1,6 @@
-import { TokenCounter, StreamWriter, StreamWriterSimple, Footer } from './utils.js';
+import { TokenCounter, StreamWriter, StreamWriterSimple, Footer, canContinueWithSameChatId } from './utils.js';
+import { SidepanelRenameManager } from './rename_manager.js';
+
 
 export class SidepanelController {
     constructor(options) {
@@ -13,6 +15,7 @@ export class SidepanelController {
         this.chatUI = chatUI;
         this.apiManager = apiManager;
         this.chatStorage = chatStorage;
+        this.renameManager = new SidepanelRenameManager(chatStorage);
         
         this.messages = [];
         this.pendingMessage = {};
@@ -314,35 +317,56 @@ export class SidepanelController {
     appendContext(message, role) {
         this.messages.push({ role, content: message });
         this.realizePendingFiles(role);
-        
-        if (this.currentChat && role === 'user') {
-            if (this.currentChat.id === null || this.stateManager.isContinuedChat) {
-                if (this.stateManager.isContinuedChat) {
-                    this.currentChat.messages.push(this.messages[this.messages.length - 1]);
-                }
-                else {
-                    this.currentChat.messages = [...this.messages];
-                }
-                this.stateManager.isContinuedChat = false;
+        const newMsg = this.messages[this.messages.length - 1];
 
-                if (this.stateManager.shouldSave) {
-                    this.chatStorage.createChatWithMessages(
-                        this.currentChat.title, 
-                        this.currentChat.messages
-                    ).then(res => this.currentChat.id = res.chatId);
-                }
-            } else {
-                const newMsg = this.messages[this.messages.length - 1];
-                this.currentChat.messages.push(newMsg);
-    
-                if (this.currentChat.id !== null && this.stateManager.shouldSave) {
-                    this.chatStorage.addMessages(
-                        this.currentChat.id, 
-                        [newMsg], 
-                        this.currentChat.messages.length - 1
-                    );
-                }
+        if (this.currentChat) this.currentChat.messages.push(newMsg);
+        if (!this.currentChat || role !== 'user') return;
+        
+        if (Object.keys(this.stateManager.continuedChatOptions).length > 0) {
+            const options = this.stateManager.continuedChatOptions;
+            this.stateManager.clearContinuedChat();
+            if (canContinueWithSameChatId(options, newMsg)) {
+                const lastRole = options.messages.at(-1).role;
+                this.stateManager.clearContinuedChat();
+                if (lastRole === 'user') return;    // message already added
+                this.addMessageToExistingChat(newMsg);
+                return;
             }
+            // If can't continue with same ID, create new chat with continued-from reference
+            this.createNewChat(this.currentChat.id, false);
+            return;
+        }
+    
+        if (this.currentChat.id === null) {
+            this.currentChat.messages = [...this.messages];
+            this.createNewChat();
+        } else {
+            this.addMessageToExistingChat(newMsg);
+        }
+    }
+    
+    createNewChat(continuedFromId = null, shouldAutoRename = true) {        
+        if (this.stateManager.shouldSave) {
+            this.chatStorage.createChatWithMessages(
+                this.currentChat.title, 
+                this.currentChat.messages,
+                continuedFromId
+            ).then(res => {
+                this.currentChat.id = res.chatId;
+                if (shouldAutoRename) {
+                    this.renameManager.autoRename(this.currentChat.id, this.chatUI.getChatHeader(), this.currentChat.title);
+                }
+            });
+        }
+    }
+    
+    addMessageToExistingChat(message) {
+        if (this.stateManager.shouldSave) {
+            this.chatStorage.addMessages(
+                this.currentChat.id, 
+                [message], 
+                this.currentChat.messages.length - 1
+            );
         }
     }
 
@@ -467,7 +491,8 @@ export class SidepanelController {
     buildAPIChatFromHistoryFormat(historyChat, continueFromIndex = null, arenaMessageIndex = null, modelChoice = null) {
         this.currentChat = {
             id: historyChat.meta.chatId,
-            title: historyChat.meta.title + " (Continued)",
+            title: historyChat.meta.title,
+            continued_from_chat_id: historyChat.meta.continued_from_chat_id || null,
             messages: (continueFromIndex ? historyChat.messages.slice(0, continueFromIndex + 1) : historyChat.messages)
                 .map(({ messageId, timestamp, chatId, ...msg }) => msg)
         };

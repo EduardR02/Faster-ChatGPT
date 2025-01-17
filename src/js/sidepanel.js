@@ -205,9 +205,8 @@ class SidepanelApp {
 
     async handleReconstructChat(options) {
         const newChatName = options.chatId ? "Continued Chat" : "New Chat";
-        this.controller.initStates(newChatName);
         // no clearConversation here because it's handled in buildChat, and we want to do it as late as possible to avoid a flicker
-        this.stateManager.isContinuedChat = options.chatId ? true : false;
+        this.controller.initStates(newChatName);
         this.stateManager.isSidePanel = options.isSidePanel === false ? false : true;
         if (!options.chatId && !options.pendingUserMessage) {
             if (options.systemPrompt) this.controller.setSystemPrompt(options.systemPrompt);
@@ -220,8 +219,11 @@ class SidepanelApp {
         if (options.chatId) {
             const messageLimit = options.index !== undefined ? options.index + 1 : null;
             chat = await this.chatStorage.loadChat(options.chatId, messageLimit);
+            const fullChatLength = await this.chatStorage.getChatLength(options.chatId);
             this.chatUI.buildChat(chat, options);
             this.controller.buildAPIChatFromHistoryFormat(chat, null, options.arenaMessageIndex, options.modelChoice);
+            const continueOptions = { fullChatLength, messages: [...chat.messages], index: options.index, modelChoice: options.modelChoice, arenaMessageIndex: options.arenaMessageIndex };
+            this.stateManager.continuedChatOptions = continueOptions;
         }
 
         if (options.systemPrompt) this.controller.setSystemPrompt(options.systemPrompt);

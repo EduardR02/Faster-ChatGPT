@@ -558,6 +558,10 @@ export class SidepanelChatUI extends ChatUI {
         document.getElementById('conversation-title').textContent = title;
     }
 
+    getChatHeader() {
+        return document.getElementById('conversation-title');
+    }
+
     clearConversation() {
         super.clearConversation();
         this.activeMessageDivs = null;
@@ -682,10 +686,11 @@ export class HistoryChatUI extends ChatUI {
         let previousRole = lastRole;
 
         newMessages.forEach(message => {
+            const tempIndex = currentMessageIndex;  // fuck
             if (message.responses) {
-                this.createArenaMessageWrapperFunc(message, { continueFunc: this.continueFunc, messageIndex: currentMessageIndex });
+                this.createArenaMessageWrapperFunc(message, { continueFunc: this.continueFunc, messageIndex: tempIndex });
             } else {
-                const options = { isRegeneration: previousRole === message.role, hideModels: false, continueFunc: () => this.continueFunc(currentMessageIndex) };
+                const options = { isRegeneration: previousRole === message.role, hideModels: false, continueFunc: () => this.continueFunc(tempIndex) };
                 const messageBlock = this.createMessageWrapperFunc(message, options);
                 this.conversationDiv.appendChild(messageBlock);
             }
@@ -747,6 +752,11 @@ export class HistoryChatUI extends ChatUI {
             this.updateChatHeader(historyItem.textContent);
             return historyItem.textContent;
         }
+    }
+
+    handleChatRenamed(chatId, newName) {
+        const historyItem = document.getElementById(chatId)?.querySelector('.item-text');
+        if (historyItem) historyItem.textContent = newName;
     }
 
     updateChatTimestamp(timestamp) {

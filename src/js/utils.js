@@ -80,6 +80,43 @@ export function remove_model_from_storage(apiString) {
 }
 
 
+export function canContinueWithSameChatId(options, userMsg = null) {
+    const { messages, index, arenaMessageIndex, modelChoice, fullChatLength } = options;
+    if (!messages?.length || index == null) return false;
+    
+    const lastMessage = messages[messages.length - 1];
+    if (fullChatLength !== messages.length) return false;
+    if (index !== messages.length - 1) return false;
+    
+    const role = lastMessage.role;
+    return role === 'system' || 
+           (role === 'user' && isUserMessageEqual(lastMessage, userMsg)) ||
+           (role === 'assistant' && !lastMessage.responses) ||
+           (arenaMessageIndex !== null && 
+            lastMessage.responses?.continued_with === modelChoice && 
+            lastMessage.responses[modelChoice].messages.length === arenaMessageIndex + 1);
+}
+
+
+function isUserMessageEqual(msg1, msg2) {
+    if (!msg1 || !msg2) return false;
+    if (msg1.content !== msg2.content) return false;
+    if (msg1.files?.length !== msg2.files?.length) return false;
+    if (msg1.images?.length !== msg2.images?.length) return false;
+    if (msg1.files) {
+        for (let i = 0; i < msg1.files.length; i++) {
+            if (msg1.files[i].name !== msg2.files[i].name || msg1.files[i].content !== msg2.files[i].content) return false;
+        }
+    }
+    if (msg1.images) {
+        for (let i = 0; i < msg1.images.length; i++) {
+            if (msg1.images[i] !== msg2.images[i]) return false;
+        }
+    }
+    return true;
+}
+
+
 // Process code blocks only at the end (poor man's streamed codeblock) (claude magic)
 export function add_codeblock_html(message) {
     // First escape ALL HTML
@@ -498,7 +535,7 @@ export class ChatStorage {
         });
     }
 
-    async createChatWithMessages(title, messages) {
+    async createChatWithMessages(title, messages, continuedFromChatId = null) {
         const db = await this.getDB();
         const tx = db.transaction(['chatMeta', 'messages'], 'readwrite');
         const metaStore = tx.objectStore('chatMeta');
@@ -508,7 +545,8 @@ export class ChatStorage {
             const chatMeta = {
                 title,
                 timestamp: Date.now(),
-                renamed: false
+                renamed: false,
+                continued_from_chat_id: continuedFromChatId || null
             };
 
             const metaRequest = metaStore.add(chatMeta);
@@ -548,53 +586,65 @@ export class ChatStorage {
     }
 
     async addMessages(chatId, messages, startMessageIdIncrementAt) {
+        const timestamp = Date.now();
         const db = await this.getDB();
-        const tx = db.transaction(['messages'], 'readwrite');
-        const store = tx.objectStore('messages');
-
-        return Promise.all(messages.map((message, index) =>
-            new Promise((resolve, reject) => {
-                const request = store.add({
-                    chatId,
-                    messageId: startMessageIdIncrementAt + index,
-                    timestamp: Date.now(),
-                    ...message
-                });
-                request.onsuccess = () => resolve(request.result);
-                request.onerror = () => reject(request.error);
-            })
-        )).then(results => {
-            chrome.runtime.sendMessage({
-                type: 'appended_messages_to_saved_chat',
-                chatId: chatId,
-                addedCount: messages.length
-            });
-            return results;
+        
+        const results = await new Promise((resolve, reject) => {
+            const tx = db.transaction(['messages'], 'readwrite');
+            const store = tx.objectStore('messages');
+    
+            Promise.all(messages.map((message, index) =>
+                new Promise((resolve, reject) => {
+                    const request = store.add({
+                        chatId,
+                        messageId: startMessageIdIncrementAt + index,
+                        timestamp,
+                        ...message
+                    });
+                    request.onsuccess = () => resolve(request.result);
+                    request.onerror = () => reject(request.error);
+                })
+            )).then(resolve).catch(reject);
         });
+    
+        await this.updateChatOption(chatId, { timestamp });
+    
+        chrome.runtime.sendMessage({
+            type: 'appended_messages_to_saved_chat',
+            chatId: chatId,
+            addedCount: messages.length
+        });
+    
+        return results;
     }
 
     async updateArenaMessage(chatId, messageId, message) {
+        const timestamp = Date.now();
         const db = await this.getDB();
-        const tx = db.transaction(['messages'], 'readwrite');
-        const store = tx.objectStore('messages');
-
-        return new Promise((resolve, reject) => {
+    
+        const result = await new Promise((resolve, reject) => {
+            const tx = db.transaction(['messages'], 'readwrite');
+            const store = tx.objectStore('messages');
+    
             const request = store.put({
                 chatId,
                 messageId: messageId,
-                timestamp: Date.now(),
+                timestamp,
                 ...message
             });
-            request.onsuccess = () => {
-                chrome.runtime.sendMessage({
-                    type: 'saved_arena_message_updated',
-                    chatId: chatId,
-                    messageId: messageId
-                });
-                resolve(request.result);
-            };
+            request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
         });
+    
+        await this.updateChatOption(chatId, { timestamp });
+    
+        chrome.runtime.sendMessage({
+            type: 'saved_arena_message_updated',
+            chatId: chatId,
+            messageId: messageId
+        });
+    
+        return result;
     }
 
     async getMessage(chatId, messageId) {
@@ -604,6 +654,19 @@ export class ChatStorage {
 
         return new Promise((resolve, reject) => {
             const request = store.get([chatId, messageId]);
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async getChatLength(chatId) {
+        const db = await this.getDB();
+        return new Promise((resolve, reject) => {
+            const transaction = db.transaction(['messages'], 'readonly');
+            const store = transaction.objectStore('messages');
+            const index = store.index('chatId');
+            const request = index.count(chatId);
+    
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
         });
@@ -678,30 +741,41 @@ export class ChatStorage {
         });
     }
 
-    async renameChat(chatId, newTitle) {
+    async renameChat(chatId, newTitle, announceUpdate = false) {
+        const chatMeta = await this.updateChatOption(chatId, {
+            title: newTitle,
+            renamed: true
+        });
+    
+        if (announceUpdate) {
+            chrome.runtime.sendMessage({
+                type: 'chat_renamed',
+                chatId: chatId,
+                title: newTitle
+            });
+        }
+    
+        return chatMeta;
+    }
+
+    async updateChatOption(chatId, option = {}) {
         const db = await this.getDB();
         const tx = db.transaction('chatMeta', 'readwrite');
         const store = tx.objectStore('chatMeta');
-
-        const chatMeta = await new Promise((resolve, reject) => {
-            const request = store.get(chatId);
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = () => reject(request.error);
+        
+        return new Promise((resolve, reject) => {
+            const getRequest = store.get(chatId);
+            getRequest.onsuccess = () => {
+                const chat = getRequest.result;
+                const putRequest = store.put({
+                    ...chat,
+                    ...option
+                });
+                putRequest.onsuccess = () => resolve(putRequest.result);
+                putRequest.onerror = () => reject(putRequest.error);
+            };
+            getRequest.onerror = () => reject(getRequest.error);
         });
-
-        if (!chatMeta) {
-            throw new Error(`Chat with ID ${chatId} not found`);
-        }
-
-        chatMeta.title = newTitle;
-        chatMeta.renamed = true;
-        await new Promise((resolve, reject) => {
-            const request = store.put(chatMeta);
-            request.onsuccess = () => resolve();
-            request.onerror = () => reject(request.error);
-        });
-
-        return chatMeta;
     }
 
     async deleteChat(chatId) {
@@ -734,32 +808,26 @@ export class ChatStorage {
         const tx = db.transaction('chatMeta', 'readonly');
         const store = tx.objectStore('chatMeta');
         const index = store.index('timestamp');
-
+    
         return new Promise((resolve) => {
             const metadata = [];
             let skipped = 0;
-
-            const request = index.openCursor(null, 'prev');  // newest first
-
+            
+            const request = index.openCursor(null, 'prev');  // 'prev' gives us descending order
+    
             request.onsuccess = (event) => {
                 const cursor = event.target.result;
-                if (!cursor) {
+                if (!cursor || metadata.length >= limit) {
                     resolve(metadata);
                     return;
                 }
-
+    
                 if (skipped < offset) {
                     skipped++;
-                    cursor.continue();
-                    return;
-                }
-
-                if (metadata.length < limit) {
-                    metadata.push(cursor.value);
-                    cursor.continue();
                 } else {
-                    resolve(metadata);
+                    metadata.push(cursor.value);
                 }
+                cursor.continue();
             };
         });
     }

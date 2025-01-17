@@ -1,4 +1,5 @@
 import { ApiManager } from './api_manager.js';
+import { SettingsManager } from './state_manager.js';
 import { TokenCounter, StreamWriterBase } from './utils.js';
 
 const RENAME_PROMPT = `Condense the input into a minimal title that captures the core action and intent. Focus on the essential elements—what is being done and why—while stripping all unnecessary details, filler words, and redundancy. Ensure the title is concise, descriptive, and reflects the purpose without explicitly stating it unless absolutely necessary.\n
@@ -12,11 +13,12 @@ Your task is to condense the user input that will follow. Only output the title,
 class RenameManagerBase {
     constructor(timeoutDuration = 15000) {
         this.apiManager = new ApiManager();
+        this.stateManager = new SettingsManager(['current_model', 'auto_rename_model', 'auto_rename']);
         this.timeoutDuration = timeoutDuration;
     }
 
     async generateNewName(messages, streamWriter) {
-        const model = this.apiManager.getCurrentModel();
+        const model = this.getModel();
         const tokenCounter = new TokenCounter(this.apiManager.getProviderForModel(model));
         // simply let it throw the error if it times out
         await this.timeoutPromise(this.apiManager.callApi(model, messages, tokenCounter, streamWriter));
@@ -86,12 +88,18 @@ class RenameManagerBase {
             )
         ]);
     }
+
+    getModel() {
+        return this.stateManager.getSetting('auto_rename_model') || this.stateManager.getSetting('current_model');
+    }
 }
+
 
 class StorageRenameManager extends RenameManagerBase {
     constructor(chatStorage, timeoutDuration = 15000) {
         super(timeoutDuration);
         this.chatStorage = chatStorage;
+        this.announceUpdate = false;
     }
 
     async renameSingleChat(chatId, contentDiv = null) {
@@ -116,11 +124,25 @@ class StorageRenameManager extends RenameManagerBase {
         }
 
         if (result) {
-            await this.chatStorage.renameChat(chatId, result.newName);
+            await this.chatStorage.renameChat(chatId, result.newName, this.announceUpdate);
         }
         return result;
     }
 }
+
+
+export class SidepanelRenameManager extends StorageRenameManager {
+    constructor(chatStorage, timeoutDuration = 15000) {
+        super(chatStorage, timeoutDuration);
+        this.announceUpdate = true;
+    }
+
+    autoRename(chatId, contentDiv) {
+        if (!this.stateManager.getSetting('auto_rename')) return;
+        this.renameSingleChat(chatId, contentDiv);
+    }
+}
+
 
 export class HistoryRenameManager extends StorageRenameManager {
     constructor(chatStorage, timeoutDuration = 30000) {
@@ -131,7 +153,7 @@ export class HistoryRenameManager extends StorageRenameManager {
         const allChats = await this.chatStorage.getChatMetadata(Infinity, 0);
         const unnamedChats = allChats.filter(chat => !chat.hasOwnProperty('renamed') || !chat.renamed);
 
-        const finalTokenCounter = new TokenCounter(this.apiManager.getProviderForModel(this.apiManager.getCurrentModel()));
+        const finalTokenCounter = new TokenCounter(this.apiManager.getProviderForModel(this.getModel()));
         if (unnamedChats.length === 0) return { status: 'no_chats', tokenCounter: finalTokenCounter };
 
         let successCount = 0;
