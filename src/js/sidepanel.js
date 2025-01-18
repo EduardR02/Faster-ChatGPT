@@ -136,6 +136,7 @@ class SidepanelApp {
     }
 
     setupIncognitoButtonHandlers(button, footer, hoverText) {
+        this.stateManager.subscribeToChatReset(() => {this.handleNewChat()});
         button.addEventListener('mouseenter', () => {
             this.updateIncognitoHoverText(hoverText);
             footer.classList.add('showing-text');
@@ -483,10 +484,8 @@ class SidepanelApp {
 }
 
 
-let app = null;
-
 // Initialize the application when the DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
-    app = new SidepanelApp();
+    new SidepanelApp();
     chrome.runtime.sendMessage({ type: "sidepanel_ready" });
 });
