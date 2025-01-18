@@ -34,6 +34,7 @@ class SidepanelApp {
         this.initFooterButtons();
         this.initTextareaImageHandling();
         this.setupMessageListeners();
+        this.stateManager.subscribeToChatReset("chat", () => {this.handleNewChat()});
     }
 
     initArenaRatingManager() {
@@ -136,7 +137,6 @@ class SidepanelApp {
     }
 
     setupIncognitoButtonHandlers(button, footer, hoverText) {
-        this.stateManager.subscribeToChatReset(() => {this.handleNewChat()});
         button.addEventListener('mouseenter', () => {
             this.updateIncognitoHoverText(hoverText);
             footer.classList.add('showing-text');
@@ -181,6 +181,7 @@ class SidepanelApp {
     }
 
     async handleNewSelection(text, url) {
+        this.stateManager.subscribeToChatReset("chat", () => {this.handleNewSelection(text, url)});
         const hostname = new URL(url).hostname;
         this.controller.initStates(`Selection from ${hostname}`);
         this.chatUI.clearConversation();
@@ -195,6 +196,7 @@ class SidepanelApp {
     }
 
     handleNewChat() {
+        this.stateManager.subscribeToChatReset("chat", () => {this.handleNewChat()});
         this.controller.messages = [];
         this.controller.initStates("New Chat");
         this.chatUI.clearConversation();

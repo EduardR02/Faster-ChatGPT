@@ -369,7 +369,7 @@ export class SidepanelStateManager extends ArenaStateManager {
             }
         };
 
-        this.chatResetListeners = [];
+        this.chatResetListeners = {};
         this.requestedPrompt = requestedPrompt;
         this.loadPrompts(this.requestedPrompt)
         this.setupPromptChangeListener();
@@ -475,12 +475,14 @@ export class SidepanelStateManager extends ArenaStateManager {
         return state === THINKING_STATE.SOLVING;
     }
 
-    subscribeToChatReset(callback) {
-        this.chatResetListeners.push(callback);
+    subscribeToChatReset(key, callback) {
+        this.chatResetListeners[key] = callback;
     }
 
     notifyChatReset() {
-        this.chatResetListeners.forEach(func => func());
+        for (const callback of Object.values(this.chatResetListeners)) {
+            callback();
+        }
     }
 
     updateThinkingMode() {
