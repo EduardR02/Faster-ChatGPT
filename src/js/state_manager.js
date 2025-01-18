@@ -1,6 +1,3 @@
-import { add_model_to_storage, get_stored_models, remove_model_from_storage } from './utils.js';
-
-
 export class SettingsManager {
     constructor(requestedSettings = []) {
         this.isReady = false;
@@ -129,6 +126,11 @@ export class SettingsStateManager extends SettingsManager {
         this.initialize();
     }
 
+    updateSettingsPersistent(newSettings) {
+        this.updateSettingsLocal(newSettings);
+        chrome.storage.local.set(newSettings);
+    }
+
     queueSettingChange(key, value) {
         if (typeof key === 'object') {
             Object.entries(key).forEach(([k, v]) => this.queueSingleSetting(k, v));
@@ -145,12 +147,18 @@ export class SettingsStateManager extends SettingsManager {
         }
     }
 
-    setTempState(category, key, value) {
-        this.tempState[category][key] = value;
+    getSetting(key) {
+        if (this.pendingChanges[key] !== undefined) {
+            return this.pendingChanges[key];
+        }
+        return this.state.settings[key];
+    }
+
+    setApiKey(provider, key) {
+        this.tempState.api_keys[provider] = key;
     }
 
     commitChanges() {
-        // Merge temp states into pending changes
         if (Object.keys(this.tempState.api_keys).length) {
             this.pendingChanges.api_keys = {
                 ...this.state.settings.api_keys,
@@ -164,7 +172,6 @@ export class SettingsStateManager extends SettingsManager {
             });
         }
 
-        // Commit all pending changes
         if (Object.keys(this.pendingChanges).length) {
             this.updateSettingsPersistent(this.pendingChanges);
             this.pendingChanges = {};
@@ -172,48 +179,93 @@ export class SettingsStateManager extends SettingsManager {
         }
     }
 
-    async addModel(provider, apiName, displayName) {
-        const updatedModels = await add_model_to_storage(provider, apiName, displayName);
-        this.state.settings.models = updatedModels;
+    addModel(provider, apiName, displayName) {
+        const models = this.state.settings.models || {};
+        if (!models[provider]) {
+            models[provider] = {};
+        }
+        models[provider][apiName] = displayName;
+        
+        this.updateSettingsPersistent({ models });
     }
 
-    async removeModel(apiName) {
-        const updatedModels = await remove_model_from_storage(apiName);
-        this.state.settings.models = updatedModels;
-
-        // Update related settings if necessary
-        if (this.state.settings.current_model === apiName) {
-            const firstAvailableModel = document.querySelector('input[name="model-select"]');
-            if (firstAvailableModel) {
-                this.updateSettingsPersistent({ current_model: firstAvailableModel.value });
+    removeModel(apiName) {
+        const models = this.state.settings.models;
+        let found = false;
+        
+        for (const provider in models) {
+            if (apiName in models[provider]) {
+                delete models[provider][apiName];
+                found = true;
+                break;
             }
         }
-        
-        if (this.state.settings.auto_rename_model === apiName) {
-            this.updateSettingsPersistent({ auto_rename_model: null });
+
+        if (!found) return;
+        this.updateSettingsPersistent({ models });
+
+        const updates = {};
+
+        if (super.getSetting('current_model') === apiName) {
+            updates.current_model = this.getFirstAvailableModel();
+            delete this.pendingChanges.current_model;
         }
         
-        if (this.state.settings.arena_models?.includes(apiName)) {
-            const newArenaModels = this.state.settings.arena_models.filter(model => model !== apiName);
-            this.updateSettingsPersistent({ arena_models: newArenaModels });
+        if (super.getSetting('auto_rename_model') === apiName) {
+            updates.auto_rename_model = null;
+            updates.auto_rename = false;
+            delete this.pendingChanges.auto_rename_model;
+            delete this.pendingChanges.auto_rename;
+        }
+        
+        const arenaModels = super.getSetting('arena_models');
+        if (arenaModels?.includes(apiName)) {
+            updates.arena_models = arenaModels.filter(model => model !== apiName);
+            
+            if (this.pendingChanges.arena_models) {
+                this.pendingChanges.arena_models = 
+                    this.pendingChanges.arena_models.filter(model => model !== apiName);
+                
+                if (this.pendingChanges.arena_models.length < 2) {
+                    delete this.pendingChanges.arena_models;
+                    delete this.pendingChanges.arena_mode;
+                }
+            }
+        }
+
+        if (Object.keys(updates).length > 0) {
+            this.updateSettingsPersistent(updates);
         }
     }
 
-    async loadModels() {
-        const models = await get_stored_models();
-        this.state.settings.models = models;
-        return models;
+    getFirstAvailableModel() {
+        for (const provider in this.state.settings.models) {
+            const modelIds = Object.keys(this.state.settings.models[provider]);
+            if (modelIds.length > 0) {
+                return modelIds[0];
+            }
+        }
+        return null;
+    }
+
+    async getPrompt(promptType) {
+        if (this.tempState.prompts[promptType] !== undefined) {
+            return this.tempState.prompts[promptType];
+        }
+        
+        await this.loadPrompt(promptType);
+        return this.tempState.prompts[promptType];
+    }
+
+    setPrompt(promptType, value) {
+        this.tempState.prompts[promptType] = value;
     }
 
     async loadPrompt(promptType) {
         const result = await this.loadFromStorage([promptType]);
         if (result[promptType]) {
-            this.setTempState('prompts', promptType, result[promptType]);
+            this.tempState.prompts[promptType] = result[promptType];
         }
-    }
-
-    getPrompt(promptType) {
-        return this.tempState.prompts[promptType] || this.state.settings[promptType];
     }
 }
 
@@ -261,8 +313,6 @@ export class ArenaStateManager extends SettingsManager {
     get isArenaModeActive() {
         return this.state.isArenaModeActive;
     }
-
-
 }
 
 

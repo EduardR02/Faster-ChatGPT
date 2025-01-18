@@ -58,7 +58,6 @@ class SettingsUI {
     }
 
     async initializeUI() {
-        await this.stateManager.loadModels();
         this.initInputValues();
         this.initModels();
         this.setApiLabel();
@@ -67,15 +66,13 @@ class SettingsUI {
     }
 
     initInputValues() {
-        const settings = this.stateManager.state.settings;
-        
-        document.getElementById('max-tokens').value = settings.max_tokens;
-        document.getElementById('temperature').value = settings.temperature;
-        document.getElementById('loop-threshold').value = settings.loop_threshold || 1;
-        document.getElementById('close-on-deselect').checked = settings.close_on_deselect;
-        document.getElementById('stream-response').checked = settings.stream_response;
-        document.getElementById('arena-mode').checked = settings.arena_mode || false;
-        document.getElementById('auto-rename').checked = settings.auto_rename || false;
+        document.getElementById('max-tokens').value = this.stateManager.getSetting('max_tokens');
+        document.getElementById('temperature').value = this.stateManager.getSetting('temperature');
+        document.getElementById('loop-threshold').value = this.stateManager.getSetting('loop_threshold') || 1;
+        document.getElementById('close-on-deselect').checked = this.stateManager.getSetting('close_on_deselect');
+        document.getElementById('stream-response').checked = this.stateManager.getSetting('stream_response');
+        document.getElementById('arena-mode').checked = this.stateManager.getSetting('arena_mode') || false;
+        document.getElementById('auto-rename').checked = this.stateManager.getSetting('auto_rename') || false;
         document.getElementById('rename-select').checked = false;
         document.getElementById('arena-select').checked = false;
     }
@@ -134,7 +131,6 @@ class SettingsUI {
             document.getElementById(`${otherMode}-select`).checked = false;
         }
     
-        // Update state
         this.stateManager.queueSettingChange(
             mode === 'arena' ? 'arena_mode' : 'auto_rename',
             isEnabled
@@ -158,17 +154,11 @@ class SettingsUI {
     handleApiKeyInput(event) {
         const input = event.target;
         const key = input.value.trim();
-        if (key) {
-            this.stateManager.setTempState('api_keys', 
-                this.apiProviders[this.currentApiIndex], 
-                key
-            );
-        }
+        if (key) this.stateManager.setApiKey(this.apiProviders[this.currentApiIndex], key);
     }
 
     updateModelCheckboxes() {
         const modelCheckboxes = document.getElementsByName('model-select');
-        const settings = this.stateManager.state.settings;
         const currentMode = this.getCurrentMode();
     
         modelCheckboxes.forEach(input => {
@@ -181,7 +171,7 @@ class SettingsUI {
             // Set checked state based on current mode
             switch (currentMode) {
                 case 'arena':
-                    input.checked = settings.arena_models?.includes(input.id) || false;
+                    input.checked = this.stateManager.getSetting('arena_models')?.includes(input.id) || false;
                     input.classList.add('arena-models');
                     break;
                 case 'rename':
@@ -190,7 +180,9 @@ class SettingsUI {
             }
         });
         if (currentMode !== 'arena') {
-            const selectedModel = currentMode === 'rename' ? settings.auto_rename_model : settings.current_model;
+            const selectedModel = currentMode === 'rename' ? 
+                this.stateManager.getSetting('auto_rename_model') :
+                this.stateManager.getSetting('current_model');
             const selectedInput = document.getElementById(selectedModel);
             if (selectedInput) selectedInput.checked = true;
         }
@@ -329,7 +321,7 @@ class SettingsUI {
     }
 
     saveSettings() {
-        const settings = {
+        this.stateManager.queueSettingChange({
             max_tokens: parseInt(document.getElementById('max-tokens').value),
             temperature: parseFloat(document.getElementById('temperature').value),
             loop_threshold: parseInt(document.getElementById('loop-threshold').value),
@@ -337,8 +329,7 @@ class SettingsUI {
             stream_response: document.getElementById('stream-response').checked,
             arena_mode: document.getElementById('arena-mode').checked,
             auto_rename: document.getElementById('auto-rename').checked
-        };
-        this.stateManager.queueSettingChange(settings);
+        });
     }
 
     cycleApiKeyInput() {
@@ -352,7 +343,7 @@ class SettingsUI {
         const currentProvider = this.apiProviders[this.currentApiIndex];
         
         label.textContent = `Your ${apiDisplayNames[currentProvider]} API Key:`;
-        const hasKey = this.stateManager.state.settings.api_keys[currentProvider];
+        const hasKey = this.stateManager.getSetting('api_keys')?.[currentProvider];
         input.placeholder = hasKey ? "Existing key (hidden)" : "Enter your API key here";
         input.value = "";
     }
@@ -364,13 +355,16 @@ class SettingsUI {
         button.textContent = `${nextProvider} ⟳`;
     }
 
-    handlePromptSelection(promptType) {
+    async handlePromptSelection(promptType) {
         const textarea = document.getElementById('customize-prompt');
         this.setTextAreaPlaceholder(textarea, promptType);
-        this.stateManager.loadPrompt(promptType).then(() => {
-            textarea.value = this.stateManager.getPrompt(promptType) || '';
-            update_textfield_height(textarea);
-        });
+        const promptValue = await this.stateManager.getPrompt(promptType);
+        textarea.value = promptValue || '';
+        update_textfield_height(textarea);
+
+        textarea.onchange = (e) => {
+            this.stateManager.setPrompt(promptType, e.target.value);
+        };
     }
 
     setTextAreaPlaceholder(textarea, promptType) {
