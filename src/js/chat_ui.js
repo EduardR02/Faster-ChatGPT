@@ -578,6 +578,7 @@ export class HistoryChatUI extends ChatUI {
             addPopupActions,
             loadHistoryItems,
             loadChat,
+            getChatMeta,
             ...baseOptions
         } = options;
 
@@ -591,6 +592,7 @@ export class HistoryChatUI extends ChatUI {
         this.addPopupActions = addPopupActions;
         this.loadHistoryItems = loadHistoryItems;
         this.loadChat = loadChat;
+        this.getChatMeta = getChatMeta;
 
         this.initHistoryListHandling();
     }
@@ -770,6 +772,31 @@ export class HistoryChatUI extends ChatUI {
         document.getElementById('history-chat-footer').textContent = footerText;
     }
 
+    addLinkedChat(chatId) {
+        if (!chatId) return;
+        const header = document.getElementById('title-wrapper');
+        this.clearLinkedChatFromHeader();
+        
+        const button = createElementWithClass('button', 'unset-button linked-chat', '\u{21AA}');
+        button.onclick = async () => {
+            const chat = await this.getChatMeta(chatId);
+            if (chat) {
+                this.buildChat({ chatId });
+            } else {
+                button.classList.add('settings-error');
+                button.addEventListener('animationend', () => {
+                    button.classList.remove('settings-error');
+                }, { once: true });
+            }
+        };
+        header.appendChild(button);
+    }
+
+    clearLinkedChatFromHeader() {
+        const header = document.getElementById('title-wrapper').querySelector('.linked-chat');
+        if (header) header.remove();
+    }
+
     getHistoryItem(chatId) {
         return document.getElementById(chatId);
     }
@@ -804,12 +831,14 @@ export class HistoryChatUI extends ChatUI {
         });
 
         this.updateChatHeader(chatFull.meta.title);
+        this.addLinkedChat(chatFull.meta.continued_from_chat_id);
         this.updateChatTimestamp(chatFull.meta.timestamp);
     }
 
     clearConversation() {
         super.clearConversation();
         this.updateChatHeader('conversation');
+        this.clearLinkedChatFromHeader();
         this.updateChatFooter('');
     }
 }

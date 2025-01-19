@@ -130,6 +130,7 @@ body {
   text-align: left;
 }
 
+.linked-chat,
 .incognito-toggle,
 .history-auto-rename,
 .sidepanel-open-history,
@@ -145,6 +146,16 @@ body {
   min-width: fit-content;
   transition: background 0.1s ease-out;
   color: #282c34;
+}
+
+.linked-chat {
+  color: #ffffff;
+  transition: color 0.2s ease-out;
+  background: transparent;
+}
+
+.linked-chat:hover {
+  color: #56b6c2;
 }
 
 .history-auto-rename-wrapper {
@@ -402,14 +413,22 @@ body {
   text-align: center;
 }
 
+.title-wrapper {
+  display: flex;
+  justify-content: center;
+  flex-direction: row;
+  align-items: center;
+  font-size: 2em;
+  gap: 0.5em;
+  padding: 0.5em 1em;
+}
+
 .conversation-title {
   color: #fdaaaa;
-  font-size: 2em;
-  padding: 0.5em 1em;
   text-align: center;
 }
 
-.side-panel .conversation-title {
+.side-panel .title-wrapper {
   padding: 0.5em 0;
 }
 

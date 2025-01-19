@@ -173,7 +173,6 @@ class PopupMenu {
 
 let currentChat = null;
 const chatStorage = new ChatStorage();
-const apiManager = new ApiManager();
 const renameManager = new HistoryRenameManager(chatStorage);
 const popupMenu = new PopupMenu(renameManager, chatStorage);
 const stateManager = new HistoryStateManager();
@@ -188,6 +187,7 @@ const chatUI = new HistoryChatUI({
         currentChat = await chatStorage.loadChat(chatId);
         return currentChat;
     },
+    getChatMeta: async (chatId) => {return await chatStorage.getChatMetadataById(chatId);},
 });
 popupMenu.chatUI = chatUI;
 
