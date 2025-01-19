@@ -770,6 +770,10 @@ export class HistoryChatUI extends ChatUI {
         document.getElementById('history-chat-footer').textContent = footerText;
     }
 
+    getHistoryItem(chatId) {
+        return document.getElementById(chatId);
+    }
+
     autoUpdateChatHeader(currentChat) {
         if (!currentChat) return null;
         const historyItem = document.getElementById(currentChat.meta.chatId)?.querySelector('.item-text');

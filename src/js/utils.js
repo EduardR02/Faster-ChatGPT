@@ -832,6 +832,18 @@ export class ChatStorage {
         });
     }
 
+    async getChatMetadataById(chatId) {
+        const db = await this.getDB();
+        const tx = db.transaction('chatMeta', 'readonly');
+        const store = tx.objectStore('chatMeta');
+
+        return new Promise((resolve, reject) => {
+            const request = store.get(chatId);
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
     createNewChatTracking(title) {
         return {
             id: null,

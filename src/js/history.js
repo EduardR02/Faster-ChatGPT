@@ -211,6 +211,7 @@ function initMessageListeners() {
 }
 
 async function handleAppendedMessages(chatId, addedCount) {
+    handleHistoryItemOnNewMessage(chatId);
     if (!currentChat || currentChat.meta.chatId !== chatId) return;
     
     const newMessages = await chatStorage.getLatestMessages(chatId, addedCount);
@@ -219,6 +220,17 @@ async function handleAppendedMessages(chatId, addedCount) {
     const len = currentChat.messages.length;
     chatUI.appendMessages(newMessages, len, currentChat.messages[len - 1]?.role);
     currentChat.messages.push(...newMessages);
+}
+
+async function handleHistoryItemOnNewMessage(chatId) {
+    // due to updated timestamp, history item order (and dividers) may need to be updated
+    if (!chatId) return;
+    const chatMeta = await chatStorage.getChatMetadataById(chatId);
+    const historyItem = chatUI.getHistoryItem(chatId);
+    if (historyItem) {
+        chatUI.handleItemDeletion(historyItem);
+    }
+    chatUI.handleNewChatSaved(chatMeta);
 }
 
 async function handleArenaMessageUpdate(chatId, messageId) {
@@ -235,6 +247,7 @@ async function handleArenaMessageUpdate(chatId, messageId) {
         return;
     }
     
+    handleHistoryItemOnNewMessage(chatId);
     chatUI.updateArenaMessage(updatedMessage, messageIndex);
     currentChat.messages[messageIndex] = updatedMessage;
 }
