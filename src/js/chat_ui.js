@@ -661,6 +661,27 @@ export class HistoryChatUI extends ChatUI {
         return item;
     }
 
+    handleItemDeletion(item) {
+        const header = item.previousElementSibling;
+        const nextItem = item.nextElementSibling;
+        const nextHeader = nextItem?.classList.contains('history-divider') ? nextItem : null;
+    
+        item.remove();
+    
+        // If this was the last item under its header
+        if (header?.classList.contains('history-divider') && 
+            (!nextItem || nextItem.classList.contains('history-divider'))) {
+            header.remove();
+            if (nextHeader) {
+                nextHeader.style.paddingTop = '0';
+            }
+        }
+    
+        if (this.historyList.scrollHeight <= this.historyList.clientHeight) {
+            this.loadMore();
+        }
+    }
+
     handleNewChatSaved(chat) {
         const currentCategory = this.getDateCategory(chat.timestamp);
         const firstItem = this.historyList.firstElementChild;
@@ -745,6 +766,10 @@ export class HistoryChatUI extends ChatUI {
         document.getElementById('history-chat-header').textContent = title;
     }
 
+    updateChatFooter(footerText) {
+        document.getElementById('history-chat-footer').textContent = footerText;
+    }
+
     autoUpdateChatHeader(currentChat) {
         if (!currentChat) return null;
         const historyItem = document.getElementById(currentChat.meta.chatId)?.querySelector('.item-text');
@@ -776,5 +801,11 @@ export class HistoryChatUI extends ChatUI {
 
         this.updateChatHeader(chatFull.meta.title);
         this.updateChatTimestamp(chatFull.meta.timestamp);
+    }
+
+    clearConversation() {
+        super.clearConversation();
+        this.updateChatHeader('conversation');
+        this.updateChatFooter('');
     }
 }

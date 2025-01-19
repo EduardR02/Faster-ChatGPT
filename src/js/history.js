@@ -10,8 +10,7 @@ class PopupMenu {
         this.renameManager = renameManager;
         this.chatStorage = chatStorage;
         this.activePopup = null;
-        this.autoRenameHeaderFunc = null;
-        this.resetHeader = null;
+        this.chatUI = null;
         this.init();
     }
 
@@ -131,29 +130,30 @@ class PopupMenu {
             const oldName = textSpan.textContent;
             textSpan.textContent = textSpan.textContent.replace(oldName, newName);
             if (currentChat)
-                currentChat.meta.title = this.autoRenameHeaderFunc(currentChat) || currentChat.meta.title;
+                currentChat.meta.title = this.chatUI.autoUpdateChatHeader(currentChat) || currentChat.meta.title;
             this.chatStorage.renameChat(parseInt(this.activePopup.id, 10), newName);
         }
         this.hidePopup();
     }
 
     deleteChat(item, popupItem) {
-        if (popupItem.classList.contains('delete-confirm')) {
-            item.remove();
-            // clear the conversation-div
-            document.getElementById('conversation-wrapper').innerHTML = '';
-            document.getElementById('history-chat-footer').textContent = '';
-
-            this.chatStorage.deleteChat(parseInt(item.id, 10));
-            if (currentChat && currentChat.meta.chatId === parseInt(item.id, 10)) {
-                currentChat = null;
-                this.resetHeader();
-            }
-            this.hidePopup();
-        } else {
+        if (!popupItem.classList.contains('delete-confirm')) {
             popupItem.classList.add('delete-confirm');
             popupItem.textContent = 'Sure?';
+            return;
         }
+    
+        const chatId = parseInt(item.id, 10);
+    
+        this.chatUI.handleItemDeletion(item);
+    
+        this.chatStorage.deleteChat(chatId);
+        if (currentChat && currentChat.meta.chatId === chatId) {
+            currentChat = null;
+            this.chatUI.clearConversation();
+        }
+    
+        this.hidePopup();
     }
 
     async autoRenameSingleChat(item) {
@@ -163,7 +163,7 @@ class PopupMenu {
         if (result?.tokenCounter) {
             result.tokenCounter.updateLifetimeTokens();
             if (currentChat)
-                currentChat.meta.title = this.autoRenameHeaderFunc(currentChat) || currentChat.meta.title;
+                currentChat.meta.title = this.chatUI.autoUpdateChatHeader(currentChat) || currentChat.meta.title;
         }
         
         this.hidePopup();
@@ -189,8 +189,7 @@ const chatUI = new HistoryChatUI({
         return currentChat;
     },
 });
-popupMenu.autoRenameHeaderFunc = chatUI.autoUpdateChatHeader.bind(chatUI);
-popupMenu.resetHeader = () => chatUI.updateChatHeader('conversation'); 
+popupMenu.chatUI = chatUI;
 
 
 function initMessageListeners() {
