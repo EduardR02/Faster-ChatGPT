@@ -282,7 +282,7 @@ function sendChatToSidepanel(options) {
 
 async function autoRenameUnmodified() {
     const button = document.getElementById('auto-rename');
-    const model = apiManager.getCurrentModel();
+    const model = renameManager.getModel();
 
     // First click confirmation
     if (!button.dataset.confirmed) {
