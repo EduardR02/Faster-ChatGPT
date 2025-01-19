@@ -781,6 +781,7 @@ export class HistoryChatUI extends ChatUI {
         button.onclick = async () => {
             const chat = await this.getChatMeta(chatId);
             if (chat) {
+                this.highlightHistoryItem(chatId);
                 this.buildChat({ chatId });
             } else {
                 button.classList.add('settings-error');
@@ -795,6 +796,16 @@ export class HistoryChatUI extends ChatUI {
     clearLinkedChatFromHeader() {
         const header = document.getElementById('title-wrapper').querySelector('.linked-chat');
         if (header) header.remove();
+    }
+
+    highlightHistoryItem(chatId) {
+        const item = this.getHistoryItem(chatId);
+        if (item) {
+            item.classList.add('highlight');
+            item.addEventListener('transitionend', () => {
+                item.classList.remove('highlight');
+            }, { once: true });
+        }
     }
 
     getHistoryItem(chatId) {
