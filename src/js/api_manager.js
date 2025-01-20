@@ -82,7 +82,7 @@ export class ApiManager {
             case 'gemini':
                 return this.createGeminiRequest(model, messages, streamResponse, streamWriter);
             case 'deepseek':
-                return this.createDeepseekRequest(model, messages, streamResponse);
+                return this.createDeepseekRequest(model, messages, streamResponse, streamWriter);
             default:
                 throw new Error(`Unsupported model provider: ${provider}`);
         }
@@ -239,8 +239,13 @@ export class ApiManager {
         return ['https://api.anthropic.com/v1/messages', requestOptions];
     }
 
-    createDeepseekRequest(model, messages, streamResponse) {
+    createDeepseekRequest(model, messages, streamResponse, streamWriter) {
         messages = this.formatMessagesForDeepseek(messages);
+        const isReasoner = model.includes('reasoner');
+        if (isReasoner && streamWriter) {
+            streamWriter.setThinkingModel();
+        }
+    
         const requestOptions = {
             method: 'POST',
             credentials: 'omit',
@@ -252,7 +257,7 @@ export class ApiManager {
                 model: model,
                 messages: messages,
                 max_tokens: this.settings.max_tokens,
-                temperature: Math.min(this.settings.temperature, MaxTemp.deepseek),
+                ...(!isReasoner && {temperature: Math.min(this.settings.temperature, MaxTemp.deepseek)}),
                 stream: streamResponse,
                 ...(streamResponse && {
                     stream_options: { include_usage: true }
@@ -372,6 +377,12 @@ export class ApiManager {
 
     handleDeepseekNonStreamResponse(data, tokenCounter) {
         tokenCounter.update(data.usage.prompt_tokens, data.usage.completion_tokens);
+        if (data.choices[0].message.reasoning_content !== undefined) {
+            return {
+                thoughts: data.choices[0].message.reasoning_content,
+                text: data.choices[0].message.content
+            };
+        }
         return data.choices[0].message.content;
     }
 
@@ -450,7 +461,12 @@ export class ApiManager {
             tokenCounter.update(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);
             return;
         }
+        const reasoningContent = parsed?.choices?.[0]?.delta?.reasoning_content;
         const content = parsed?.choices?.[0]?.delta?.content;
+        
+        if (reasoningContent) {
+            streamWriter.processContent(reasoningContent, true);
+        }
         if (content) {
             streamWriter.processContent(content);
         }
