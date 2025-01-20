@@ -795,6 +795,36 @@ p {
   flex-direction: column;
 }
 
+.image-content {
+  position: relative;
+  width: fit-content;
+  display: block;
+}
+
+.image-content .remove-file-button {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  opacity: 0;
+  background: rgba(239, 89, 111, 0.7);
+  color: #d4d4d4;
+  transition: opacity 0.2s ease-out, color 0.1s ease-out;
+  z-index: 1;
+  border-radius: 0.5rem;
+  padding: 1px 5px;
+  width: fit-content;
+  height: fit-content;
+}
+
+.image-content:hover .remove-file-button {
+  opacity: 1;
+}
+
+.image-content .remove-file-button:hover {
+  color: #ffffff;
+  background: rgba(239, 89, 111, 0.9);
+}
+
 .image-content img {
   max-width: 100%;  /* instead of width: 100% */
   width: auto;      /* let it be its natural size if container is bigger */

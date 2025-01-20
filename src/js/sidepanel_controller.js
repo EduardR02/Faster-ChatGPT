@@ -23,7 +23,7 @@ export class SidepanelController {
         this.initialPrompt = "";
         this.thoughtLoops = [0, 0];
         this.pendingFiles = {};
-        this.pendingImages = [];
+        this.pendingImages = {};
         this.tempMediaId = 0;
     }
 
@@ -35,7 +35,7 @@ export class SidepanelController {
         this.pendingMessage = {};
         this.messages = [];
         this.pendingFiles = {};
-        this.pendingImages = [];
+        this.pendingImages = {};
         this.tempMediaId = 0;
     }
 
@@ -372,7 +372,7 @@ export class SidepanelController {
 
     collectPendingUserMessage() {
         const text = this.chatUI.getTextAreaText().trim();
-        const hasImages = this.pendingImages.length > 0;
+        const hasImages = Object.keys(this.pendingImages).length > 0;
         const hasFiles = Object.keys(this.pendingFiles).length > 0;
     
         if (!text && !hasImages && !hasFiles) {
@@ -382,7 +382,7 @@ export class SidepanelController {
         const message = { role: 'user' };
     
         if (text) message.content = text;
-        if (hasImages) message.images = this.pendingImages;
+        if (hasImages) message.images = Object.values(this.pendingImages);
         if (hasFiles) message.files = Object.values(this.pendingFiles);
         return message;
     }
@@ -390,25 +390,24 @@ export class SidepanelController {
     realizePendingFiles(role) {
         if (role !== 'user') return;
         
-        if (this.pendingImages.length > 0) {
-            this.messages[this.messages.length - 1].images = this.pendingImages;
-            this.pendingImages = [];
+        if (Object.keys(this.pendingImages).length > 0) {
+            this.messages[this.messages.length - 1].images = Object.values(this.pendingImages);
+            this.pendingImages = {};
         }
 
-        if (Object.keys(this.pendingFiles).length > 0) {
-            this.messages[this.messages.length - 1].files = [];
-            for (const [key, value] of Object.entries(this.pendingFiles)) {
-                this.messages[this.messages.length - 1].files.push(value);
-            }
-            this.chatUI.removeCurrentRemoveMediaButtons();
+        if (Object.keys(this.pendingFiles).length) {
+            this.messages.at(-1).files = Object.values(this.pendingFiles);
             this.pendingFiles = {};
         }
+        this.chatUI.removeCurrentRemoveMediaButtons();
     }
 
     appendPendingImages(images) {
         images.forEach(image => {
-            this.pendingImages.push(image);
-            this.chatUI.appendImage(image);
+            const currentId = this.tempMediaId;
+            this.pendingImages[currentId] = image;
+            this.chatUI.appendImage(image, () => this.removeImage(currentId));
+            this.tempMediaId++;
         });
     }
 
@@ -423,6 +422,10 @@ export class SidepanelController {
 
     removeFile(tempId) {
         delete this.pendingFiles[tempId];
+    }
+
+    removeImage(tempId) {
+        delete this.pendingImages[tempId];
     }
 
     getCurrentArenaMessage() {

@@ -1,4 +1,4 @@
-import { Footer, createElementWithClass, add_codeblock_html } from './utils.js';
+import { createElementWithClass, add_codeblock_html } from './utils.js';
 
 
 class ChatUI {
@@ -200,15 +200,25 @@ class ChatUI {
         return div;
     }
 
-    createImageContent(imageUrl, role) {
-        const wrapper = createElementWithClass('div', `image-content ${role}-content`);
+    createImageContent(imageBase64, role, onRemove = null) {
+        const content = createElementWithClass('div', `image-content ${role}-content`);
+
         const img = document.createElement('img');
-        img.src = imageUrl;
-        wrapper.appendChild(img);
-        return wrapper;
+        img.src = imageBase64;
+        content.appendChild(img);
+    
+        if (onRemove) {
+            const removeButton = this.createRemoveFileButton(() => {
+                content.remove();
+                onRemove();
+            });
+            content.appendChild(removeButton);
+        }
+
+        return content;
     }
 
-    createFileDisplay(file, onRemove) {
+    createFileDisplay(file, onRemove = null) {
         const fileDiv = createElementWithClass('div', 'history-system-message collapsed');
         const buttonsWrapper = createElementWithClass('div', 'file-buttons-wrapper');
 
@@ -237,10 +247,10 @@ class ChatUI {
         this.conversationDiv.appendChild(this.pendingMediaDiv);
     }
 
-    appendImage(imageBase64) {
+    appendImage(imageBase64, onRemove = null) {
         this.initPendingMedia()
         const wrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
-        const imgContent = this.createImageContent(imageBase64, 'user');
+        const imgContent = this.createImageContent(imageBase64, 'user', onRemove);
         wrapper.appendChild(imgContent);
     }
 
@@ -249,11 +259,6 @@ class ChatUI {
         const wrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
         const fileDisplay = this.createFileDisplay(file, onRemove);
         wrapper.appendChild(fileDisplay);
-    }
-
-    removeFile(fileId) {
-        const button = document.getElementById(`remove-file-${fileId}`);
-        if (button) button.closest('.history-system-message').remove();
     }
 
     appendToExistingMessage(content) {
