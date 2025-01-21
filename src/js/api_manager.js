@@ -1,61 +1,38 @@
+import { SettingsManager } from './state_manager.js';
+
+
 export class ApiManager {
     constructor() {
-        this.settings = {};
-        this.initSettingsAndListener();
-    }
-
-    async initSettingsAndListener() {
-        const storageData = await chrome.storage.local.get(['api_keys', 'max_tokens', 'temperature', 'models', 'current_model']);
-        this.settings = {
-            api_keys: storageData.api_keys || {},
-            max_tokens: storageData.max_tokens || 2000,
-            temperature: storageData.temperature || 0.7,
-            models: storageData.models || {},
-            current_model: storageData.current_model
-        };
-
-        if (Object.keys(this.settings.api_keys).length === 0) {
-            throw new Error("No API keys found in storage. Please add your API keys in the extension options.");
-        }
-
-        chrome.storage.onChanged.addListener((changes, namespace) => {
-            if (namespace !== "local") return;
-            for (let [key, { newValue }] of Object.entries(changes)) {
-                if (key in this.settings) {
-                    this.settings[key] = newValue;
-                }
-            }
-        });
+        this.settingsManager = new SettingsManager(['api_keys', 'max_tokens', 'temperature', 'models', 'current_model']);
     }
 
     getCurrentModel() {
-        return this.settings.current_model;
+        return this.settingsManager.getSetting('current_model');
     }
 
     async callApi(model, messages, tokenCounter, streamWriter = null) {
         const provider = this.getProviderForModel(model);
-        if (!this.settings.api_keys[provider] || this.settings.api_keys[provider] === "") {
+        const apiKeys = this.settingsManager.getSetting('api_keys') || {};
+        
+        if (!apiKeys[provider]?.trim()) {
             throw new Error(`${provider} API key is empty, switch to another model or enter a key in the settings.`);
         }
 
         const streamResponse = streamWriter !== null;
         messages = this.processFiles(messages);
         const [apiLink, requestOptions] = this.createApiRequest(model, messages, streamResponse, streamWriter);
+        
         if (!apiLink || !requestOptions) {
             throw new Error("Invalid API request configuration.");
         }
 
         try {
             const response = await fetch(apiLink, requestOptions);
-            if (!response.ok) {
-                throw new Error(`API request failed with status ${response.status}`);
-            }
+            if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
 
-            if (streamResponse) {
-                return this.handleStreamResponse(response, model, tokenCounter, streamWriter);
-            } else {
-                return this.handleNonStreamResponse(response, model, tokenCounter);
-            }
+            return streamResponse 
+                ? this.handleStreamResponse(response, model, tokenCounter, streamWriter)
+                : this.handleNonStreamResponse(response, model, tokenCounter);
         } catch (error) {
             throw new Error(`API request error: ${error.message}`);
         }
@@ -64,33 +41,36 @@ export class ApiManager {
     processFiles(messages) {
         return messages.map(({ files, ...rest }) => ({
             ...rest,
-            content: files && files.length > 0
-                ? rest.content + "\n\nfiles:\n" + files.map(file =>
-                    `${file.name}:\n<|file_start|>${file.content}<|file_end|>`
-                ).join("\n")
+            content: files?.length > 0
+                ? `${rest.content}\n\nfiles:\n${files.map(f => 
+                    `${f.name}:\n<|file_start|>${f.content}<|file_end|>`
+                ).join("\n")}`
                 : rest.content
         }));
     }
 
     createApiRequest(model, messages, streamResponse, streamWriter) {
         const provider = this.getProviderForModel(model);
+        const apiKeys = this.settingsManager.getSetting('api_keys');
+        
         switch (provider) {
             case 'openai':
-                return this.createOpenAIRequest(model, messages, streamResponse, streamWriter);
+                return this.createOpenAIRequest(model, messages, streamResponse, streamWriter, apiKeys.openai);
             case 'anthropic':
-                return this.createAnthropicRequest(model, messages, streamResponse);
+                return this.createAnthropicRequest(model, messages, streamResponse, apiKeys.anthropic);
             case 'gemini':
-                return this.createGeminiRequest(model, messages, streamResponse, streamWriter);
+                return this.createGeminiRequest(model, messages, streamResponse, streamWriter, apiKeys.gemini);
             case 'deepseek':
-                return this.createDeepseekRequest(model, messages, streamResponse, streamWriter);
+                return this.createDeepseekRequest(model, messages, streamResponse, streamWriter, apiKeys.deepseek);
             default:
                 throw new Error(`Unsupported model provider: ${provider}`);
         }
     }
 
     getProviderForModel(model) {
-        for (const [provider, models] of Object.entries(this.settings.models)) {
-            if (model in models) return provider;
+        const models = this.settingsManager.getSetting('models') || {};
+        for (const [provider, providerModels] of Object.entries(models)) {
+            if (model in providerModels) return provider;
         }
         return null;
     }
@@ -163,144 +143,101 @@ export class ApiManager {
         return base64String.split('base64,')[1];
     }
 
-    createOpenAIRequest(model, messages, streamResponse, streamWriter) {
+    createOpenAIRequest(model, messages, streamResponse, streamWriter, apiKey) {
         messages = this.formatMessagesForOpenAI(messages);
-        if (model.includes('o1')) {
-            return this.createOpenAIThinkingRequest(model, messages, streamResponse, streamWriter);
+        const isThinking = model.includes('o1');
+        if (isThinking) {
+            messages = messages.map(msg => ({ 
+                role: msg.role === "developer" ? "user" : msg.role, 
+                content: msg.content 
+            }));
+            if (streamWriter) streamWriter.addThinkingCounter();
         }
-        const requestOptions = {
+
+        return ['https://api.openai.com/v1/chat/completions', {
             method: 'POST',
             credentials: 'omit',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.settings.api_keys.openai}`
-            },
+            headers: {'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}`},
             body: JSON.stringify({
-                model: model,
-                messages: messages,
-                max_tokens: this.settings.max_tokens,
-                temperature: Math.min(this.settings.temperature, MaxTemp.openai),
+                model,
+                messages,
+                ...(isThinking ? {max_completion_tokens: this.settingsManager.getSetting('max_tokens')} : {
+                    max_tokens: this.settingsManager.getSetting('max_tokens'),
+                    temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.openai)
+                }),
                 stream: streamResponse,
-                ...(streamResponse && {
-                    stream_options: { include_usage: true }
-                })
+                ...(streamResponse && {stream_options: {include_usage: true}})
             })
-        };
-        return ['https://api.openai.com/v1/chat/completions', requestOptions];
+        }];
     }
 
-    createOpenAIThinkingRequest(model, messages, streamResponse, streamWriter) {
-        if (messages?.[0]?.role === "developer") {
-            // o1 type models currently don't support system prompts, so we have to just change it to user
-            messages[0].role = RoleEnum.user;
-        }
-        messages = messages.map(msg => ({role: msg.role, content: msg.content}));    // remove images
-        if (streamWriter) streamWriter.addThinkingCounter();
-        const requestOptions = {
-            method: 'POST',
-            credentials: 'omit',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + this.settings.api_keys.openai
-            },
-            body: JSON.stringify({
-                model: model,
-                messages: messages,
-                max_completion_tokens: this.settings.max_tokens,
-                stream: streamResponse,
-                ...(streamResponse && {
-                    stream_options: { include_usage: true }
-                })
-            })
-        };
-        return ['https://api.openai.com/v1/chat/completions', requestOptions];
-    }
-
-    createAnthropicRequest(model, messages, streamResponse) {
+    createAnthropicRequest(model, messages, streamResponse, apiKey) {
         messages = this.formatMessagesForAnthropic(messages);
-        const requestOptions = {
+        return ['https://api.anthropic.com/v1/messages', {
             method: 'POST',
             credentials: 'omit',
             headers: {
                 'Content-Type': 'application/json',
-                'x-api-key': this.settings.api_keys.anthropic,
+                'x-api-key': apiKey,
                 'anthropic-version': '2023-06-01',
                 'anthropic-dangerous-direct-browser-access': 'true'
             },
             body: JSON.stringify({
-                model: model,
+                model,
                 system: [messages[0].content[0]],
                 messages: messages.slice(1),
-                max_tokens: this.settings.max_tokens,
-                temperature: Math.min(this.settings.temperature, MaxTemp.anthropic),
+                max_tokens: this.settingsManager.getSetting('max_tokens'),
+                temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.anthropic),
                 stream: streamResponse
             })
-        };
-        return ['https://api.anthropic.com/v1/messages', requestOptions];
+        }];
     }
 
-    createDeepseekRequest(model, messages, streamResponse, streamWriter) {
-        messages = this.formatMessagesForDeepseek(messages);
+    createDeepseekRequest(model, messages, streamResponse, streamWriter, apiKey) {
         const isReasoner = model.includes('reasoner');
-        if (isReasoner && streamWriter) {
-            streamWriter.setThinkingModel();
-        }
-    
-        const requestOptions = {
+        if (isReasoner && streamWriter) streamWriter.setThinkingModel();
+        
+        return ['https://api.deepseek.com/v1/chat/completions', {
             method: 'POST',
             credentials: 'omit',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.settings.api_keys.deepseek}`
-            },
+            headers: {'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}`},
             body: JSON.stringify({
-                model: model,
-                messages: messages,
-                max_tokens: this.settings.max_tokens,
-                ...(!isReasoner && {temperature: Math.min(this.settings.temperature, MaxTemp.deepseek)}),
+                model,
+                messages: this.formatMessagesForDeepseek(messages),
+                max_tokens: this.settingsManager.getSetting('max_tokens'),
+                ...(!isReasoner && {temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.deepseek)}),
                 stream: streamResponse,
-                ...(streamResponse && {
-                    stream_options: { include_usage: true }
-                })
+                ...(streamResponse && {stream_options: {include_usage: true}})
             })
-        };
-        return ['https://api.deepseek.com/v1/chat/completions', requestOptions];
+        }];
     }
 
-    createGeminiRequest(model, messages, streamResponse, streamWriter) {
-        // Filter out images if it's a thinking model
-        if (model.includes('thinking')) {
-            messages = messages.map(msg => ({
-                role: msg.role,
-                content: msg.content
-            }));
+    createGeminiRequest(model, messages, streamResponse, streamWriter, apiKey) {
+        const isThinking = model.includes('thinking');
+        if (isThinking) {
+            messages = messages.map(({role, content}) => ({role, content}));
             if (streamWriter) streamWriter.setThinkingModel();
         }
         
         messages = this.formatMessagesForGemini(messages);
+        const apiVersion = isThinking ? 'v1alpha' : 'v1beta';
+        const responseType = streamResponse ? "streamGenerateContent" : "generateContent";
+        const streamParam = streamResponse ? "alt=sse&" : "";
         
-        const requestOptions = {
+        return [`https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:${responseType}?${streamParam}key=${apiKey}`, {
             method: 'POST',
-            credentials: 'omit',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 contents: messages.slice(1),
                 systemInstruction: messages[0],
                 safetySettings: this.getGeminiSafetySettings(),
                 generationConfig: {
-                    temperature: Math.min(this.settings.temperature, MaxTemp.gemini),
-                    maxOutputTokens: this.settings.max_tokens,
+                    temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.gemini),
+                    maxOutputTokens: this.settingsManager.getSetting('max_tokens'),
                     responseMimeType: "text/plain"
-                },
+                }
             })
-        };
-    
-        const apiVersion = model.includes('thinking') ? 'v1alpha' : 'v1beta';
-        const responseType = streamResponse ? "streamGenerateContent" : "generateContent";
-        const streamParam = streamResponse ? "alt=sse&" : "";
-        const requestLink = `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:${responseType}?${streamParam}key=${this.settings.api_keys.gemini}`;
-        
-        return [requestLink, requestOptions];
+        }];
     }
 
     getGeminiSafetySettings() {
