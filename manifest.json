@@ -18,8 +18,7 @@
 	},
 	"permissions": [
 		"storage",
-		"sidePanel",
-		"tabs"
+		"sidePanel"
 	],
 	"web_accessible_resources": [{
 		"resources": ["src/html/history.html"],
