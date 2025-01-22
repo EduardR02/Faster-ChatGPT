@@ -1,4 +1,4 @@
-import { TokenCounter, StreamWriter, StreamWriterSimple, Footer, canContinueWithSameChatId } from './utils.js';
+import { TokenCounter, StreamWriter, StreamWriterSimple, Footer, canContinueWithSameChatId, ArenaRatingManager } from './utils.js';
 import { SidepanelRenameManager } from './rename_manager.js';
 
 
@@ -16,6 +16,8 @@ export class SidepanelController {
         this.apiManager = apiManager;
         this.chatStorage = chatStorage;
         this.renameManager = new SidepanelRenameManager(chatStorage);
+        this.arenaRatingManager = new ArenaRatingManager();
+        this.arenaRatingManager.initDB();
         
         this.messages = [];
         this.pendingMessage = {};
@@ -64,7 +66,6 @@ export class SidepanelController {
 
     handleArenaChoice(choice) {;
         const currentMessage = this.getCurrentArenaMessage();
-        this.chatUI.removeArenaFooter();
         
         // Update message state
         currentMessage.choice = choice;
@@ -76,7 +77,12 @@ export class SidepanelController {
             "none";
 
         // Update UI and state
-        this.chatUI.resolveArena(choice, currentMessage.continued_with);
+        const [modelA, modelB] = this.stateManager.getArenaModels();
+        if (['model_a', 'model_b', 'draw', 'draw(bothbad)'].includes(choice)) {
+            this.arenaRatingManager.addMatchAndUpdate(modelA, modelB, choice);
+        }
+        const ratings = [this.arenaRatingManager.getModelRating(modelA), this.arenaRatingManager.getModelRating(modelB)];
+        this.chatUI.resolveArena(choice, currentMessage.continued_with, ratings);
         
         // Save if needed
         if (this.currentChat.id !== null && this.stateManager.shouldSave) {

@@ -310,6 +310,10 @@ export class ArenaStateManager extends SettingsManager {
         return this.state.activeArenaModels.indexOf(model);
     }
 
+    getArenaModels() {
+        return this.state.activeArenaModels;
+    }
+
     get isArenaModeActive() {
         return this.state.isArenaModeActive;
     }

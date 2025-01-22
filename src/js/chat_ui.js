@@ -166,7 +166,7 @@ class ChatUI {
         return arenaDivs;
     }
 
-    resolveArena(choice, continued_with, arenaDivs) {
+    resolveArena(choice, continued_with, arenaDivs, updatedElo = null) {
         // !!! sidepanel child function only has 2 params, uses class internal for arena divs
         const modelKeys = ['model_a', 'model_b'];
         arenaDivs.forEach((wrapper, index) => {
@@ -174,12 +174,16 @@ class ChatUI {
             wrapper.querySelectorAll('.assistant-message').forEach(message => {
                 message.querySelector('.message-content').classList.add(className);
                 const prefix = message.querySelector('.message-prefix');
-                prefix.textContent = this.formatArenaPrefix(prefix.textContent, this.stateManager.getArenaModel(index), choice, modelKeys[index]);
+
+                const elo = updatedElo ? updatedElo[index] : null;
+                prefix.textContent = this.formatArenaPrefix(prefix.textContent, this.stateManager.getArenaModel(index), choice, modelKeys[index], elo);
+
+                this.arenaUpdateTokenFooter(message.querySelector('.message-footer'));
             });
         });
     }
 
-    formatArenaPrefix(currentText, modelName, choice, modelKey) {
+    formatArenaPrefix(currentText, modelName, choice, modelKey, elo) {
         let suffix = '';
         if (choice) {
             switch (choice) {
@@ -190,7 +194,14 @@ class ChatUI {
                 default: suffix = ' ❌';    // loser or bothbad
             }
         }
+        if (elo) modelName += ` (${Math.round(elo * 10) / 10})`;    // round to 1 decimal place
         return currentText.replace(this.roleLabels.assistant, modelName) + suffix;
+    }
+
+    arenaUpdateTokenFooter(footerDiv) {
+        if (!footerDiv) return;
+        const span = footerDiv.querySelector('span');
+        span.textContent = span.textContent.replace('~', footerDiv.getAttribute('input-tokens'))
     }
 
     // UI Component Creation Methods
@@ -492,8 +503,8 @@ export class SidepanelChatUI extends ChatUI {
         container.appendChild(footer);
     }
 
-    resolveArena(choice, continued_with) {
-        super.resolveArena(choice, continued_with, this.activeMessageDivs);
+    resolveArena(choice, continued_with, updatedElo = null) {
+        super.resolveArena(choice, continued_with, this.activeMessageDivs, updatedElo);
         this.scrollIntoView();
         this.activeMessageDivs = null;
     }

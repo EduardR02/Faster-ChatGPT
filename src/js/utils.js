@@ -1061,6 +1061,10 @@ export class ArenaRatingManager {
         return updatedRatings;
     }
 
+    getModelRating(model) {
+        return this.cachedRatings[model]?.rating || 1000;
+    }
+
     async recalculateRatingsFromHistory() {
         const matches = await this.getMatchHistory();
         this.cachedRatings = {};
