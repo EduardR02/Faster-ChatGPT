@@ -503,7 +503,7 @@ export class SidepanelChatUI extends ChatUI {
         container.appendChild(footer);
     }
 
-    resolveArena(choice, continued_with, updatedElo = null) {
+    resolveArena(choice, continued_with, _, updatedElo = null) {
         super.resolveArena(choice, continued_with, this.activeMessageDivs, updatedElo);
         this.scrollIntoView();
         this.activeMessageDivs = null;

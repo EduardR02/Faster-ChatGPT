@@ -66,6 +66,7 @@ export class SidepanelController {
 
     handleArenaChoice(choice) {;
         const currentMessage = this.getCurrentArenaMessage();
+        this.chatUI.removeArenaFooter();
         
         // Update message state
         currentMessage.choice = choice;
@@ -82,7 +83,7 @@ export class SidepanelController {
             this.arenaRatingManager.addMatchAndUpdate(modelA, modelB, choice);
         }
         const ratings = [this.arenaRatingManager.getModelRating(modelA), this.arenaRatingManager.getModelRating(modelB)];
-        this.chatUI.resolveArena(choice, currentMessage.continued_with, ratings);
+        this.chatUI.resolveArena(choice, currentMessage.continued_with, null, ratings);
         
         // Save if needed
         if (this.currentChat.id !== null && this.stateManager.shouldSave) {

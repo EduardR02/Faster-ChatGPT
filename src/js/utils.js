@@ -87,13 +87,13 @@ export function canContinueWithSameChatId(options, userMsg = null) {
     const lastMessage = messages[messages.length - 1];
     if (fullChatLength !== messages.length) return false;
     if (index !== messages.length - 1) return false;
-    
     const role = lastMessage.role;
     return role === 'system' || 
            (role === 'user' && isUserMessageEqual(lastMessage, userMsg)) ||
            (role === 'assistant' && !lastMessage.responses) ||
-           (arenaMessageIndex !== null && 
-            lastMessage.responses?.continued_with === modelChoice && 
+           (arenaMessageIndex != null && 
+            modelChoice && modelChoice !== "none" &&
+            lastMessage.continued_with === modelChoice && 
             lastMessage.responses[modelChoice].messages.length === arenaMessageIndex + 1);
 }
 

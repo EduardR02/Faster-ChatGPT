@@ -1,4 +1,4 @@
-import { ChatStorage, auto_resize_textfield_listener, ArenaRatingManager } from "./utils.js";
+import { ChatStorage, auto_resize_textfield_listener } from "./utils.js";
 import { ApiManager } from "./api_manager.js";
 import { SidepanelStateManager } from './state_manager.js';
 import { SidepanelChatUI } from './chat_ui.js';
@@ -9,7 +9,6 @@ class SidepanelApp {
         this.stateManager = new SidepanelStateManager('chat_prompt');
         this.apiManager = new ApiManager();
         this.chatStorage = new ChatStorage();
-        this.arenaRatingManager = null;
 
         this.chatUI = new SidepanelChatUI({
             stateManager: this.stateManager
@@ -23,7 +22,6 @@ class SidepanelApp {
         });
 
         this.initEventListeners();
-        this.initArenaRatingManager();
     }
 
     initEventListeners() {
@@ -35,13 +33,6 @@ class SidepanelApp {
         this.initTextareaImageHandling();
         this.setupMessageListeners();
         this.stateManager.subscribeToChatReset("chat", () => {this.handleNewChat()});
-    }
-
-    initArenaRatingManager() {
-        if (!this.arenaRatingManager) {
-            this.arenaRatingManager = new ArenaRatingManager();
-            this.arenaRatingManager.initDB();
-        }
     }
 
     initInputListener() {
@@ -304,7 +295,13 @@ class SidepanelApp {
             index,
             pendingUserMessage: this.controller.collectPendingUserMessage()
         };
-
+        // check for arena message
+        if (this.controller.currentChat?.messages?.at(-1)?.responses) {
+            const lastMsg = this.controller.currentChat.messages.at(-1);
+            const modelChoice = lastMsg.continued_with && lastMsg.continued_with !== "none" ? lastMsg.continued_with : 'model_a';
+            options.arenaMessageIndex = lastMsg.responses[modelChoice].messages.length - 1;
+            options.modelChoice = modelChoice;
+        }
         if (!options.chatId) options.systemPrompt = this.controller.getSystemPrompt();
 
         if (this.stateManager.isSidePanel) {
