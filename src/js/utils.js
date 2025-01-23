@@ -912,6 +912,84 @@ export class ChatStorage {
 */
 
 
+export class PromptStorage {
+    constructor() {
+        this.dbName = 'llm-prompts';
+        this.dbVersion = 1;
+    }
+
+    async getDB() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open(this.dbName, this.dbVersion);
+            
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                if (!db.objectStoreNames.contains('prompts')) {
+                    const store = db.createObjectStore('prompts', { keyPath: ['name', 'type'] })
+                    store.createIndex('type', 'type');
+                }
+            };
+
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async addPrompt(name, type, content, overwrite = false) {
+        const db = await this.getDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('prompts', 'readwrite');
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+            
+            const store = tx.objectStore('prompts');
+            if (overwrite) {
+                store.put({ name, type, content });
+            }
+            else {
+                store.add({ name, type, content });
+            }
+        });
+    }
+
+    async getPrompt(name) {
+        const db = await this.getDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('prompts', 'readonly');
+            const store = tx.objectStore('prompts');
+            const request = store.get(name);
+            
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async getAllPrompts() {
+        const db = await this.getDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('prompts', 'readonly');
+            const store = tx.objectStore('prompts');
+            const request = store.getAll();
+            
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async deletePrompt(name) {
+        const db = await this.getDB();
+        return new Promise((resolve, reject) => {
+            const tx = db.transaction('prompts', 'readwrite');
+            const store = tx.objectStore('prompts');
+            const request = store.delete(name);
+            
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error);
+        });
+    }
+}
+
+
 export class ArenaRatingManager {
     constructor(dbName = "MatchesDB", storeName = "matches", ratingsCacheKey = "elo_ratings") {
         this.dbName = dbName;
