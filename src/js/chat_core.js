@@ -14,22 +14,23 @@ export class ChatCore {
         this.currentChat = { ...this.currentChat, ...update }
     }
 
-    replaceLastSimple(message) {
+    replaceLastFromHistory(message) {
         this.currentChat.messages.pop();
-        this.addSimple(message);
+        this.addFromHistory(message);
     }
 
-    addSimple(message) {
-        this.currentChat.messages.push(message);
+    addFromHistory(message) {
+        const { chatId, messageId, timestamp, ...msg } = message;
+        this.currentChat.messages.push(msg);
     }
 }
 
 
-export class SidepanelChatCore {
+export class SidepanelChatCore extends ChatCore {
     constructor(chatStorage, stateManager) {
+        super(chatStorage);
         this.shouldSave = true;
         this.stateManager = stateManager;
-        super(chatStorage);
     }
 
     appendRegenerated(model, message) {
@@ -42,14 +43,28 @@ export class SidepanelChatCore {
     }
 
     updateArena(modelKey, message) {
-        this.currentChat.messages.at(-1).responses[modelKey].push(message);
+        this.currentChat.messages.at(-1).responses[modelKey].messages.push(message);
 
     }
 
     addAssistantMessage(model, message) {
         message.model = model;
-        fullMessage = { role: 'assistant', contents: [message] };
+        const fullMessage = { role: 'assistant', contents: [message] };
         this.currentChat.messages.push(fullMessage);
+    }
+
+    addUserMessage(message = "", images = [], files = []) {
+        const newMessage = {
+            role: 'user',
+            contents: [{ content: message }],
+            ...(images.length && { images }),
+            ...(files.length && { files })
+        };
+        this.currentChat.messages.push(newMessage);
+    }
+
+    addSystemMessage(message = "") {
+        this.currentChat.messages.push({ role: 'system', contents: [{ content: message }] });
     }
 
     buildFromDB(dbChat, index = null, secondaryIndex = null, modelKey = null) {
@@ -72,7 +87,7 @@ export class SidepanelChatCore {
         }
     }
 
-    getMessagesForAPI(model) {
+    getMessagesForAPI(model = null) {
         const messages = this.currentChat.messages.map(msg => {
             if (msg.role === 'user' || msg.role === 'system') {
                 const { contents, ...message } = msg;
@@ -80,20 +95,21 @@ export class SidepanelChatCore {
             }
             if (msg.responses) {
                 if (!msg.continued_with || msg.continued_with === "none") return undefined;
-                return { role: msg.role, content: msg.responses[msg.continuedWith].messages.at(-1).parts.at(-1)};
+                return { role: msg.role, content: msg.responses[msg.continued_with].messages.at(-1).parts.at(-1)};
             }
             return { role: msg.role, content: msg.contents.at(-1).parts.at(-1) };
         }).filter(msg => msg !== undefined);
         if (messages.at(-1).role === 'assistant') {
             messages.pop();
         }
+        if (!model) return messages;
         return this.togglePrompt(messages, model);
     }
 
     togglePrompt(messages, model) {
-        if (this.messages.length === 0) return;
+        if (messages.length === 0) return;
     
-        let prompt = this.messages[0].contents[0].content;
+        let prompt = messages[0].contents[0].content;
         if (messages[0].role !== 'system') prompt = "";
     
         if (this.stateManager.isThinking(model)) {
@@ -103,10 +119,45 @@ export class SidepanelChatCore {
         }
         
         if (messages[0].role === 'system') {
-            messages[0].contents.content = prompt;
+            messages[0].contents[0].content = prompt;
         } else {
-            messages.unshift({ role: 'system', contents: { content: prompt } });
+            messages.unshift({ role: 'system', contents: [{ content: prompt }] });
         }
         return messages;
+    }
+
+    canContinueWithSameChatId(options, userMsg = null) {
+        const { messages, index, secondaryIndex, modelChoice, fullChatLength } = options;
+        if (!messages?.length || index == null) return false;
+        
+        const lastMessage = messages[messages.length - 1];
+        if (fullChatLength !== messages.length) return false;
+        if (index !== messages.length - 1) return false;
+        const role = lastMessage.role;
+        return role === 'system' || 
+               (role === 'user' && this.isUserMessageEqual(lastMessage, userMsg)) ||
+               (role === 'assistant' && !lastMessage.responses && lastMessage.contents.length === secondaryIndex + 1) ||
+               (secondaryIndex != null && 
+                modelChoice && modelChoice !== "none" &&
+                lastMessage.continued_with === modelChoice && 
+                lastMessage.responses[modelChoice].messages.length === secondaryIndex + 1);
+    }
+
+    isUserMessageEqual(msg1, msg2) {
+        if (!msg1 || !msg2) return false;
+        if (msg1.contents[0].content !== msg2.contents[0].content) return false;
+        if (msg1.files?.length !== msg2.files?.length) return false;
+        if (msg1.images?.length !== msg2.images?.length) return false;
+        if (msg1.files) {
+            for (let i = 0; i < msg1.files.length; i++) {
+                if (msg1.files[i].name !== msg2.files[i].name || msg1.files[i].content !== msg2.files[i].content) return false;
+            }
+        }
+        if (msg1.images) {
+            for (let i = 0; i < msg1.images.length; i++) {
+                if (msg1.images[i] !== msg2.images[i]) return false;
+            }
+        }
+        return true;
     }
 }
