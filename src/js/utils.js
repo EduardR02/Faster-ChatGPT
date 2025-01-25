@@ -505,7 +505,7 @@ export class StreamWriter extends StreamWriterSimple {
 export class ChatStorage {
     constructor() {
         this.dbName = 'llm-chats';
-        this.dbVersion = 1;
+        this.dbVersion = 2;
     }
 
     async getDB() {
@@ -530,6 +530,7 @@ export class ChatStorage {
                         keyPath: 'chatId',
                         autoIncrement: true
                     });
+                    metaStore.createIndex('timestamp', 'timestamp'); 
                 }
             };
         });

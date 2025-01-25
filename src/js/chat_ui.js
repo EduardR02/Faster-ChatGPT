@@ -638,6 +638,11 @@ export class HistoryChatUI extends ChatUI {
 
             items.forEach(item => this.addHistoryItem(item));
             this.stateManager.offset += items.length;
+        } catch (error) {
+            console.error(error);
+            this.stateManager.hasMoreItems = false;
+            this.stateManager.isLoading = false;
+            return;
         } finally {
             this.stateManager.isLoading = false;
             if (this.stateManager.shouldLoadMore()) {
