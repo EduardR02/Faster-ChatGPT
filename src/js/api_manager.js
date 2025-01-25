@@ -234,7 +234,8 @@ export class ApiManager {
                 generationConfig: {
                     temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.gemini),
                     maxOutputTokens: this.settingsManager.getSetting('max_tokens'),
-                    responseMimeType: "text/plain"
+                    responseMimeType: "text/plain",
+                    ...(isThinking && {thinking_config: {include_thoughts: true}})
                 }
             })
         }];
