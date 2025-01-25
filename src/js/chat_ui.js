@@ -617,7 +617,8 @@ export class HistoryChatUI extends ChatUI {
     reloadHistoryList() {
         this.stateManager.reset();
         this.historyList.innerHTML = '';
-        this.loadMore();
+        this.historyList.removeEventListener('scroll', this.handleHistoryScroll);
+        this.initHistoryListHandling();
     }
 
     async loadMore() {
