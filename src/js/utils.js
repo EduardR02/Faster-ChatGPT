@@ -844,6 +844,130 @@ export class ChatStorage {
         });
     }
 
+    async exportChats(options = { pretty: false }) {
+        const db = await this.getDB();
+        const tx = db.transaction(['chatMeta', 'messages'], 'readonly');
+        const metaStore = tx.objectStore('chatMeta');
+        const messageStore = tx.objectStore('messages');
+    
+        const archive = {
+            exportedAt: new Date().toISOString(),
+            schemaVersion: this.dbVersion,
+            chats: {}
+        };
+    
+        // Function to iterate through a cursor and return a Promise
+        const iterateCursor = (store, indexName, keyRange, processItem) => {
+            return new Promise((resolve, reject) => {
+                const request = indexName
+                    ? store.index(indexName).openCursor(keyRange)
+                    : store.openCursor();
+    
+                request.onerror = () => reject(request.error);
+    
+                request.onsuccess = function (event) {
+                    const cursor = event.target.result;
+                    if (cursor) {
+                        processItem(cursor.value);
+                        cursor.continue();
+                    } else {
+                        resolve(); // No more items
+                    }
+                };
+            });
+        };
+    
+        // 1. Fetch all chat metadata
+        await iterateCursor(metaStore, null, null, (chatMeta) => {
+            archive.chats[chatMeta.chatId] = {
+                ...chatMeta,
+                messages: []
+            };
+        });
+    
+        // 2. Fetch messages for each chat
+        for (const chatId in archive.chats) {
+            await iterateCursor(messageStore, 'chatId', IDBKeyRange.only(parseInt(chatId, 10)), (message) => { // Parse chatId to number
+                archive.chats[chatId].messages.push(message);
+            });
+        }
+    
+        return JSON.stringify(archive, null, options.pretty ? 2 : 0);
+    }
+
+    async importChats(archiveJson) {
+        try {
+            const archive = JSON.parse(archiveJson);
+            if (!archive || typeof archive !== 'object' || !archive.chats) {
+                throw new Error("Invalid archive format: missing 'chats' property.");
+            }
+    
+            const db = await this.getDB();
+            const tx = db.transaction(['chatMeta', 'messages'], 'readwrite');
+            const metaStore = tx.objectStore('chatMeta');
+            const messageStore = tx.objectStore('messages');
+    
+            let importCount = 0;
+    
+            for (const chatIdStr in archive.chats) {
+                if (!archive.chats.hasOwnProperty(chatIdStr)) continue;
+                const archivedChatId = parseInt(chatIdStr, 10); // Keep the archived ID for comparison
+                const chatData = archive.chats[chatIdStr];
+    
+                if (!chatData.messages || !Array.isArray(chatData.messages)) {
+                    console.warn(`Skipping chat ${archivedChatId}: messages missing or not an array.`);
+                    continue;
+                }
+    
+                const existingChatMetaRequest = await metaStore.get(archivedChatId);
+    
+                if (existingChatMetaRequest && existingChatMetaRequest.timestamp === chatData.timestamp && existingChatMetaRequest.title === chatData.title) {
+                    console.warn(`Skipping chat ${archivedChatId}: Already exists and has identical identifiers.`);
+                    continue;
+                }
+                // Create new: Ignore archived ID, get auto-incremented ID
+                const { chatId, messages, ...chatMeta } = chatData;
+                const metaRequest = metaStore.add({
+                    ...chatMeta,
+                    continued_from_chat_id: chatMeta.continued_from_chat_id || null
+                });
+                const newChatId = await new Promise(resolve => {
+                    metaRequest.onsuccess = () => resolve(metaRequest.result);
+                    metaRequest.onerror = () => resolve(null);
+                });
+                if (!newChatId) {
+                    console.error(`Failed to create new chat meta for imported chat (conflicting or new).`);
+                    continue;
+                }
+    
+                for (const message of messages) {
+                    await messageStore.add({ ...message, chatId: newChatId });
+                }
+                importCount++;
+            }
+            return { success: true, count: importCount };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    }
+
+    triggerDownload(json, filename = `chat-backup-${Date.now()}.json`) {
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+
+        setTimeout(() => {
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }, 100);
+    }
+
     createNewChatTracking(title) {
         return {
             id: null,
@@ -884,8 +1008,7 @@ export class ChatStorage {
         messageId: autoincrement,
         timestamp: number,
         role: 'user' | 'assistant' | 'system',
-        model?: string,  // For assistant messages
-        content: string,
+        contents: [ { thoughts:[], parts:[], model: string } | { text: string } ]  // Latest is current, previous are regenerations
         images?: string[] // Optional, user only
         files?: {filename: string, content: string}[]   // Optional, user only (array of objects in case duplicate filenames)
     },
@@ -900,11 +1023,11 @@ export class ChatStorage {
         responses: {
             model_a: {
                 name: string,
-                messages: string[]  // Latest is current, previous are regenerations
+                messages: [ { thoughts:[], parts:[] } ]  // Latest is current, previous are regenerations
             },
             model_b: {
                 name: string,
-                messages: string[]
+                messages: [ { thoughts:[], parts:[] } ]
             },
         }
     }

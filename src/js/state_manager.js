@@ -348,6 +348,13 @@ export class HistoryStateManager extends ArenaStateManager {
     isSolving(_) {
         return false;
     }
+
+    reset() {
+        this.isLoading = false;
+        this.offset = 0;
+        this.hasMoreItems = true;
+        this.lastDateCategory = null;
+    }
 }
 
 

@@ -318,9 +318,60 @@ async function autoRenameUnmodified() {
 }
 
 
+async function initiateChatBackupDownload(element) {
+    try {
+        const chatDataJson = await chatStorage.exportChats({ pretty: true });
+        chatStorage.triggerDownload(chatDataJson);
+        element.textContent = "success!";
+    } catch (error) {
+        element.textContent = "failed :(";
+        console.error(error);
+    }
+    setTimeout(() => {
+        element.textContent = "export";
+    }, 5000);
+}
+
+
+async function initiateChatBackupImport(element) {
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'application/json';
+
+    fileInput.onchange = async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            element.textContent = "no file selected";
+            setTimeout(() => {
+                element.textContent = "import";
+            }, 3000);
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            try {
+                const importResult = await chatStorage.importChats(e.target.result);
+                element.textContent = importResult.success ? `${importResult.count} added` : 'failed :(';
+                if (!importResult.success) console.error("Import error:", importResult.error);
+                chatUI.reloadHistoryList();
+            } catch (error) {
+                element.textContent = "failed :(";
+                console.error("Import error:", error);
+            }
+            setTimeout(() => { element.textContent = "import"; }, 5000);
+        };
+        reader.readAsText(file);
+    };
+    fileInput.click(); // Programmatically trigger file selection
+}
+
+
 function init() {
     initMessageListeners();
     document.getElementById('auto-rename').onclick = autoRenameUnmodified;
+    document.getElementById('export').onclick = (e) => initiateChatBackupDownload(e.target);
+    document.getElementById('import').onclick = (e) => initiateChatBackupImport(e.target);
 }
 
 

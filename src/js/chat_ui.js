@@ -172,7 +172,9 @@ class ChatUI {
         arenaDivs.forEach((wrapper, index) => {
             const className = continued_with === modelKeys[index] ? 'arena-winner' : 'arena-loser';
             wrapper.querySelectorAll('.assistant-message').forEach(message => {
-                message.querySelector('.message-content').classList.add(className);
+                message.querySelectorAll('.message-content').forEach(content => {
+                    if (!content.classList.contains('thoughts')) content.classList.add(className);
+                  });
                 const prefix = message.querySelector('.message-prefix');
 
                 const elo = updatedElo ? updatedElo[index] : null;
@@ -600,7 +602,6 @@ export class HistoryChatUI extends ChatUI {
 
         super(baseOptions);
         this.historyList = this.stateManager.historyList;
-        this.lastDateCategory = null;
 
         this.loadMore = this.loadMore.bind(this);
         this.handleHistoryScroll = this.handleHistoryScroll.bind(this);
@@ -611,6 +612,12 @@ export class HistoryChatUI extends ChatUI {
         this.getChatMeta = getChatMeta;
 
         this.initHistoryListHandling();
+    }
+
+    reloadHistoryList() {
+        this.stateManager.reset();
+        this.historyList.innerHTML = '';
+        this.loadMore();
     }
 
     async loadMore() {
@@ -655,10 +662,10 @@ export class HistoryChatUI extends ChatUI {
     addHistoryItem(chat) {
         const currentCategory = this.getDateCategory(chat.timestamp);
 
-        if (currentCategory !== this.lastDateCategory) {
+        if (currentCategory !== this.stateManager.lastDateCategory) {
             const divider = this.createDateDivider(currentCategory);
             this.historyList.appendChild(divider);
-            this.lastDateCategory = currentCategory;
+            this.stateManager.lastDateCategory = currentCategory;
         }
 
         const item = this.createHistoryItem(chat);
@@ -751,7 +758,7 @@ export class HistoryChatUI extends ChatUI {
 
     createDateDivider(category, paddingTop = true) {
         const divider = createElementWithClass('div', 'history-divider', category);
-        if (this.lastDateCategory !== null) {
+        if (this.stateManager.lastDateCategory !== null) {
             divider.style.paddingTop = '1rem';
         }
         if (!paddingTop) divider.style.paddingTop = '0';
