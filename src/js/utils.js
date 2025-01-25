@@ -902,47 +902,54 @@ export class ChatStorage {
             if (!archive?.chats) throw new Error("Invalid archive format");
     
             const db = await this.getDB();
-            const tx = db.transaction(['chatMeta', 'messages'], 'readwrite');
-            const metaStore = tx.objectStore('chatMeta');
-            const messageStore = tx.objectStore('messages');
-    
-            // Get existing fingerprints
+            
+            // Fingerprint check outside transaction to avoid version contention
             const existingChats = await this.getChatMetadata(Infinity);
             const existingFingerprints = new Set(
                 existingChats.map(c => `${c.title}::${c.timestamp}`)
             );
+            const chatQueue = Object.values(archive.chats).filter(chat => 
+                !existingFingerprints.has(`${chat.title}::${chat.timestamp}`)
+            );
+    
+            const tx = db.transaction(['chatMeta', 'messages'], 'readwrite');
+            const metaStore = tx.objectStore('chatMeta');
+            const messageStore = tx.objectStore('messages');
     
             let importedCount = 0;
-            
-            for (const chatIdStr in archive.chats) {
-                const chatData = archive.chats[chatIdStr];
+            // Batch processing with controlled parallelism
+            while (chatQueue.length) {
+                const batch = chatQueue.splice(0, 20);
                 
-                // Create fingerprint
-                const fingerprint = `${chatData.title}::${chatData.timestamp}`;
-                if (existingFingerprints.has(fingerprint)) {
-                    console.log(`Skipping duplicate chat: ${fingerprint}`);
-                    continue;
-                }
-
-                const { messages, chatId, ...chatMeta } = chatData;
-                const newChatId = await new Promise(resolve => {
-                    const req = metaStore.add(chatMeta);
-                    req.onsuccess = () => resolve(req.result);
-                    req.onerror = () => resolve(null);
-                });
+                await Promise.all(batch.map(async (chatData) => {
+                    // Atomic per-chat sequence
+                    const { messages, chatId, ...chatMeta } = chatData;
+                    
+                    const newChatId = await new Promise(resolve => {
+                        const req = metaStore.add(chatMeta);
+                        req.onsuccess = () => resolve(req.result);
+                        req.onerror = () => resolve(null);
+                    });
     
-                if (!newChatId) continue;
+                    if (!newChatId) return;
     
-                await Promise.all(messages.map(msg => 
-                    new Promise((resolve, reject) => {
-                        const req = messageStore.add({ ...msg, chatId: newChatId });
-                        req.onsuccess = resolve;
-                        req.onerror = reject;
-                    })
-                ));
+                    // Parallel message insertion WITHIN chat context
+                    await Promise.all(messages.map(msg => 
+                        new Promise((resolve, reject) => {
+                            messageStore.add({ ...msg, chatId: newChatId }).onsuccess = resolve;
+                        })
+                    ));
     
-                importedCount++;
+                    importedCount++;
+                }));
             }
+    
+            // Transaction finalization
+            await new Promise((resolve, reject) => {
+                tx.oncomplete = resolve;
+                tx.onerror = () => reject(tx.error);
+            });
+    
             return { success: true, count: importedCount };
         } catch (error) {
             return { success: false, error: error.message };
