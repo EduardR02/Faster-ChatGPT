@@ -899,54 +899,51 @@ export class ChatStorage {
     async importChats(archiveJson) {
         try {
             const archive = JSON.parse(archiveJson);
-            if (!archive || typeof archive !== 'object' || !archive.chats) {
-                throw new Error("Invalid archive format: missing 'chats' property.");
-            }
+            if (!archive?.chats) throw new Error("Invalid archive format");
     
             const db = await this.getDB();
             const tx = db.transaction(['chatMeta', 'messages'], 'readwrite');
             const metaStore = tx.objectStore('chatMeta');
             const messageStore = tx.objectStore('messages');
     
-            let importCount = 0;
+            // Get existing fingerprints
+            const existingChats = await this.getChatMetadata(Infinity);
+            const existingFingerprints = new Set(
+                existingChats.map(c => `${c.title}::${c.timestamp}`)
+            );
     
+            let importedCount = 0;
+            
             for (const chatIdStr in archive.chats) {
-                if (!archive.chats.hasOwnProperty(chatIdStr)) continue;
-                const archivedChatId = parseInt(chatIdStr, 10); // Keep the archived ID for comparison
                 const chatData = archive.chats[chatIdStr];
-    
-                if (!chatData.messages || !Array.isArray(chatData.messages)) {
-                    console.warn(`Skipping chat ${archivedChatId}: messages missing or not an array.`);
+                
+                // Create fingerprint
+                const fingerprint = `${chatData.title}::${chatData.timestamp}`;
+                if (existingFingerprints.has(fingerprint)) {
+                    console.log(`Skipping duplicate chat: ${fingerprint}`);
                     continue;
                 }
-    
-                const existingChatMetaRequest = await metaStore.get(archivedChatId);
-    
-                if (existingChatMetaRequest && existingChatMetaRequest.timestamp === chatData.timestamp && existingChatMetaRequest.title === chatData.title) {
-                    console.warn(`Skipping chat ${archivedChatId}: Already exists and has identical identifiers.`);
-                    continue;
-                }
-                // Create new: Ignore archived ID, get auto-incremented ID
-                const { chatId, messages, ...chatMeta } = chatData;
-                const metaRequest = metaStore.add({
-                    ...chatMeta,
-                    continued_from_chat_id: chatMeta.continued_from_chat_id || null
-                });
+
+                const { messages, chatId, ...chatMeta } = chatData;
                 const newChatId = await new Promise(resolve => {
-                    metaRequest.onsuccess = () => resolve(metaRequest.result);
-                    metaRequest.onerror = () => resolve(null);
+                    const req = metaStore.add(chatMeta);
+                    req.onsuccess = () => resolve(req.result);
+                    req.onerror = () => resolve(null);
                 });
-                if (!newChatId) {
-                    console.error(`Failed to create new chat meta for imported chat (conflicting or new).`);
-                    continue;
-                }
     
-                for (const message of messages) {
-                    await messageStore.add({ ...message, chatId: newChatId });
-                }
-                importCount++;
+                if (!newChatId) continue;
+    
+                await Promise.all(messages.map(msg => 
+                    new Promise((resolve, reject) => {
+                        const req = messageStore.add({ ...msg, chatId: newChatId });
+                        req.onsuccess = resolve;
+                        req.onerror = reject;
+                    })
+                ));
+    
+                importedCount++;
             }
-            return { success: true, count: importCount };
+            return { success: true, count: importedCount };
         } catch (error) {
             return { success: false, error: error.message };
         }
