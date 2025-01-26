@@ -1,12 +1,19 @@
+import { SidepanelRenameManager } from './rename_manager.js';
+
+
 export class ChatCore {
     constructor(chatStorage) {
         this.chatStorage = chatStorage;
         this.currentChat = null // Raw DB state
-        this.reset();
+        this.init();
+    }
+
+    init(title = "") {
+        this.currentChat = this.chatStorage.createNewChatTracking(title);
     }
 
     reset(title = "") {
-        this.currentChat = this.chatStorage.createNewChatTracking(title);
+        this.init(title);
     }
 
     miscUpdate(update = {}) {
@@ -27,15 +34,23 @@ export class ChatCore {
 
 
 export class SidepanelChatCore extends ChatCore {
-    constructor(chatStorage, stateManager) {
+    constructor(chatStorage, stateManager, chatHeader) {
         super(chatStorage);
-        this.shouldSave = true;
         this.stateManager = stateManager;
+        this.renameManager = new SidepanelRenameManager(stateManager);
+        this.continuedChatOptions = {};
+        this.chatHeader = chatHeader;
+    }
+
+    reset(title = "") {
+        super.reset(title);
+        this.continuedChatOptions = {};
     }
 
     appendRegenerated(model, message) {
         message.model = model;
         this.currentChat.messages.at(-1).contents.push(message);
+        this.updateSaved();
     }
 
     initArena(modelA, modelB) {
@@ -44,13 +59,14 @@ export class SidepanelChatCore extends ChatCore {
 
     updateArena(modelKey, message) {
         this.currentChat.messages.at(-1).responses[modelKey].messages.push(message);
-
+        this.updateSaved();
     }
 
     addAssistantMessage(model, message) {
         message.model = model;
         const fullMessage = { role: 'assistant', contents: [message] };
         this.currentChat.messages.push(fullMessage);
+        this.saveNew();
     }
 
     addUserMessage(message = "", images = [], files = []) {
@@ -61,10 +77,55 @@ export class SidepanelChatCore extends ChatCore {
             ...(files.length && { files })
         };
         this.currentChat.messages.push(newMessage);
+        this.saveNew();
     }
 
     addSystemMessage(message = "") {
         this.currentChat.messages.push({ role: 'system', contents: [{ content: message }] });
+    }
+
+    saveNew() {
+        if (!this.stateManager.shouldSave) return;
+        if (Object.keys(this.continuedChatOptions).length > 0) {
+            const options = this.continuedChatOptions;
+            this.continuedChatOptions = {};
+            if (this.canContinueWithSameChatId(options, this.currentChat.messages[options.index])) {
+                const toAdd = this.currentChat.messages.length - options.fullChatLength;
+                if (toAdd > 0) this.addMessageToExistingChat(toAdd);
+                return;
+            }
+            // If can't continue with same ID, create new chat with continued-from reference
+            this.createNewChat(this.currentChat.chatId, false);
+            return;
+        }
+        if (!this.currentChat.chatId) this.createNewChat();
+        else this.addMessageToExistingChat();
+    }
+
+    updateSaved() {
+        if (!this.stateManager.shouldSave) return;
+        this.chatStorage.updateMessage(this.currentChat.chatId, this.currentChat.messages.length - 1, this.currentChat.messages.at(-1));
+    }
+
+    createNewChat(continuedFromId = null, shouldAutoRename = true) {
+        this.chatStorage.createChatWithMessages(
+            this.currentChat.title, 
+            this.currentChat.messages,
+            continuedFromId
+        ).then(res => {
+            this.currentChat.chatId = res.chatId;
+            if (shouldAutoRename) {
+                this.renameManager.autoRename(this.currentChat.chatId, this.chatHeader, this.currentChat.title);
+            }
+        });
+    }
+
+    addMessagesToExistingChat(count = 1) {
+        this.chatStorage.addMessages(
+            this.currentChat.chatId, 
+            this.currentChat.messages.slice(-count), 
+            this.currentChat.messages.length - count
+        );
     }
 
     buildFromDB(dbChat, index = null, secondaryIndex = null, modelKey = null) {
