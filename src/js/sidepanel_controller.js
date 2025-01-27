@@ -1,5 +1,6 @@
 import { TokenCounter, StreamWriter, StreamWriterSimple, Footer, canContinueWithSameChatId, ArenaRatingManager } from './utils.js';
 import { SidepanelRenameManager } from './rename_manager.js';
+import { SidepanelChatCore } from './chat_core.js';
 
 
 export class SidepanelController {
@@ -18,104 +19,80 @@ export class SidepanelController {
         this.renameManager = new SidepanelRenameManager(chatStorage);
         this.arenaRatingManager = new ArenaRatingManager();
         this.arenaRatingManager.initDB();
+        this.chatCore = new SidepanelChatCore(chatStorage, stateManager, this.chatUI.getChatHeader());
         
-        this.messages = [];
-        this.pendingMessage = {};
-        this.currentChat = null;
-        this.initialPrompt = "";
         this.thoughtLoops = [0, 0];
-        this.pendingFiles = {};
-        this.pendingImages = {};
-        this.tempMediaId = 0;
     }
 
     initStates(chatName) {
         this.handleDefaultArenaChoice();
         this.thoughtLoops = [0, 0];
         this.stateManager.resetChatState();
-        this.currentChat = this.chatStorage.createNewChatTracking(chatName);
-        this.pendingMessage = {};
-        this.messages = [];
-        this.pendingFiles = {};
-        this.pendingImages = {};
-        this.tempMediaId = 0;
+        this.chatCore.reset(chatName);
     }
 
-    async makeApiCall(model) {
-        const contentDiv = this.chatUI.getContentDiv(model);
+    async makeApiCall(model, isRegenerate = false) {
         const api_provider = this.apiManager.getProviderForModel(model);
         const tokenCounter = new TokenCounter(api_provider);
-        const isArenaMode = this.stateManager.isArenaModeActive;
-        const messages = this.togglePrompt(model, this.messages.concat(this.resolvePendingHandler(model)));
+        const messages = this.chatCore.getMessagesForAPI(model);
 
         try {
-            let streamWriter = this.createStreamWriter(contentDiv, isArenaMode, api_provider);
+            let streamWriter = this.createStreamWriter(this.chatUI.getContentDiv(model), this.stateManager.isArenaModeActive, api_provider);
+            const streamResponse = this.stateManager.getSetting('stream_response');
             const response = await this.apiManager.callApi(
-                model, 
-                messages, 
-                tokenCounter, 
-                this.stateManager.getSetting('stream_response') ? streamWriter : null
+                model,
+                messages,
+                tokenCounter,
+                streamResponse ? streamWriter : null
             );
 
-            await this.processApiResponse(response, streamWriter, tokenCounter, model);
-            
+            if (!streamResponse) {
+                response.forEach(msg => streamWriter.processContent(msg.content, msg.type === 'thought'));
+            }
+
+            const msgFooter = this.createMessageFooter(tokenCounter, model);
+            await streamWriter.addFooter(msgFooter);
+
+            this.saveResponseMessage(streamWriter.parts, model, isRegenerate);
+            tokenCounter.updateLifetimeTokens();
+            this.handleThinkingMode(streamWriter.parts.at(-1), model, isRegenerate);
+
         } catch (error) {
             this.chatUI.addErrorMessage(`Error: ${error.message}`);
         }
     }
 
+    saveResponseMessage(message, model, isRegen) {
+        if (this.stateManager.isArenaModeActive) this.chatCore.updateArena(this.stateManager.getArenaModelKey(model), message);
+        if (isRegen) this.chatCore.appendRegenerated(model, message);
+        else this.chatCore.addAssistantMessage(model, message);
+    }
+
     handleArenaChoice(choice) {;
-        const currentMessage = this.getCurrentArenaMessage();
+        const currentMessage = this.chatCore.getLatestMessage();
         this.chatUI.removeArenaFooter();
         
         // Update message state
-        currentMessage.choice = choice;
         const winnerIndex = this.determineWinnerIndex(choice);
         const winner = winnerIndex !== -1 ? this.stateManager.getArenaModel(winnerIndex) : null;
         
-        currentMessage.continued_with = winner ? 
+        const continued_with = winner ? 
             (winnerIndex === 0 ? "model_a" : "model_b") : 
             "none";
-
         // Update UI and state
+        this.chatCore.updateArenaMisc(choice, continued_with);
         const [modelA, modelB] = this.stateManager.getArenaModels();
         if (['model_a', 'model_b', 'draw', 'draw(bothbad)'].includes(choice)) {
             this.arenaRatingManager.addMatchAndUpdate(modelA, modelB, choice);
         }
         const ratings = [this.arenaRatingManager.getModelRating(modelA), this.arenaRatingManager.getModelRating(modelB)];
         this.chatUI.resolveArena(choice, currentMessage.continued_with, null, ratings);
-        
-        // Save if needed
-        if (this.currentChat.id !== null && this.stateManager.shouldSave) {
-            this.chatStorage.updateArenaMessage(
-                this.currentChat.id, 
-                this.currentChat.messages.length - 1,
-                currentMessage
-            );
-        }
-
         this.stateManager.clearArenaState();
         
         // Handle continuation
         if (choice === 'no_choice(bothbad)') {
-            this.pendingMessage = {};
             this.initApiCall();
-        } else if (winner) {
-            this.resolvePending(winner);
         }
-    }
-
-    addToPending(message, model, role = 'assistant') {
-        if (this.stateManager.isArenaModeActive) {
-            this.addToArenaPending(message, model);
-        } else {
-            this.addToNormalPending(message, model, role);
-        }
-    }
-
-    resolvePending(model = null) {
-        this.messages.push(...this.resolvePendingHandler(model));
-        this.pendingMessage = {};
     }
 
     // Private methods
@@ -134,27 +111,6 @@ export class SidepanelController {
         );
     }
 
-    async processApiResponse(response, streamWriter, tokenCounter, model) {
-        if (!this.stateManager.getSetting('stream_response')) {
-            if (response?.thoughts !== undefined) {
-                streamWriter.setThinkingModel();
-                streamWriter.processContent(response.thoughts, true);
-                streamWriter.processContent(response.text);
-            } else {
-                streamWriter.processContent(response);
-            }
-        }
-
-        const msgFooter = this.createMessageFooter(tokenCounter, model);
-        await streamWriter.addFooter(
-            msgFooter,
-            (msg) => this.addToPending(msg, model)
-        );
-
-        tokenCounter.updateLifetimeTokens();
-        this.handleThinkingMode(streamWriter.fullMessage, model);
-    }
-
     createMessageFooter(tokenCounter, model) {
         return new Footer(
             tokenCounter.inputTokens,
@@ -165,26 +121,24 @@ export class SidepanelController {
         );
     }
 
-    handleThinkingMode(msg, model) {
+    handleThinkingMode(lastPart, model, isRegenerate) {
         if (!this.stateManager.isThinking(model)) return;
         
         const idx = this.stateManager.getModelIndex(model);
         this.thoughtLoops[idx]++;
         
-        const thinkMore = msg.includes("*continue*");
+        const thinkMore = lastPart.content.includes("*continue*");
         const maxItersReached = this.thoughtLoops[idx] >= this.stateManager.getSetting('loop_threshold');
-        
-        if (thinkMore && !maxItersReached) {
-            this.addToPending("*System message: continue thinking*", model, 'user');
-        } else {
-            const systemMsg = maxItersReached ? 
+        let systemMessage = "*System message: continue thinking*";
+        if (!thinkMore || maxItersReached) {
+            systemMessage = maxItersReached ? 
                 "*System message: max iterations reached, solve now*" : 
                 "*System message: solve now*";
-            this.addToPending(systemMsg, model, 'user');
+            
             this.stateManager.nextThinkingState(model);
         }
-        
-        this.chatUI.regenerateResponse(model, false);
+        this.chatCore.addUserMessageWithoutMedia(systemMessage);
+        this.chatUI.regenerateResponse(model, isRegenerate);
         this.makeApiCall(model);
     }
 
@@ -216,7 +170,7 @@ export class SidepanelController {
         this.stateManager.initArenaResponse(model1, model2);
         this.stateManager.initThinkingState();
         this.chatUI.createArenaMessage();
-        this.currentChat.messages.push(this.chatStorage.initArenaMessage(model1, model2));
+        this.chatCore.initArena(model1, model2);
         
         await Promise.all([
             this.makeApiCall(model1),
@@ -234,209 +188,45 @@ export class SidepanelController {
         return [shuffled[0], shuffled[1]];
     }
 
-    addToNormalPending(message, model, role) {
-        const historyMsg = { role, content: message, model };
-        this.currentChat.messages.push(historyMsg);
-
-        if (this.currentChat.id !== null && this.stateManager.shouldSave) {
-            this.chatStorage.addMessages(
-                this.currentChat.id, 
-                [historyMsg], 
-                this.currentChat.messages.length - 1
-            );
-        }
-
-        this.pendingMessage[model] = this.pendingMessage[model] || [];
-        this.pendingMessage[model].push({ role, content: message });
-    }
-
-    addToArenaPending(message, model) {
-        const currentMessage = this.getCurrentArenaMessage();        
-        currentMessage.responses[this.stateManager.getArenaModelKey(model)].messages.push(message);
-        
-        if (this.currentChat.id !== null && this.stateManager.shouldSave) {
-            this.chatStorage.updateArenaMessage(
-                this.currentChat.id,
-                this.currentChat.messages.length - 1,
-                currentMessage
-            );
-        }
-
-        this.pendingMessage[model] = this.pendingMessage[model] || [];
-        this.pendingMessage[model].push({ role: 'assistant', content: message });
-    }
-
-    resolvePendingHandler(model = null) {
-        if (Object.keys(this.pendingMessage).length === 0) return [];
-        
-        if (model && model in this.pendingMessage) {
-            return this.pendingMessage[model];
-        }
-        
-        if (model && this.stateManager.isArenaModeActive) {
-            return [];
-        }
-        
-        if (this.stateManager.getSetting('current_model') in this.pendingMessage) {
-            return this.pendingMessage[this.stateManager.getSetting('current_model')];
-        }
-        
-        return this.pendingMessage[Object.keys(this.pendingMessage)[0]];
-    }
-
     async initPrompt(context) {
         let promptString = context.mode + "_prompt";
         try {
             await this.stateManager.loadPrompt(promptString);
-            this.messages = [];
-            this.pendingMessage = {};
             
             let prompt = this.stateManager.getPrompt('active_prompt');
             if (context.mode === "selection") {
                 prompt += `\n"""[${context.url}]"""\n"""[${context.text}]"""`;
             }
             
-            this.appendContext(prompt, 'system');
-            this.initialPrompt = prompt;
+            this.chatCore.insertSystemMessage(prompt);
         } catch (error) {
             this.chatUI.addErrorMessage(`Error loading ${context.mode} prompt file:\n${error.message}`);
             throw error;
         }
     }
 
-    getSystemPrompt() {
-        return this.messages[0]?.role === 'system' ? this.messages[0].content : null;
-    }
-    
-    setSystemPrompt(prompt) {
-        if (!prompt) return;
-        
-        if (this.messages.length === 0) {
-            this.messages.push({ role: 'system', content: prompt });
-        } else if (this.messages[0].role === 'system') {
-            this.messages[0].content = prompt;
-        } else {
-            this.messages.unshift({ role: 'system', content: prompt });
-        }
-        this.initialPrompt = prompt;
-    }
-    
-    appendContext(message, role) {
-        this.messages.push({ role, content: message });
-        this.realizePendingFiles(role);
-        const newMsg = this.messages[this.messages.length - 1];
-
-        if (this.currentChat) this.currentChat.messages.push(newMsg);
-        if (!this.currentChat || role !== 'user') return;
-        
-        if (Object.keys(this.stateManager.continuedChatOptions).length > 0) {
-            const options = this.stateManager.continuedChatOptions;
-            this.stateManager.clearContinuedChat();
-            if (canContinueWithSameChatId(options, newMsg)) {
-                const lastRole = options.messages.at(-1).role;
-                this.stateManager.clearContinuedChat();
-                if (lastRole === 'user') return;    // message already added
-                this.addMessageToExistingChat(newMsg);
-                return;
-            }
-            // If can't continue with same ID, create new chat with continued-from reference
-            this.createNewChat(this.currentChat.id, false);
-            return;
-        }
-    
-        if (this.currentChat.id === null) {
-            this.currentChat.messages = [...this.messages];
-            this.createNewChat();
-        } else {
-            this.addMessageToExistingChat(newMsg);
-        }
-    }
-    
-    createNewChat(continuedFromId = null, shouldAutoRename = true) {        
-        if (this.stateManager.shouldSave) {
-            this.chatStorage.createChatWithMessages(
-                this.currentChat.title, 
-                this.currentChat.messages,
-                continuedFromId
-            ).then(res => {
-                this.currentChat.id = res.chatId;
-                if (shouldAutoRename) {
-                    this.renameManager.autoRename(this.currentChat.id, this.chatUI.getChatHeader(), this.currentChat.title);
-                }
-            });
-        }
-    }
-    
-    addMessageToExistingChat(message) {
-        if (this.stateManager.shouldSave) {
-            this.chatStorage.addMessages(
-                this.currentChat.id, 
-                [message], 
-                this.currentChat.messages.length - 1
-            );
-        }
+    sendUserMessage() {
+        const text = this.chatUI.getTextAreaText().trim();
+        if (!text) return;
+        this.chatUI.setTextAreaText('');
+        this.handleDefaultArenaChoice();
+        this.chatUI.addMessage('user', text);
+        this.chatUI.removeRegenerateButtons();
+        this.chatCore.addUserMessage(text);
+        this.initApiCall();
     }
 
     collectPendingUserMessage() {
         const text = this.chatUI.getTextAreaText().trim();
-        const hasImages = Object.keys(this.pendingImages).length > 0;
-        const hasFiles = Object.keys(this.pendingFiles).length > 0;
-    
-        if (!text && !hasImages && !hasFiles) {
-            return null;
-        }
-    
-        const message = { role: 'user' };
-    
-        if (text) message.content = text;
-        if (hasImages) message.images = Object.values(this.pendingImages);
-        if (hasFiles) message.files = Object.values(this.pendingFiles);
-        return message;
-    }
-    
-    realizePendingFiles(role) {
-        if (role !== 'user') return;
-        
-        if (Object.keys(this.pendingImages).length > 0) {
-            this.messages[this.messages.length - 1].images = Object.values(this.pendingImages);
-            this.pendingImages = {};
-        }
-
-        if (Object.keys(this.pendingFiles).length) {
-            this.messages.at(-1).files = Object.values(this.pendingFiles);
-            this.pendingFiles = {};
-        }
-        this.chatUI.removeCurrentRemoveMediaButtons();
+        return this.chatCore.collectPendingUserMessage(text);
     }
 
-    appendPendingImages(images) {
-        images.forEach(image => {
-            const currentId = this.tempMediaId;
-            this.pendingImages[currentId] = image;
-            this.chatUI.appendImage(image, () => this.removeImage(currentId));
-            this.tempMediaId++;
+    appendPendingMedia(media, type) {
+        media.forEach(item => {
+            const currentId = this.chatCore.appendMedia(item, type);
+            if (type === 'image') this.chatUI.appendImage(item, () => this.chatCore.removeMedia(currentId));
+            else this.chatUI.appendFile(item, () => this.chatCore.removeMedia(currentId));
         });
-    }
-
-    appendPendingFiles(files) {
-        files.forEach(file => {
-            const currentId = this.tempMediaId;     // ensure that the callback function gets the correct id
-            this.pendingFiles[currentId] = file;
-            this.chatUI.appendFile(file, () => this.removeFile(currentId));
-            this.tempMediaId++;
-        });
-    }
-
-    removeFile(tempId) {
-        delete this.pendingFiles[tempId];
-    }
-
-    removeImage(tempId) {
-        delete this.pendingImages[tempId];
-    }
-
-    getCurrentArenaMessage() {
-        return this.currentChat.messages[this.currentChat.messages.length - 1];
     }
 
     determineWinnerIndex(choice) {
@@ -454,25 +244,6 @@ export class SidepanelController {
         }
     }
 
-    togglePrompt(model, messages) {
-        if (this.messages.length === 0) return;
-    
-        let prompt = this.initialPrompt;
-    
-        if (this.stateManager.isThinking(model)) {
-            prompt += "\n\n" + this.stateManager.getPrompt('thinking');
-        } else if (this.stateManager.isSolving(model)) {
-            prompt += "\n\n" + this.stateManager.getPrompt('solver');
-        }
-        
-        if (messages[0].role === 'system') {
-            messages[0].content = prompt;
-        } else {
-            messages.unshift({ role: 'system', content: prompt });
-        }
-        return messages;
-    }
-
     regenerateResponse(model) {
         this.stateManager.updateThinkingMode();
         this.thoughtLoops[this.stateManager.getModelIndex(model)] = 0;
@@ -481,82 +252,11 @@ export class SidepanelController {
         this.chatUI.regenerateResponse(model);
 
         this.chatUI.initScrollListener();
-        this.discardPending(model);
         
         const actualModel = this.stateManager.isArenaModeActive ? 
             model : 
             this.stateManager.getSetting('current_model');
             
-        this.makeApiCall(actualModel);
-    }
-
-    discardPending(model = null) {
-        if (model && model in this.pendingMessage) {
-            delete this.pendingMessage[model];
-        } else if (model === null) {
-            this.pendingMessage = {};
-        }
-    }
-
-    buildAPIChatFromHistoryFormat(historyChat, continueFromIndex = null, arenaMessageIndex = null, modelChoice = null) {
-        this.currentChat = {
-            id: historyChat.meta.chatId,
-            title: historyChat.meta.title,
-            continued_from_chat_id: historyChat.meta.continued_from_chat_id || null,
-            messages: (continueFromIndex ? historyChat.messages.slice(0, continueFromIndex + 1) : historyChat.messages)
-                .map(({ messageId, timestamp, chatId, ...msg }) => msg)
-        };
-        const workingMessages = this.currentChat.messages;
-        if (workingMessages.length) this.initialPrompt = workingMessages[0].content;
-
-        this.messages = [];
-        this.pendingMessage = {};
-        for (let i = 0; i < workingMessages.length; i++) {
-            const msg = workingMessages[i];
-            const isLastMessage = i === workingMessages.length - 1;
-
-            if (isLastMessage && msg.role === 'user') {
-                this.currentChat.messages.pop();
-                return;
-            }
-    
-            // If it's not an assistant message, add it
-            if (msg.role !== 'assistant') {
-                const { chatId, messageId, timestamp, ...rest } = msg;
-                this.messages.push(rest);
-                continue;
-            }
-    
-            // Find next user message
-            let nextUserIndex = workingMessages.findIndex((m, idx) =>
-                idx > i && ('content' in m && m.role === 'user')
-            );
-    
-            // For assistant messages (both regular and arena), 
-            // take if it's the last one before next user (or end of messages)
-            if (nextUserIndex === -1 ? (i === workingMessages.length - 1) : (i === nextUserIndex - 1)) {
-                if ('content' in msg) {
-                    this.messages.push({
-                        role: 'assistant',
-                        content: msg.content
-                    });
-                } else {  // arena message
-                    // If it's the last message and we're continuing from it, use modelChoice and arenaMessageIndex
-                    const model = (isLastMessage ? modelChoice : msg.continued_with) || 'model_a';
-                    // this case should actually not be possible, because 'none' means draw(bothbad), which means the arena is full regenerated,
-                    // which means this can't be the last message before a user message
-                    if (!isLastMessage && model === 'none') continue;
-                    const messages = msg.responses[model].messages;
-                    const index = (isLastMessage && arenaMessageIndex !== null) ? arenaMessageIndex : messages.length - 1;
-    
-                    this.messages.push({
-                        role: 'assistant',
-                        content: messages[index],
-                    });
-                }
-                // Skip to the next user message to avoid duplicates
-                i = nextUserIndex !== -1 ? nextUserIndex - 1 : i;
-            }
-        }
+        this.makeApiCall(actualModel, true);
     }
 }

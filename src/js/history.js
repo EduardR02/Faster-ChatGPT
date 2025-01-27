@@ -1,8 +1,8 @@
 import { ChatStorage } from './utils.js';
-import { ApiManager } from './api_manager.js';
 import { HistoryChatUI } from './chat_ui.js';
 import { HistoryStateManager } from './state_manager.js';
 import { HistoryRenameManager } from './rename_manager.js';
+import { ChatCore } from './chat_core.js';
 
 
 class PopupMenu {
@@ -129,9 +129,10 @@ class PopupMenu {
             const textSpan = this.activePopup.querySelector('.item-text');
             const oldName = textSpan.textContent;
             textSpan.textContent = textSpan.textContent.replace(oldName, newName);
-            if (currentChat)
-                currentChat.meta.title = this.chatUI.autoUpdateChatHeader(currentChat) || currentChat.meta.title;
-            this.chatStorage.renameChat(parseInt(this.activePopup.id, 10), newName);
+            const currentId = parseInt(this.activePopup.id, 10);
+            if (chatCore.getChatId() === currentId)
+                chatCore.miscUpdate({ title: chatUI.autoUpdateChatHeader(chatCore.getChatId()) || chatCore.getTitle() });
+            this.chatStorage.renameChat(currentId, newName);
         }
         this.hidePopup();
     }
@@ -148,8 +149,8 @@ class PopupMenu {
         this.chatUI.handleItemDeletion(item);
     
         this.chatStorage.deleteChat(chatId);
-        if (currentChat && currentChat.meta.chatId === chatId) {
-            currentChat = null;
+        if (chatCore.getChatId() === chatId) {
+            chatCore.reset();
             this.chatUI.clearConversation();
         }
     
@@ -162,8 +163,8 @@ class PopupMenu {
         
         if (result?.tokenCounter) {
             result.tokenCounter.updateLifetimeTokens();
-            if (currentChat)
-                currentChat.meta.title = this.chatUI.autoUpdateChatHeader(currentChat) || currentChat.meta.title;
+            if (chatCore.getChatId() === parseInt(item.id, 10))
+                chatCore.miscUpdate({ title: chatUI.autoUpdateChatHeader(chatCore.getChatId()) || chatCore.getTitle() });
         }
         
         this.hidePopup();
@@ -171,22 +172,19 @@ class PopupMenu {
 }
 
 
-let currentChat = null;
 const chatStorage = new ChatStorage();
+const chatCore = new ChatCore(chatStorage);
 const renameManager = new HistoryRenameManager(chatStorage);
 const popupMenu = new PopupMenu(renameManager, chatStorage);
 const stateManager = new HistoryStateManager();
 const chatUI = new HistoryChatUI({
     stateManager,
     popupMenu,
-    continueFunc: (index, arenaMessageIndex = null, modelChoice = null) => 
-        sendChatToSidepanel({ chatId: currentChat?.meta?.chatId, index, arenaMessageIndex, modelChoice }),
+    continueFunc: (index, secondaryIndex = null, modelChoice = null) => 
+        sendChatToSidepanel({ chatId: chatCore.getChatId(), index, secondaryIndex, modelChoice }),
     loadHistoryItems: chatStorage.getChatMetadata.bind(chatStorage),
     addPopupActions: popupMenu.addHistoryItem.bind(popupMenu),
-    loadChat: async (chatId) => {
-        currentChat = await chatStorage.loadChat(chatId);
-        return currentChat;
-    },
+    loadChat: async (chatId) => { return await chatCore.loadChat(chatId); },
     getChatMeta: async (chatId) => {return await chatStorage.getChatMetadataById(chatId);},
 });
 popupMenu.chatUI = chatUI;
@@ -201,8 +199,8 @@ function initMessageListeners() {
             case 'appended_messages_to_saved_chat':
                 handleAppendedMessages(message.chatId, message.addedCount);
                 break;
-            case 'saved_arena_message_updated':
-                handleArenaMessageUpdate(message.chatId, message.messageId);
+            case 'message_updated':
+                handleMessageUpdate(message.chatId, message.messageId);
                 break;
             case 'chat_renamed':
                 handleChatRenamed(message.chatId, message.title);
@@ -210,16 +208,15 @@ function initMessageListeners() {
     });
 }
 
-async function handleAppendedMessages(chatId, addedCount) {
+async function handleAppendedMessages(chatId, addedCount, message = null) {
     handleHistoryItemOnNewMessage(chatId);
-    if (!currentChat || currentChat.meta.chatId !== chatId) return;
+    if (chatCore.getChatId() !== chatId) return;
     
-    const newMessages = await chatStorage.getLatestMessages(chatId, addedCount);
+    const newMessages = message ? [message] : await chatStorage.getLatestMessages(chatId, addedCount);
     if (!newMessages) return;
     
-    const len = currentChat.messages.length;
-    chatUI.appendMessages(newMessages, len, currentChat.messages[len - 1]?.role);
-    currentChat.messages.push(...newMessages);
+    chatUI.appendMessages(newMessages, chatCore.getLength());
+    chatCore.addMultipleFromHistory(newMessages);
 }
 
 async function handleHistoryItemOnNewMessage(chatId) {
@@ -233,30 +230,29 @@ async function handleHistoryItemOnNewMessage(chatId) {
     chatUI.handleNewChatSaved(chatMeta);
 }
 
-async function handleArenaMessageUpdate(chatId, messageId) {
-    if (!currentChat || currentChat.meta.chatId !== chatId) return;
+async function handleMessageUpdate(chatId, messageId) {
+    if (chatCore.getChatId() !== chatId) return;
     
     const updatedMessage = await chatStorage.getMessage(chatId, messageId);
     if (!updatedMessage) return;
     
-    const messageIndex = currentChat.messages.findIndex(m => m.messageId === messageId);
-    if (messageIndex === -1) {
-        if (messageId === currentChat.messages[currentChat.messages.length - 1].messageId + 1) {
-            handleAppendedMessages(chatId, 1);
-        }
+    const isUpdate = messageId < chatCore.getLength();
+    if (!isUpdate) {
+        handleAppendedMessages(chatId, 1, updatedMessage);
         return;
     }
     
     handleHistoryItemOnNewMessage(chatId);
-    chatUI.updateArenaMessage(updatedMessage, messageIndex);
-    currentChat.messages[messageIndex] = updatedMessage;
+    if (updatedMessage.responses) chatUI.updateArenaMessage(updatedMessage, messageIndex);
+    else chatUI.appendSingleRegeneratedMessage(updatedMessage);
+    chatCore.replaceLastFromHistory(updatedMessage);
 }
 
 function handleChatRenamed(chatId, title) {
     chatUI.handleChatRenamed(chatId, title);
-    if (currentChat && currentChat.meta.chatId === chatId) {
-        currentChat.meta.title = title;
-        chatUI.autoUpdateChatHeader(currentChat);
+    if (chatCore.getChatId() === chatId) {
+        chatCore.miscUpdate( { title } );
+        chatUI.updateChatHeader(title);
     }
 }
 
@@ -311,7 +307,7 @@ async function autoRenameUnmodified() {
 
     result.tokenCounter.updateLifetimeTokens();
     button.textContent = `${result.successCount}/${result.totalCount} renamed (${result.tokenCounter.inputTokens}|${result.tokenCounter.outputTokens} tokens)`;
-    if (currentChat) currentChat.meta.title = chatUI.autoUpdateChatHeader(currentChat) || currentChat.meta.title;
+    if (chatCore.getChatId()) chatCore.miscUpdate({ title: chatUI.autoUpdateChatHeader(chatCore.getChatId()) || chatCore.getTitle() });
     setTimeout(() => {
         button.textContent = "auto-rename unmodified";
     }, 15000);
@@ -320,6 +316,7 @@ async function autoRenameUnmodified() {
 
 async function initiateChatBackupDownload(element) {
     try {
+        element.textContent = "extracting...";
         const chatDataJson = await chatStorage.exportChats({ pretty: true });
         chatStorage.triggerDownload(chatDataJson);
         element.textContent = "success!";
@@ -351,6 +348,7 @@ async function initiateChatBackupImport(element) {
         const reader = new FileReader();
         reader.onload = async (e) => {
             try {
+                element.textContent = "importing...";
                 const importResult = await chatStorage.importChats(e.target.result);
                 element.textContent = importResult.success ? `${importResult.count} added` : 'failed :(';
                 if (!importResult.success) console.error("Import error:", importResult.error);

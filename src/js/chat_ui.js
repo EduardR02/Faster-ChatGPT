@@ -303,6 +303,12 @@ class ChatUI {
         return button;
     }
 
+    produceNextContentDiv(role, isThought, content = '') {
+        const div = this.createContentDiv(role, content);
+        if (isThought) div.classList.add('thoughts');
+        return div;
+    }
+
     clearConversation() {
         this.conversationDiv.innerHTML = '';
         this.pendingMediaDiv = null;
@@ -426,7 +432,7 @@ export class SidepanelChatUI extends ChatUI {
             skipLastUserMessage: true
         });
         this.shouldScroll = true;
-        this.updateChatHeader(modifiedChat.meta.title);
+        this.updateChatHeader(modifiedChat.title);
         this.scrollIntoView();
     }
 
@@ -752,6 +758,10 @@ export class HistoryChatUI extends ChatUI {
         });
     }
 
+    appendSingleRegeneratedMessage(fullMessage) {
+
+    }
+
     updateArenaMessage(updatedMessage, messageIndex) {
         const oldMessageElement = this.conversationDiv.children[messageIndex];
 
@@ -841,9 +851,9 @@ export class HistoryChatUI extends ChatUI {
         return document.getElementById(chatId);
     }
 
-    autoUpdateChatHeader(currentChat) {
-        if (!currentChat) return null;
-        const historyItem = document.getElementById(currentChat.meta.chatId)?.querySelector('.item-text');
+    autoUpdateChatHeader(chatId) {
+        if (!chatId) return null;
+        const historyItem = document.getElementById(chatId)?.querySelector('.item-text');
         if (historyItem && historyItem.textContent !== "Renaming..." && historyItem.textContent !== "Rename failed") {
             this.updateChatHeader(historyItem.textContent);
             return historyItem.textContent;
@@ -870,9 +880,9 @@ export class HistoryChatUI extends ChatUI {
             continueFunc: this.continueFunc
         });
 
-        this.updateChatHeader(chatFull.meta.title);
-        this.addLinkedChat(chatFull.meta.continued_from_chat_id);
-        this.updateChatTimestamp(chatFull.meta.timestamp);
+        this.updateChatHeader(chatFull.title);
+        this.addLinkedChat(chatFull.continued_from_chat_id);
+        this.updateChatTimestamp(chatFull.timestamp);
     }
 
     clearConversation() {

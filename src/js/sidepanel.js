@@ -45,32 +45,17 @@ class SidepanelApp {
         });
     }
 
-    handleInput(inputField) {
-        const inputText = inputField.value.trim();
-        if (inputText.length === 0 || !this.stateManager.isOn()) return;
-
-        this.controller.handleDefaultArenaChoice();
-        this.chatUI.addMessage('user', inputText);
-        this.controller.resolvePending();
+    async handleInput() {
+        if (!this.stateManager.isOn()) return;
         
-        if (this.stateManager.isSettingsEmpty() || this.controller.messages[0]?.role !== "system") {
-            this.initPrompt({ mode: "chat" }).then(() => {
-                if (this.stateManager.isOn()) {
-                    this.controller.appendContext(inputText, 'user');
-                    this.controller.initApiCall();
-                }
-            });
-        } else {
-            this.controller.appendContext(inputText, 'user');
-            this.chatUI.removeRegenerateButtons();
-            this.controller.initApiCall();
+        if (this.controller.chatCore.getSystemPrompt() === undefined) {
+            await this.initPrompt({ mode: "chat" });
         }
-
-        this.chatUI.setTextareaText('');
+        this.controller.sendUserMessage();
     }
 
     async initPrompt(context) {
-        return this.controller.initPrompt(context);
+        await this.controller.initPrompt(context);
     }
 
     initArenaToggleButton() {
@@ -139,8 +124,7 @@ class SidepanelApp {
         });
 
         button.addEventListener('click', () => {
-            const hasChatStarted = this.controller.messages.length > 1;
-            this.stateManager.toggleChatState(hasChatStarted);
+            this.stateManager.toggleChatState(this.controller.chatCore.hasChatStarted());
             this.updateIncognitoHoverText(hoverText);
             this.updateIncognitoButtonVisuals(button);
         });
@@ -181,14 +165,13 @@ class SidepanelApp {
         await this.initPrompt({ mode: "selection", text, url });
         
         if (this.stateManager.isInstantPromptMode()) {
-            this.controller.appendContext("Please explain!", 'user');
+            this.controller.chatCore.addUserMessage("Please explain!");
             this.controller.initApiCall();
         }
     }
 
     handleNewChat() {
         this.stateManager.subscribeToChatReset("chat", () => {this.handleNewChat()});
-        this.controller.messages = [];
         this.controller.initStates("New Chat");
         this.chatUI.clearConversation();
         if (this.stateManager.isInstantPromptMode()) {
@@ -203,34 +186,33 @@ class SidepanelApp {
         this.controller.initStates(newChatName);
         this.stateManager.isSidePanel = options.isSidePanel === false ? false : true;
         if (!options.chatId && !options.pendingUserMessage) {
-            if (options.systemPrompt) this.controller.setSystemPrompt(options.systemPrompt);
+            if (options.systemPrompt) this.controller.chatCore.insertSystemMessage(options.systemPrompt);
             this.chatUI.clearConversation();
             return;
         }
 
-        let chat = { messages: [] };
-
+        let lastMessage = null;
         if (options.chatId) {
             const messageLimit = options.index !== undefined ? options.index + 1 : null;
-            chat = await this.chatStorage.loadChat(options.chatId, messageLimit);
+            const chat = await this.chatStorage.loadChat(options.chatId, messageLimit);
             const fullChatLength = await this.chatStorage.getChatLength(options.chatId);
             this.chatUI.buildChat(chat, options);
-            this.controller.buildAPIChatFromHistoryFormat(chat, null, options.arenaMessageIndex, options.modelChoice);
-            const continueOptions = { fullChatLength, messages: [...chat.messages], index: options.index, modelChoice: options.modelChoice, arenaMessageIndex: options.arenaMessageIndex };
-            this.stateManager.continuedChatOptions = continueOptions;
+            this.controller.chatCore.buildFromDB(chat, null, options.secondaryIndex, options.modelChoice);
+            const continueOptions = { fullChatLength, lastMessage: chat.messages.at(-1), index: options.index, modelChoice: options.modelChoice, secondaryIndex: options.secondaryIndex };
+            this.controller.chatCore.continuedChatOptions = continueOptions;
+            lastMessage = chat.messages.at(-1);
         }
 
-        if (options.systemPrompt) this.controller.setSystemPrompt(options.systemPrompt);
-        if (options.pendingUserMessage) chat.messages.push(options.pendingUserMessage);
-
-        this.handleIfLastUserMessage(chat);
+        if (options.systemPrompt) this.controller.chatCore.insertSystemMessage(options.systemPrompt);
+        // the case where the user clicks to continue from a user message, but has something typed in the textarea is ambiguous...
+        // here i decided to prioritize the clicked message, but it could be changed to prioritize the "pending" message
+        this.handleIfLastUserMessage(lastMessage || options.pendingUserMessage);
     }
 
-    handleIfLastUserMessage(chat) {
-        const lastMessage = chat.messages[chat.messages.length - 1];
-        if (lastMessage.role === "user") {
-            if (lastMessage.images) this.controller.appendPendingImages(lastMessage.images);
-            if (lastMessage.files) this.controller.appendPendingFiles(lastMessage.files);
+    handleIfLastUserMessage(lastMessage) {
+        if (lastMessage && lastMessage.role === "user") {
+            if (lastMessage.images) this.controller.appendPendingMedia(lastMessage.images, 'image');
+            if (lastMessage.files) this.controller.appendPendingMedia(lastMessage.files, 'file');
             if (lastMessage.content) this.chatUI.setTextareaText(lastMessage.content);
         }
         else {
@@ -245,7 +227,7 @@ class SidepanelApp {
 
     updateIncognitoHoverText(hoverText) {
         const [hoverTextLeft, hoverTextRight] = hoverText;
-        const hasChatStarted = this.controller.messages.length > 1;
+        const hasChatStarted = this.controller.chatCore.hasChatStarted();
 
         let leftText = "start new";
         let rightText = "incognito chat";
@@ -283,26 +265,21 @@ class SidepanelApp {
 
     // Popout handling methods
     async handlePopoutToggle() {
-        this.controller.resolvePending();
-        
-        if (!this.controller.currentChat) {
-            this.controller.currentChat = {};
-        }
-        const index = Math.max(this.controller.currentChat.messages?.length - 1, 0);
+        const index = Math.max(this.controller.chatCore.getLength() - 1, 0);
         const options = {
-            chatId: this.controller.currentChat?.id,
+            chatId: this.controller.chatCore.getChatId(),
             isSidePanel: !this.stateManager.isSidePanel,
             index,
             pendingUserMessage: this.controller.collectPendingUserMessage()
         };
         // check for arena message
-        if (this.controller.currentChat?.messages?.at(-1)?.responses) {
-            const lastMsg = this.controller.currentChat.messages.at(-1);
+        if (this.controller.chatCore.getLatestMessage()?.responses) {
+            const lastMsg = this.controller.chatCore.getLatestMessage();
             const modelChoice = lastMsg.continued_with && lastMsg.continued_with !== "none" ? lastMsg.continued_with : 'model_a';
-            options.arenaMessageIndex = lastMsg.responses[modelChoice].messages.length - 1;
+            options.secondaryIndex = lastMsg.responses[modelChoice].messages.length - 1;
             options.modelChoice = modelChoice;
         }
-        if (!options.chatId) options.systemPrompt = this.controller.getSystemPrompt();
+        if (!options.chatId) options.systemPrompt = this.controller.chatCore.getSystemPrompt();
 
         if (this.stateManager.isSidePanel) {
             await this.handleSidepanelToTab(options);
@@ -401,7 +378,7 @@ class SidepanelApp {
             if (imgSrc) {
                 const base64String = await this.urlToBase64(imgSrc);
                 if (base64String) {
-                    this.controller.appendPendingImages([base64String]);
+                    this.controller.appendPendingMedia([base64String], 'image');
                     return;
                 }
             }
@@ -424,7 +401,7 @@ class SidepanelApp {
         return new Promise(resolve => {
             const reader = new FileReader();
             reader.onload = e => {
-                this.controller.appendPendingImages([e.target.result]);
+                this.controller.appendPendingMedia([e.target.result], 'image');
                 resolve();
             };
             reader.readAsDataURL(file);
@@ -435,7 +412,7 @@ class SidepanelApp {
         return new Promise(resolve => {
             const reader = new FileReader();
             reader.onload = e => {
-                this.controller.appendPendingFiles([{ name: file.name, content: e.target.result }]);
+                this.controller.appendPendingMedia([{ name: file.name, content: e.target.result }], 'file');
                 resolve();
             };
             reader.onerror = error => {

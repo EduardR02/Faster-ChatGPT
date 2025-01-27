@@ -192,14 +192,18 @@ export function set_defaults() {
         gemini: {
             "gemini-exp-1206": "Gemini Exp 1206",
             "gemini-2.0-flash-exp": "Gemini Flash 2.0",
+        },
+        deepseek: {
+            "deepseek-chat": "DeepSeek V3",
+            "deepseek-reasoner": "DeepSeek R1"
         }
     };
     const anthropic_models = Object.keys(MODELS.anthropic);
     let settings = {
-        mode: ModeEnum.InstantPromptMode,
+        mode: ModeEnum.PromptMode,
         lifetime_input_tokens: 0,
         lifetime_output_tokens: 0,
-        max_tokens: 500,
+        max_tokens: 4000,
         temperature: 1.0,
         loop_threshold: 3,
         current_model: anthropic_models[anthropic_models.length - 1],
@@ -328,18 +332,18 @@ export class StreamWriterBase {
 
 
 export class StreamWriterSimple {
-    constructor(contentDiv, scrollFunc = () => { }) {
+    constructor(contentDiv, produceNextContentDivFunc, scrollFunc = () => {}) {
         this.contentDiv = contentDiv;
+        this.produceNextContentDiv = produceNextContentDivFunc;
         this.scrollFunc = scrollFunc;
-        this.message = [];
-        this.responseMessage = []; // Add this for non-thought content
-        this.fullMessage = "";
+        this.parts = [ { type: 'text', content: [] } ];
         this.thoughtEndToggle = true;
     }
 
     setThinkingModel() {
         this.thoughtEndToggle = false;
         this.contentDiv.classList.add('thoughts');
+        this.parts = [ { type: 'thought', content: [] } ];
     }
 
     addThinkingCounter() {
@@ -377,36 +381,37 @@ export class StreamWriterSimple {
 
     processContent(content, isThought = false) {
         if (!isThought) {
-            this.responseMessage.push(content);
             if (!this.thoughtEndToggle) {
                 this.thoughtEndToggle = true;
-                this.switchContentDiv();
+                this.nextPart();
             }
         }
-        this.message.push(content);
+        this.parts.at(-1).content.push(content);
         this.contentDiv.textContent += content;
         this.scrollFunc();
     }
 
+    nextPart(isThought = false) {
+        this.finalizePart();
+        this.parts.push({ type: isThought ? 'thought' : 'text', content: [] });
+        this.switchContentDiv();
+    }
+
     switchContentDiv() {
-        const newContentDiv = this.contentDiv.cloneNode(true);
-        newContentDiv.textContent = '';
-        newContentDiv.classList.remove('thoughts');
+        const newContentDiv = this.produceNextContentDiv('assistant', isThought);
         this.contentDiv.parentElement.appendChild(newContentDiv);
-        this.contentDiv.innerHTML = add_codeblock_html(this.message.join(''));
         this.contentDiv = newContentDiv;
     }
 
-    addFooter(footer, add_pending) {
-        // Use responseMessage for context, don't include model "thinking" in context
-        this.fullMessage = this.responseMessage.join('');
+    finalizePart() {
+        this.parts.at(-1).content = this.parts.at(-1).content.join('');
+        this.contentDiv.innerHTML = add_codeblock_html(this.parts.at(-1).content);
+    }
 
-        // still show everything, even the thinking part
-        this.contentDiv.innerHTML = add_codeblock_html(this.responseMessage.join(''));
-
+    addFooter(footer) {
+        this.finalizePart();
         footer.create(this.contentDiv);
         this.scrollFunc();
-        add_pending(this.fullMessage);
         return new Promise((resolve) => resolve());
     }
 }
@@ -431,12 +436,14 @@ export class StreamWriter extends StreamWriterSimple {
 
     processContent(content, isThought = false) {
         if (!isThought) {
-            this.responseMessage.push(content);
             if (!this.thoughtEndToggle) {
                 this.thoughtEndToggle = true;
                 this.pendingSwitch = true;
+                this.parts.at(-1).content = this.parts.at(-1).content.join('');
+                this.parts.push({ type: isThought ? 'thought' : 'text', content: [] });
             }
         }
+        this.parts.at(-1).content.push(content);
 
         if (this.pendingSwitch) {
             this.pendingQueue.push(...content.split(""));
@@ -474,6 +481,7 @@ export class StreamWriter extends StreamWriterSimple {
                     this.pendingSwitch = false;
                     this.contentQueue.push(...this.pendingQueue);
                     delete this.pendingQueue;
+                    this.contentDiv.innerHTML = add_codeblock_html(this.parts.at(-2).content);
                     this.switchContentDiv();
                 }
 
@@ -482,21 +490,21 @@ export class StreamWriter extends StreamWriterSimple {
             } else {
                 this.isProcessing = false;
                 if (this.pendingFooter) {
-                    const { footer, add_pending, resolve } = this.pendingFooter;
-                    super.addFooter(footer, add_pending).then(resolve);  // Resolve the promise after processing the footer
+                    const { footer, resolve } = this.pendingFooter;
                     this.pendingFooter = null;
+                    super.addFooter(footer).then(resolve);  // Resolve the promise after processing the footer
                 }
             }
         });
     }
 
-    addFooter(footer, add_pending) {
+    addFooter(footer) {
         if (this.isProcessing) {
             return new Promise((resolve) => {
-                this.pendingFooter = { footer, add_pending, resolve }; // Save the resolve function to call later
+                this.pendingFooter = { footer, resolve }; // Save the resolve function to call later
             });
         } else {
-            return super.addFooter(footer, add_pending);
+            return super.addFooter(footer);
         }
     }
 }
@@ -619,7 +627,7 @@ export class ChatStorage {
         return results;
     }
 
-    async updateArenaMessage(chatId, messageId, message) {
+    async updateMessage(chatId, messageId, message) {
         const timestamp = Date.now();
         const db = await this.getDB();
     
@@ -640,7 +648,7 @@ export class ChatStorage {
         await this.updateChatOption(chatId, { timestamp });
     
         chrome.runtime.sendMessage({
-            type: 'saved_arena_message_updated',
+            type: 'message_updated',
             chatId: chatId,
             messageId: messageId
         });
@@ -692,7 +700,7 @@ export class ChatStorage {
                 if (!cursor || (messageLimit !== null && count >= messageLimit)) {
                     metaStore.get(chatId).onsuccess = (event) => {
                         resolve({
-                            meta: event.target.result,
+                            ...event.target.result,
                             messages
                         });
                     };
@@ -705,7 +713,7 @@ export class ChatStorage {
             };
 
             request.onerror = () => {
-                resolve({ meta: null, messages: [] });
+                resolve({ messages: [] });
             };
         });
     }
@@ -975,7 +983,7 @@ export class ChatStorage {
 
     createNewChatTracking(title) {
         return {
-            id: null,
+            chatId: null,
             title,
             messages: []
         };
@@ -1013,7 +1021,7 @@ export class ChatStorage {
         messageId: autoincrement,
         timestamp: number,
         role: 'user' | 'assistant' | 'system',
-        contents: [ { thoughts:[], parts:[], model: string } | { text: string } ]  // Latest is current, previous are regenerations
+        contents: [ { type: string, content: string, model?: string }[] ]  // Latest is current, previous are regenerations
         images?: string[] // Optional, user only
         files?: {filename: string, content: string}[]   // Optional, user only (array of objects in case duplicate filenames)
     },
@@ -1028,11 +1036,11 @@ export class ChatStorage {
         responses: {
             model_a: {
                 name: string,
-                messages: [ { thoughts:[], parts:[] } ]  // Latest is current, previous are regenerations
+                messages: [ { type: string, content: string }[] ]  // Latest is current, previous are regenerations
             },
             model_b: {
                 name: string,
-                messages: [ { thoughts:[], parts:[] } ]
+                messages: [ { type: string, content: string }[] ]
             },
         }
     }

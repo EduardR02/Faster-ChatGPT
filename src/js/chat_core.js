@@ -30,6 +30,40 @@ export class ChatCore {
         const { chatId, messageId, timestamp, ...msg } = message;
         this.currentChat.messages.push(msg);
     }
+
+    addMultipleFromHistory(messages) {
+        messages.forEach(msg => this.addFromHistory(msg));
+    }
+
+    getLatestMessage() {
+        return this.currentChat.messages.at(-1);
+    }
+
+    getLength() {
+        return this.currentChat.messages.length;
+    }
+
+    getTitle() {
+        return this.currentChat.title;
+    }
+
+    hasChatStarted() {
+        return this.currentChat.messages.length > 1;
+    }
+
+    getChatId() {
+        return this.currentChat.chatId;
+    }
+
+    getSystemPrompt() {
+        if (this.currentChat.messages.length === 0) return undefined;
+        return this.currentChat.messages[0].contents[0][0].content;
+    }
+
+    async loadChat(chatId) {
+        this.currentChat = await this.chatStorage.loadChat(chatId);
+        return this.currentChat;
+    }
 }
 
 
@@ -40,15 +74,44 @@ export class SidepanelChatCore extends ChatCore {
         this.renameManager = new SidepanelRenameManager(stateManager);
         this.continuedChatOptions = {};
         this.chatHeader = chatHeader;
+        this.tempMediaId = 0;
+        this.pendingMedia = {};
     }
 
     reset(title = "") {
         super.reset(title);
         this.continuedChatOptions = {};
+        this.tempMediaId = 0;
+        this.pendingMedia = {};
+    }
+
+    appendMedia(media, type) {
+        const mediaId = this.tempMediaId;
+        this.pendingMedia[mediaId] = { media, type };
+        this.tempMediaId++;
+        return mediaId;
+    }
+
+    removeMedia(mediaId) {
+        delete this.pendingMedia[mediaId];
+    }
+
+    realizeMedia(message) {
+        if (message.role !== 'user') return;
+        let images = [];
+        let files = [];
+        for (const mediaId in this.pendingMedia) {
+            const { media, type } = this.pendingMedia[mediaId];
+            if (type === 'image') images.push(media);
+            else files.push(media);
+        }
+        if (images.length > 0) message.images = images;
+        if (files.length > 0) message.files = files;
+        this.pendingMedia = {};
     }
 
     appendRegenerated(model, message) {
-        message.model = model;
+        message.forEach(msg => msg.model = model);
         this.currentChat.messages.at(-1).contents.push(message);
         this.updateSaved();
     }
@@ -62,26 +125,46 @@ export class SidepanelChatCore extends ChatCore {
         this.updateSaved();
     }
 
+    updateArenaMisc(choice = null, continued_with = null) {
+        const message = this.getLatestMessage();
+        if (choice) message.choice = choice;
+        if (continued_with) message.continued_with = continued_with;
+        this.updateSaved();
+    }
+
     addAssistantMessage(model, message) {
-        message.model = model;
+        message.forEach(msg => msg.model = model);
         const fullMessage = { role: 'assistant', contents: [message] };
         this.currentChat.messages.push(fullMessage);
         this.saveNew();
     }
 
-    addUserMessage(message = "", images = [], files = []) {
+    addUserMessage(message = "") {
         const newMessage = {
             role: 'user',
-            contents: [{ content: message }],
-            ...(images.length && { images }),
-            ...(files.length && { files })
+            contents: [[{ type: 'text', content: message }]],
         };
+        this.realizeMedia(newMessage);
         this.currentChat.messages.push(newMessage);
         this.saveNew();
     }
 
-    addSystemMessage(message = "") {
-        this.currentChat.messages.push({ role: 'system', contents: [{ content: message }] });
+    addUserMessageWithoutMedia(message = "") {
+        this.currentChat.messages.push({ role: 'user', contents: [[{ type: 'text', content: message }]] });
+        this.saveNew();
+    }
+
+    insertSystemMessage(message = "") {
+        const systemMessage = { role: 'system', contents: [[{ type: 'text', content: message }]] };
+        if (this.currentChat.messages.length === 0) {
+            this.currentChat.messages.push(systemMessage);
+        }
+        else if (this.currentChat.messages[0].role === 'system') {
+            this.currentChat.messages[0] = systemMessage;
+        }
+        else {
+            this.currentChat.messages.unshift(systemMessage);
+        }
     }
 
     saveNew() {
@@ -149,16 +232,17 @@ export class SidepanelChatCore extends ChatCore {
     }
 
     getMessagesForAPI(model = null) {
+        // for now like this, will have to change if multiple thoughts or messages possible in a single response
         const messages = this.currentChat.messages.map(msg => {
             if (msg.role === 'user' || msg.role === 'system') {
                 const { contents, ...message } = msg;
-                return { ...message, content: contents[0].content };
+                return { ...message, content: contents[0][0].content };
             }
             if (msg.responses) {
                 if (!msg.continued_with || msg.continued_with === "none") return undefined;
-                return { role: msg.role, content: msg.responses[msg.continued_with].messages.at(-1).parts.at(-1)};
+                return { role: msg.role, content: msg.responses[msg.continued_with].messages.at(-1).at(-1).content};
             }
-            return { role: msg.role, content: msg.contents.at(-1).parts.at(-1) };
+            return { role: msg.role, content: msg.contents.at(-1).at(-1).content };
         }).filter(msg => msg !== undefined);
         if (messages.at(-1).role === 'assistant') {
             messages.pop();
@@ -167,11 +251,11 @@ export class SidepanelChatCore extends ChatCore {
         return this.togglePrompt(messages, model);
     }
 
-    togglePrompt(messages, model) {
-        if (messages.length === 0) return;
+    togglePrompt(api_messages, model) {
+        if (api_messages.length === 0) return;
     
-        let prompt = messages[0].contents[0].content;
-        if (messages[0].role !== 'system') prompt = "";
+        let prompt = api_messages[0].content;
+        if (api_messages[0].role !== 'system') prompt = "";
     
         if (this.stateManager.isThinking(model)) {
             prompt += "\n\n" + this.stateManager.getPrompt('thinking');
@@ -179,21 +263,19 @@ export class SidepanelChatCore extends ChatCore {
             prompt += "\n\n" + this.stateManager.getPrompt('solver');
         }
         
-        if (messages[0].role === 'system') {
-            messages[0].contents[0].content = prompt;
+        if (api_messages[0].role === 'system') {
+            api_messages[0].content = prompt;
         } else {
-            messages.unshift({ role: 'system', contents: [{ content: prompt }] });
+            api_messages.unshift({ role: 'system', content: prompt });
         }
-        return messages;
+        return api_messages;
     }
 
     canContinueWithSameChatId(options, userMsg = null) {
-        const { messages, index, secondaryIndex, modelChoice, fullChatLength } = options;
-        if (!messages?.length || index == null) return false;
-        
-        const lastMessage = messages[messages.length - 1];
-        if (fullChatLength !== messages.length) return false;
-        if (index !== messages.length - 1) return false;
+        const { lastMessage, index, secondaryIndex, modelChoice, fullChatLength } = options;
+        if (!lastMessage || index == null) return false;
+        if (fullChatLength !== index + 1) return false;
+
         const role = lastMessage.role;
         return role === 'system' || 
                (role === 'user' && this.isUserMessageEqual(lastMessage, userMsg)) ||
@@ -206,7 +288,15 @@ export class SidepanelChatCore extends ChatCore {
 
     isUserMessageEqual(msg1, msg2) {
         if (!msg1 || !msg2) return false;
-        if (msg1.contents[0].content !== msg2.contents[0].content) return false;
+
+        let isContentSame = true;
+        msg1.contents.forEach((item, index) => {
+            if (item[0].content !== msg2.contents[index][0]?.content) {
+                isContentSame = false;
+            }
+        });
+        if (!isContentSame) return false;
+
         if (msg1.files?.length !== msg2.files?.length) return false;
         if (msg1.images?.length !== msg2.images?.length) return false;
         if (msg1.files) {
@@ -220,5 +310,12 @@ export class SidepanelChatCore extends ChatCore {
             }
         }
         return true;
+    }
+
+    collectPendingUserMessage(text) {
+        const message = {role: 'user', contents: [[{type: 'text', content: text}]]};
+        this.realizeMedia(message);
+        if (!message.contents[0][0].content && message.images?.length === 0 && message.files?.length === 0) return null;
+        return message;
     }
 }

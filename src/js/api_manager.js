@@ -277,7 +277,6 @@ export class ApiManager {
     async handleNonStreamResponse(response, model, tokenCounter) {
         const data = await response.json();
         const provider = this.getProviderForModel(model);
-
         switch (provider) {
             case 'openai':
                 return this.handleOpenAINonStreamResponse(data, tokenCounter);
@@ -294,34 +293,40 @@ export class ApiManager {
 
     handleOpenAINonStreamResponse(data, tokenCounter) {
         tokenCounter.update(data.usage.prompt_tokens, data.usage.completion_tokens);
-        return data.choices[0].message.content;
+        return this.returnMessage([data.choices[0].message.content]);
     }
-
+    
     handleAnthropicNonStreamResponse(data, tokenCounter) {
         const totalInputTokens = data.usage.input_tokens + 
             (data.usage.cache_creation_input_tokens || 0) + 
             (data.usage.cache_read_input_tokens || 0);
         tokenCounter.update(totalInputTokens, data.usage.output_tokens);
-        return data.content[0].text;
+        return this.returnMessage([data.content[0].text]);
     }
-
+    
     handleGeminiNonStreamResponse(data, tokenCounter) {
         tokenCounter.update(data.usageMetadata.promptTokenCount, data.usageMetadata.candidatesTokenCount);
-        return {
-            thoughts: data.candidates[0].content.parts.find(part => part.thought)?.text || '',
-            text: data.candidates[0].content.parts.find(part => !part.thought)?.text || ''
-        };
+        const thoughts = data.candidates[0].content.parts.find(part => part.thought)?.text || '';
+        const text = data.candidates[0].content.parts.find(part => !part.thought)?.text || '';
+        return this.returnMessage([text], thoughts ? [thoughts] : []);
     }
 
     handleDeepseekNonStreamResponse(data, tokenCounter) {
         tokenCounter.update(data.usage.prompt_tokens, data.usage.completion_tokens);
-        if (data.choices[0].message.reasoning_content !== undefined) {
-            return {
-                thoughts: data.choices[0].message.reasoning_content,
-                text: data.choices[0].message.content
-            };
-        }
-        return data.choices[0].message.content;
+        const message = data.choices[0].message;
+        const thoughts = message.reasoning_content ? [message.reasoning_content] : [];
+        return this.returnMessage([message.content], thoughts);
+    }
+
+    returnMessage(parts, thoughts = []) {
+        message = [];
+        thoughts.forEach(thought => {
+            message.push({ type: 'thought', content: thought });
+        });
+        parts.forEach(part => {
+            message.push({ type: 'text', content: part });
+        });
+        return message;
     }
 
     processStreamData(data, model, tokenCounter, streamWriter) {
