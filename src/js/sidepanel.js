@@ -1,5 +1,6 @@
-import { ChatStorage, auto_resize_textfield_listener } from "./utils.js";
+import { auto_resize_textfield_listener } from "./utils.js";
 import { ApiManager } from "./api_manager.js";
+import { ChatStorage } from './chat_storage.js';
 import { SidepanelStateManager } from './state_manager.js';
 import { SidepanelChatUI } from './chat_ui.js';
 import { SidepanelController } from './sidepanel_controller.js';

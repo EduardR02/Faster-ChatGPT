@@ -1,4 +1,4 @@
-import { ChatStorage } from './utils.js';
+import { ChatStorage } from './chat_storage.js';
 import { HistoryChatUI } from './chat_ui.js';
 import { HistoryStateManager } from './state_manager.js';
 import { HistoryRenameManager } from './rename_manager.js';
@@ -197,7 +197,7 @@ function initMessageListeners() {
                 handleNewChatSaved(message.chat);
                 break;
             case 'appended_messages_to_saved_chat':
-                handleAppendedMessages(message.chatId, message.addedCount);
+                handleAppendedMessages(message.chatId, message.addedCount, message.startIndex);
                 break;
             case 'message_updated':
                 handleMessageUpdate(message.chatId, message.messageId);
@@ -208,11 +208,11 @@ function initMessageListeners() {
     });
 }
 
-async function handleAppendedMessages(chatId, addedCount, message = null) {
+async function handleAppendedMessages(chatId, addedCount, startIndex, message = null) {
     handleHistoryItemOnNewMessage(chatId);
     if (chatCore.getChatId() !== chatId) return;
     
-    const newMessages = message ? [message] : await chatStorage.getLatestMessages(chatId, addedCount);
+    const newMessages = message ? [message] : await chatStorage.getMessages(chatId, startIndex, addedCount);
     if (!newMessages) return;
     
     chatUI.appendMessages(newMessages, chatCore.getLength());
@@ -246,13 +246,13 @@ async function handleMessageUpdate(chatId, messageId) {
     
     const isUpdate = messageId < chatCore.getLength();
     if (!isUpdate) {
-        handleAppendedMessages(chatId, 1, updatedMessage);
+        handleAppendedMessages(chatId, 1, chatCore.getLength(), updatedMessage);
         return;
     }
     
     handleHistoryItemOnNewMessage(chatId);
     if (updatedMessage.responses) chatUI.updateArenaMessage(updatedMessage, messageId);
-    else chatUI.appendSingleRegeneratedMessage(updatedMessage);
+    else chatUI.appendSingleRegeneratedMessage(updatedMessage, messageId);
     chatCore.replaceLastFromHistory(updatedMessage);
 }
 

@@ -102,6 +102,7 @@ class ChatUI {
 
     // reconstruction of the chat
     buildChat(chat, options = {}) {
+        console.log(chat);
         const { hideModels = false, continueFunc = null, addSystemMsg = false } = options;
         this.clearConversation();
 
@@ -727,9 +728,11 @@ export class HistoryChatUI extends ChatUI {
         });
     }
 
-    appendSingleRegeneratedMessage(message) {
-        const {contents, timestamp, messageId, chatId,  ...options} = message
-        contents.at(-1).forEach(parts => this.createMessageWrapperFunc(parts, options));
+    appendSingleRegeneratedMessage(message, index) {
+        const {contents, role, timestamp, messageId, chatId,  ...options} = message
+        const continueFunc = () => this.continueFunc(index, contents.length - 1, role);
+        const new_options = { hideModels: false, isRegeneration: true, continueFunc, ...options };
+        this.addMessage(role, contents.at(-1), new_options);
     }
 
     updateArenaMessage(updatedMessage, messageIndex) {

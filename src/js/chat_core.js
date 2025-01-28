@@ -114,48 +114,48 @@ export class SidepanelChatCore extends ChatCore {
         this.pendingMedia = {};
     }
 
-    appendRegenerated(model, message) {
+    async appendRegenerated(model, message) {
         message.forEach(msg => msg.model = model);
         this.getLatestMessage().contents.push(message);
-        this.updateSaved();
+        await this.updateSaved();
     }
 
     initArena(modelA, modelB) {
         this.currentChat.messages.push(this.chatStorage.initArenaMessage(modelA, modelB));
     }
 
-    updateArena(modelKey, message) {
+    async updateArena(modelKey, message) {
         this.getLatestMessage().responses[modelKey].messages.push(message);
-        this.updateSaved();
+       await this.updateSaved();
     }
 
-    updateArenaMisc(choice = null, continued_with = null) {
+    async updateArenaMisc(choice = null, continued_with = null) {
         const message = this.getLatestMessage();
         if (choice) message.choice = choice;
         if (continued_with) message.continued_with = continued_with;
-        this.updateSaved();
+        await this.updateSaved();
     }
 
-    addAssistantMessage(model, message) {
+    async addAssistantMessage(model, message) {
         message.forEach(msg => msg.model = model);
         const fullMessage = { role: 'assistant', contents: [message] };
         this.currentChat.messages.push(fullMessage);
-        this.saveNew();
+        await this.saveNew();
     }
 
-    addUserMessage(message = "") {
+    async addUserMessage(message = "") {
         const newMessage = {
             role: 'user',
             contents: [[{ type: 'text', content: message }]],
         };
         this.realizeMedia(newMessage);
         this.currentChat.messages.push(newMessage);
-        this.saveNew();
+        await this.saveNew();
     }
 
-    addUserMessageWithoutMedia(message = "") {
+    async addUserMessageWithoutMedia(message = "") {
         this.currentChat.messages.push({ role: 'user', contents: [[{ type: 'text', content: message }]] });
-        this.saveNew();
+        await this.saveNew();
     }
 
     insertSystemMessage(message = "") {
@@ -171,31 +171,31 @@ export class SidepanelChatCore extends ChatCore {
         }
     }
 
-    saveNew() {
+    async saveNew() {
         if (!this.stateManager.shouldSave) return;
         if (Object.keys(this.continuedChatOptions).length > 0) {
             const options = this.continuedChatOptions;
             this.continuedChatOptions = {};
             if (this.canContinueWithSameChatId(options, this.currentChat.messages[options.index])) {
                 const toAdd = this.currentChat.messages.length - options.fullChatLength;
-                if (toAdd > 0) this.addMessagesToExistingChat(toAdd);
+                if (toAdd > 0) await this.addMessagesToExistingChat(toAdd);
                 return;
             }
             // If can't continue with same ID, create new chat with continued-from reference
-            this.createNewChat(this.currentChat.chatId, false);
+            await this.createNewChat(this.currentChat.chatId, false);
             return;
         }
-        if (!this.currentChat.chatId) this.createNewChat();
-        else this.addMessagesToExistingChat();
+        if (!this.currentChat.chatId) await this.createNewChat();
+        else await this.addMessagesToExistingChat();
     }
 
-    updateSaved() {
+    async updateSaved() {
         if (!this.stateManager.shouldSave) return;
-        this.chatStorage.updateMessage(this.getChatId(), this.getLength() - 1, this.getLatestMessage());
+        await this.chatStorage.updateMessage(this.getChatId(), this.getLength() - 1, this.getLatestMessage());
     }
 
-    createNewChat(continuedFromId = null, shouldAutoRename = true) {
-        this.chatStorage.createChatWithMessages(
+    async createNewChat(continuedFromId = null, shouldAutoRename = true) {
+        await this.chatStorage.createChatWithMessages(
             this.currentChat.title, 
             this.currentChat.messages,
             continuedFromId
@@ -207,8 +207,8 @@ export class SidepanelChatCore extends ChatCore {
         });
     }
 
-    addMessagesToExistingChat(count = 1) {
-        this.chatStorage.addMessages(
+    async addMessagesToExistingChat(count = 1) {
+        await this.chatStorage.addMessages(
             this.currentChat.chatId, 
             this.currentChat.messages.slice(-count), 
             this.currentChat.messages.length - count

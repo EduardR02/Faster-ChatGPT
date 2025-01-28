@@ -53,18 +53,25 @@ export class SidepanelController {
             const msgFooter = this.createMessageFooter(tokenCounter, model);
             await streamWriter.addFooter(msgFooter);
 
-            this.saveResponseMessage(streamWriter.parts, model, isRegen);
             tokenCounter.updateLifetimeTokens();
-            this.handleThinkingMode(streamWriter.parts.at(-1), model, isRegen);
+            this.saveResponseMessage(streamWriter.parts, model, isRegen).then(() => {
+                this.handleThinkingMode(streamWriter.parts.at(-1), model, isRegen);
+            });
         } catch (error) {
             this.chatUI.addErrorMessage(`Error: ${error.message}`);
         }
     }
 
-    saveResponseMessage(message, model, isRegen) {
-        if (this.stateManager.isArenaModeActive) this.chatCore.updateArena(this.stateManager.getArenaModelKey(model), message);
-        else if (isRegen) this.chatCore.appendRegenerated(model, message);
-        else this.chatCore.addAssistantMessage(model, message);
+    async saveResponseMessage(message, model, isRegen) {
+        if (this.stateManager.isArenaModeActive) {
+            await this.chatCore.updateArena(this.stateManager.getArenaModelKey(model), message);
+            return;
+        }
+        if (isRegen) {
+            await this.chatCore.appendRegenerated(model, message);
+            return;
+        }
+        await this.chatCore.addAssistantMessage(model, message);
     }
 
     handleArenaChoice(choice) {;
@@ -130,7 +137,8 @@ export class SidepanelController {
         
         const thinkMore = lastPart.content.includes("*continue*");
         const maxItersReached = this.thoughtLoops[idx] >= this.stateManager.getSetting('loop_threshold');
-        let systemMessage = "*System message: continue thinking*";
+        const itersLeft = this.stateManager.getSetting('loop_threshold') - this.thoughtLoops[idx];
+        let systemMessage = `*System message: continue thinking (max ${itersLeft} thinking iterations left)*`;
         if (!thinkMore || maxItersReached) {
             systemMessage = maxItersReached ? 
                 "*System message: max iterations reached, solve now*" : 
