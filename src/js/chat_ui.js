@@ -102,7 +102,6 @@ class ChatUI {
 
     // reconstruction of the chat
     buildChat(chat, options = {}) {
-        console.log(chat);
         const { hideModels = false, continueFunc = null, addSystemMsg = false } = options;
         this.clearConversation();
 
@@ -270,7 +269,7 @@ class ChatUI {
     }
 
     appendToExistingMessage(parts) {
-        if (!content.trim()) return;
+        if (parts?.length === 0) return;
         const wrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
         parts.forEach(part => wrapper.appendChild(this.produceNextContentDiv('user', part.type === 'thought', part.content)));
         this.pendingMediaDiv = null;
