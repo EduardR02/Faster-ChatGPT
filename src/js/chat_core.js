@@ -116,7 +116,7 @@ export class SidepanelChatCore extends ChatCore {
 
     appendRegenerated(model, message) {
         message.forEach(msg => msg.model = model);
-        this.currentChat.messages.at(-1).contents.push(message);
+        this.getLatestMessage().contents.push(message);
         this.updateSaved();
     }
 
@@ -125,7 +125,7 @@ export class SidepanelChatCore extends ChatCore {
     }
 
     updateArena(modelKey, message) {
-        this.currentChat.messages.at(-1).responses[modelKey].messages.push(message);
+        this.getLatestMessage().responses[modelKey].messages.push(message);
         this.updateSaved();
     }
 
@@ -191,7 +191,7 @@ export class SidepanelChatCore extends ChatCore {
 
     updateSaved() {
         if (!this.stateManager.shouldSave) return;
-        this.chatStorage.updateMessage(this.currentChat.chatId, this.currentChat.messages.length - 1, this.currentChat.messages.at(-1));
+        this.chatStorage.updateMessage(this.getChatId(), this.getLength() - 1, this.getLatestMessage());
     }
 
     createNewChat(continuedFromId = null, shouldAutoRename = true) {
@@ -202,7 +202,7 @@ export class SidepanelChatCore extends ChatCore {
         ).then(res => {
             this.currentChat.chatId = res.chatId;
             if (shouldAutoRename) {
-                this.renameManager.autoRename(this.currentChat.chatId, this.chatHeader, this.currentChat.title);
+                this.renameManager.autoRename(this.currentChat.chatId, this.chatHeader);
             }
         });
     }
@@ -223,7 +223,8 @@ export class SidepanelChatCore extends ChatCore {
         if (secondaryIndex != null) {
             const lastMessage = this.currentChat.messages.at(-1);
             if (modelKey != null) {
-                lastMessage.responses[modelKey] = lastMessage.responses[modelKey].slice(0, secondaryIndex + 1);
+                lastMessage.responses[modelKey].messages = lastMessage.responses[modelKey].messages.slice(0, secondaryIndex + 1);
+                lastMessage.continued_with = modelKey;
             }
             else {
                 if (lastMessage.role === 'user') {
@@ -276,9 +277,10 @@ export class SidepanelChatCore extends ChatCore {
     }
 
     canContinueWithSameChatId(options, userMsg = null) {
-        const { lastMessage, index, secondaryIndex, modelChoice, fullChatLength } = options;
-        if (!lastMessage || index == null) return false;
+        const { lastMessage, index, secondaryIndex, modelChoice, fullChatLength, secondaryLength } = options;
+        if (!lastMessage || index == null || secondaryIndex == null || secondaryLength == null || fullChatLength == null) return false;
         if (fullChatLength !== index + 1) return false;
+        if (secondaryLength !== secondaryIndex + 1) return false;
 
         const role = lastMessage.role;
         return role === 'system' || 
@@ -319,7 +321,7 @@ export class SidepanelChatCore extends ChatCore {
     collectPendingUserMessage(text) {
         const message = {role: 'user', contents: [[{type: 'text', content: text}]]};
         this.realizeMedia(message);
-        if (!message.contents[0][0].content && message.images?.length === 0 && message.files?.length === 0) return null;
+        if (!text && message.images?.length === 0 && message.files?.length === 0) return null;
         return message;
     }
 }

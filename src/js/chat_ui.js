@@ -135,7 +135,6 @@ class ChatUI {
         const container = createElementWithClass('div', 'arena-full-container');
         messageBlock.appendChild(container);
         const arenaDivs = [null, null];
-
         ['model_a', 'model_b'].forEach((model, index) => {
             const arenaDiv = createElementWithClass('div', 'arena-wrapper');
             arenaDivs[index] = arenaDiv;
@@ -717,7 +716,7 @@ export class HistoryChatUI extends ChatUI {
 
     appendMessages(newMessages, currentMessageIndex) {
         newMessages.forEach(message => {
-            const tempIndex = currentMessageIndex;  // fuck
+            const tempIndex = currentMessageIndex;
             if (message.responses) {
                 this.createArenaMessageWrapperFunc(message, { continueFunc: this.continueFunc, messageIndex: tempIndex });
             } else {

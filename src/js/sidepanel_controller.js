@@ -63,7 +63,7 @@ export class SidepanelController {
 
     saveResponseMessage(message, model, isRegen) {
         if (this.stateManager.isArenaModeActive) this.chatCore.updateArena(this.stateManager.getArenaModelKey(model), message);
-        if (isRegen) this.chatCore.appendRegenerated(model, message);
+        else if (isRegen) this.chatCore.appendRegenerated(model, message);
         else this.chatCore.addAssistantMessage(model, message);
     }
 
@@ -212,7 +212,7 @@ export class SidepanelController {
         this.chatUI.setTextareaText('');
         this.handleDefaultArenaChoice();
         this.chatCore.addUserMessage(text);
-        this.chatUI.addMessage('user', this.chatCore.getLatestMessage().contents);
+        this.chatUI.addMessage('user', this.chatCore.getLatestMessage().contents.at(-1));
         this.chatUI.removeRegenerateButtons();
         this.initApiCall();
     }

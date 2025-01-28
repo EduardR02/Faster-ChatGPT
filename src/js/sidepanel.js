@@ -196,16 +196,18 @@ class SidepanelApp {
             const messageLimit = options.index !== undefined ? options.index + 1 : null;
             const chat = await this.chatStorage.loadChat(options.chatId, messageLimit);
             const fullChatLength = await this.chatStorage.getChatLength(options.chatId);
+            lastMessage = chat.messages.at(-1);
+            const secondaryLength = lastMessage?.contents ? lastMessage.contents.length : lastMessage?.responses[options.modelChoice || 'model_a']?.messages?.length;
             this.controller.chatCore.buildFromDB(chat, null, options.secondaryIndex, options.modelChoice);
             this.chatUI.buildChat(this.controller.chatCore.getChat());
-            const continueOptions = { fullChatLength, lastMessage: chat.messages.at(-1), index: options.index, modelChoice: options.modelChoice, secondaryIndex: options.secondaryIndex };
+            const continueOptions = { fullChatLength, lastMessage, index: options.index, modelChoice: options.modelChoice, secondaryIndex: options.secondaryIndex, secondaryLength };
             this.controller.chatCore.continuedChatOptions = continueOptions;
-            lastMessage = chat.messages.at(-1);
         }
 
         if (options.systemPrompt) this.controller.chatCore.insertSystemMessage(options.systemPrompt);
         // the case where the user clicks to continue from a user message, but has something typed in the textarea is ambiguous...
         // here i decided to prioritize the clicked message, but it could be changed to prioritize the "pending" message
+        if (lastMessage.role !== "user") lastMessage = options.pendingUserMessage;  // important
         this.handleIfLastUserMessage(lastMessage || options.pendingUserMessage);
     }
 
@@ -213,7 +215,7 @@ class SidepanelApp {
         if (lastMessage && lastMessage.role === "user") {
             if (lastMessage.images) this.controller.appendPendingMedia(lastMessage.images, 'image');
             if (lastMessage.files) this.controller.appendPendingMedia(lastMessage.files, 'file');
-            if (lastMessage.content) this.chatUI.setTextareaText(lastMessage.content);
+            if (lastMessage.contents) this.chatUI.setTextareaText(lastMessage.contents.at(-1).at(-1).content);
         }
         else {
             this.chatUI.setTextareaText('');
@@ -273,12 +275,13 @@ class SidepanelApp {
             pendingUserMessage: this.controller.collectPendingUserMessage()
         };
         // check for arena message
-        if (this.controller.chatCore.getLatestMessage()?.responses) {
-            const lastMsg = this.controller.chatCore.getLatestMessage();
-            const modelChoice = lastMsg.continued_with && lastMsg.continued_with !== "none" ? lastMsg.continued_with : 'model_a';
-            options.secondaryIndex = lastMsg.responses[modelChoice].messages.length - 1;
+        const latestMessage = this.controller.chatCore.getLatestMessage();
+        if (latestMessage?.responses) {
+            const modelChoice = latestMessage.continued_with && latestMessage.continued_with !== "none" ? latestMessage.continued_with : 'model_a';
+            options.secondaryIndex = latestMessage.responses[modelChoice].messages.length - 1;
             options.modelChoice = modelChoice;
         }
+        if (latestMessage.role === 'assistant') options.secondaryIndex = latestMessage.contents.length - 1;
         if (!options.chatId) options.systemPrompt = this.controller.chatCore.getSystemPrompt();
 
         if (this.stateManager.isSidePanel) {
