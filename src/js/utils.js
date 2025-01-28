@@ -80,43 +80,6 @@ export function remove_model_from_storage(apiString) {
 }
 
 
-export function canContinueWithSameChatId(options, userMsg = null) {
-    const { messages, index, arenaMessageIndex, modelChoice, fullChatLength } = options;
-    if (!messages?.length || index == null) return false;
-    
-    const lastMessage = messages[messages.length - 1];
-    if (fullChatLength !== messages.length) return false;
-    if (index !== messages.length - 1) return false;
-    const role = lastMessage.role;
-    return role === 'system' || 
-           (role === 'user' && isUserMessageEqual(lastMessage, userMsg)) ||
-           (role === 'assistant' && !lastMessage.responses) ||
-           (arenaMessageIndex != null && 
-            modelChoice && modelChoice !== "none" &&
-            lastMessage.continued_with === modelChoice && 
-            lastMessage.responses[modelChoice].messages.length === arenaMessageIndex + 1);
-}
-
-
-function isUserMessageEqual(msg1, msg2) {
-    if (!msg1 || !msg2) return false;
-    if (msg1.content !== msg2.content) return false;
-    if (msg1.files?.length !== msg2.files?.length) return false;
-    if (msg1.images?.length !== msg2.images?.length) return false;
-    if (msg1.files) {
-        for (let i = 0; i < msg1.files.length; i++) {
-            if (msg1.files[i].name !== msg2.files[i].name || msg1.files[i].content !== msg2.files[i].content) return false;
-        }
-    }
-    if (msg1.images) {
-        for (let i = 0; i < msg1.images.length; i++) {
-            if (msg1.images[i] !== msg2.images[i]) return false;
-        }
-    }
-    return true;
-}
-
-
 // Process code blocks only at the end (poor man's streamed codeblock) (claude magic)
 export function add_codeblock_html(message) {
     // First escape ALL HTML
@@ -334,7 +297,7 @@ export class StreamWriterBase {
 export class StreamWriterSimple {
     constructor(contentDiv, produceNextContentDivFunc, scrollFunc = () => {}) {
         this.contentDiv = contentDiv;
-        this.produceNextContentDiv = produceNextContentDivFunc;
+        this.produceNextContentDivFunc = produceNextContentDivFunc;
         this.scrollFunc = scrollFunc;
         this.parts = [ { type: 'text', content: [] } ];
         this.thoughtEndToggle = true;
@@ -394,11 +357,11 @@ export class StreamWriterSimple {
     nextPart(isThought = false) {
         this.finalizePart();
         this.parts.push({ type: isThought ? 'thought' : 'text', content: [] });
-        this.switchContentDiv();
+        this.switchContentDiv(isThought);
     }
 
-    switchContentDiv() {
-        const newContentDiv = this.produceNextContentDiv('assistant', isThought);
+    switchContentDiv(isThought = false) {
+        const newContentDiv = this.produceNextContentDivFunc('assistant', isThought);
         this.contentDiv.parentElement.appendChild(newContentDiv);
         this.contentDiv = newContentDiv;
     }
@@ -418,8 +381,8 @@ export class StreamWriterSimple {
 
 
 export class StreamWriter extends StreamWriterSimple {
-    constructor(contentDiv, scrollFunc, wordsPerMinute = 200) {
-        super(contentDiv, scrollFunc);
+    constructor(contentDiv, produceNextContentDivFunc, scrollFunc, wordsPerMinute = 200) {
+        super(contentDiv, produceNextContentDivFunc, scrollFunc);
         this.contentQueue = [];
         this.isProcessing = false;
         this.delay = 12000 / wordsPerMinute;    // wpm to ms per char conversion
@@ -449,7 +412,6 @@ export class StreamWriter extends StreamWriterSimple {
             this.pendingQueue.push(...content.split(""));
         }
         else {
-            this.message.push(content);
             this.contentQueue.push(...content.split(""));
         }
 
@@ -482,7 +444,7 @@ export class StreamWriter extends StreamWriterSimple {
                     this.contentQueue.push(...this.pendingQueue);
                     delete this.pendingQueue;
                     this.contentDiv.innerHTML = add_codeblock_html(this.parts.at(-2).content);
-                    this.switchContentDiv();
+                    this.switchContentDiv(this.parts.at(-1).type === 'thought');
                 }
 
                 this.lastFrameTime = currentTime;
@@ -513,35 +475,193 @@ export class StreamWriter extends StreamWriterSimple {
 export class ChatStorage {
     constructor() {
         this.dbName = 'llm-chats';
-        this.dbVersion = 2;
+        this.dbVersion = 3;
     }
 
     async getDB() {
         return new Promise((resolve, reject) => {
             const request = indexedDB.open(this.dbName, this.dbVersion);
-
             request.onerror = () => reject(request.error);
             request.onsuccess = () => resolve(request.result);
-
-            request.onupgradeneeded = (event) => {
-                const db = event.target.result;
-
-                if (!db.objectStoreNames.contains('messages')) {
-                    const messageStore = db.createObjectStore('messages', {
-                        keyPath: ['chatId', 'messageId']
-                    });
-                    messageStore.createIndex('chatId', 'chatId');
-                }
-
-                if (!db.objectStoreNames.contains('chatMeta')) {
-                    const metaStore = db.createObjectStore('chatMeta', {
-                        keyPath: 'chatId',
-                        autoIncrement: true
-                    });
-                    metaStore.createIndex('timestamp', 'timestamp'); 
-                }
-            };
+            request.onupgradeneeded = (event) => this.onUpgrade(event);
         });
+    }
+
+    onUpgrade(event) {
+        const db = event.target.result;
+        const oldVersion = event.oldVersion;
+
+        // Version 0 → 1 (initial setup)
+        if (oldVersion < 1) {
+            if (!db.objectStoreNames.contains('messages')) {
+                const messageStore = db.createObjectStore('messages', {
+                    keyPath: ['chatId', 'messageId']
+                });
+                messageStore.createIndex('chatId', 'chatId');
+            }
+            
+            if (!db.objectStoreNames.contains('chatMeta')) {
+                db.createObjectStore('chatMeta', {
+                    keyPath: 'chatId',
+                    autoIncrement: true
+                });
+            }
+        }
+
+        // Version 1 → 2 (timestamp index)
+        if (oldVersion < 2) {
+            const metaStore = event.currentTarget.transaction.objectStore('chatMeta');
+            if (!metaStore.indexNames.contains('timestamp')) {
+                metaStore.createIndex('timestamp', 'timestamp');
+            }
+        }
+
+        // Version 2 → 3 (message structure migration)
+        if (oldVersion < 3) {
+            this.migrateToVersion3(event);
+        }
+    }
+
+    // FIXED: Proper migration using upgrade transaction
+    migrateToVersion3(upgradeEvent) {
+        console.log('Migrating messages to version 3...');
+        const transaction = upgradeEvent.currentTarget.transaction;
+        const metaStore = transaction.objectStore('chatMeta');
+        const messageStore = transaction.objectStore('messages');
+
+        // 1. Collect all chat IDs
+        metaStore.getAllKeys().onsuccess = (e) => {
+            const chatIds = e.target.result;
+            
+            chatIds.forEach((chatId) => {
+                // 2. Process messages per chat
+                const messagesReq = messageStore.index('chatId').getAll(IDBKeyRange.only(chatId));
+                
+                messagesReq.onsuccess = () => {
+                    const oldMessages = messagesReq.result;
+                    const newMessages = this.transformMessages(oldMessages);
+
+                    // 3. Delete old messages
+                    const deleteReq = messageStore.index('chatId').openCursor(IDBKeyRange.only(chatId));
+                    deleteReq.onsuccess = (delEvent) => {
+                        const cursor = delEvent.target.result;
+                        if (cursor) {
+                            cursor.delete();
+                            cursor.continue();
+                        } else {
+                            // 4. Insert transformed messages
+                            newMessages.forEach((msg, idx) => {
+                                messageStore.put({ ...msg, messageId: idx });
+                            });
+                        }
+                    };
+                };
+            });
+
+            console.log('Migration complete.');
+        };
+    }
+
+    // Helper: Message structure transformation
+    transformMessages(oldMessages) {
+        return oldMessages.reduce((acc, currentMsg, index) => {
+            // Skip processed regenerations
+            if (currentMsg._processed) return acc;
+
+            // Handle arena messages
+            if (currentMsg.responses) {
+                acc.push(this.transformArenaMessage(currentMsg));
+                return acc;
+            }
+
+            // Handle assistant regenerations
+            if (currentMsg.role === 'assistant') {
+                const regenerations = this.collectRegenerations(oldMessages, index);
+                acc.push(this.transformAssistantMessage(currentMsg, regenerations));
+                return acc;
+            }
+
+            // Handle normal messages
+            acc.push(this.transformNormalMessage(currentMsg));
+            return acc;
+        }, []);
+    }
+
+    // Helper: Collect consecutive regenerations
+    collectRegenerations(messages, startIndex) {
+        const regenerations = [];
+        let i = startIndex + 1;
+        
+        while (i < messages.length && 
+               messages[i].role === 'assistant' &&
+               !messages[i].responses) {
+            messages[i]._processed = true; // Mark as processed
+            regenerations.push(messages[i]);
+            i++;
+        }
+        
+        return regenerations;
+    }
+
+    // Transformation logic for each message type
+    transformArenaMessage(msg) {
+        return {
+            chatId: msg.chatId,
+            role: 'assistant',
+            choice: msg.choice || 'ignored',
+            continued_with: msg.continued_with || '',
+            responses: {
+                model_a: {
+                    name: msg.responses.model_a.name,
+                    messages: msg.responses.model_a.messages.map(m => ([{
+                        type: 'text',
+                        content: m
+                    }]))
+                },
+                model_b: {
+                    name: msg.responses.model_b.name,
+                    messages: msg.responses.model_b.messages.map(m => ([{
+                        type: 'text',
+                        content: m
+                    }]))
+                }
+            },
+            timestamp: msg.timestamp
+        };
+    }
+
+    transformAssistantMessage(msg, regenerations) {
+        return {
+            chatId: msg.chatId,
+            role: 'assistant',
+            contents: [
+                [{
+                    type: 'text',
+                    content: msg.content,
+                    model: msg.model
+                }],
+                ...regenerations.map(r => ([{
+                    type: 'text',
+                    content: r.content,
+                    model: r.model
+                }]))
+            ],
+            timestamp: msg.timestamp
+        };
+    }
+
+    transformNormalMessage(msg) {
+        return {
+            chatId: msg.chatId,
+            role: msg.role,
+            contents: [[{
+                type: 'text',
+                content: msg.content
+            }]],
+            ...(msg.images && { images: msg.images }),
+            ...(msg.files && { files: msg.files }),
+            timestamp: msg.timestamp
+        };
     }
 
     async createChatWithMessages(title, messages, continuedFromChatId = null) {
@@ -910,15 +1030,16 @@ export class ChatStorage {
             if (!archive?.chats) throw new Error("Invalid archive format");
     
             const db = await this.getDB();
+            const needsMigration = archive.schemaVersion < 3; // NEW: Version check
             
             // Fingerprint check outside transaction to avoid version contention
             const existingChats = await this.getChatMetadata(Infinity);
             const existingFingerprints = new Set(
                 existingChats.map(c => `${c.title}::${c.timestamp}`)
             );
-            const chatQueue = Object.values(archive.chats).filter(chat => 
-                !existingFingerprints.has(`${chat.title}::${chat.timestamp}`)
-            );
+            const chatQueue = Object.values(archive.chats)
+                .filter(chat => !existingFingerprints.has(`${chat.title}::${chat.timestamp}`))
+                .map(chat => needsMigration ? this.migrateImportedChat(chat) : chat);
     
             const tx = db.transaction(['chatMeta', 'messages'], 'readwrite');
             const metaStore = tx.objectStore('chatMeta');
@@ -962,6 +1083,11 @@ export class ChatStorage {
         } catch (error) {
             return { success: false, error: error.message };
         }
+    }
+
+    migrateImportedChat(chatData) {
+        chatData.messages = this.transformMessages(chatData.messages).map((msg, idx) => ({ ...msg, messageId: idx }));
+        return chatData;
     }
 
     triggerDownload(json, filename = `chat-backup-${Date.now()}.json`) {

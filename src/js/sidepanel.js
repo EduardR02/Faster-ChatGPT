@@ -196,8 +196,8 @@ class SidepanelApp {
             const messageLimit = options.index !== undefined ? options.index + 1 : null;
             const chat = await this.chatStorage.loadChat(options.chatId, messageLimit);
             const fullChatLength = await this.chatStorage.getChatLength(options.chatId);
-            this.chatUI.buildChat(chat, options);
             this.controller.chatCore.buildFromDB(chat, null, options.secondaryIndex, options.modelChoice);
+            this.chatUI.buildChat(this.controller.chatCore.getChat());
             const continueOptions = { fullChatLength, lastMessage: chat.messages.at(-1), index: options.index, modelChoice: options.modelChoice, secondaryIndex: options.secondaryIndex };
             this.controller.chatCore.continuedChatOptions = continueOptions;
             lastMessage = chat.messages.at(-1);

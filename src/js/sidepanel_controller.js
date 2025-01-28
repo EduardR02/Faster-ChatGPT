@@ -1,4 +1,4 @@
-import { TokenCounter, StreamWriter, StreamWriterSimple, Footer, canContinueWithSameChatId, ArenaRatingManager } from './utils.js';
+import { TokenCounter, StreamWriter, StreamWriterSimple, Footer, ArenaRatingManager } from './utils.js';
 import { SidepanelRenameManager } from './rename_manager.js';
 import { SidepanelChatCore } from './chat_core.js';
 
@@ -31,7 +31,7 @@ export class SidepanelController {
         this.chatCore.reset(chatName);
     }
 
-    async makeApiCall(model, isRegenerate = false) {
+    async makeApiCall(model, isRegen = false) {
         const api_provider = this.apiManager.getProviderForModel(model);
         const tokenCounter = new TokenCounter(api_provider);
         const messages = this.chatCore.getMessagesForAPI(model);
@@ -53,10 +53,9 @@ export class SidepanelController {
             const msgFooter = this.createMessageFooter(tokenCounter, model);
             await streamWriter.addFooter(msgFooter);
 
-            this.saveResponseMessage(streamWriter.parts, model, isRegenerate);
+            this.saveResponseMessage(streamWriter.parts, model, isRegen);
             tokenCounter.updateLifetimeTokens();
-            this.handleThinkingMode(streamWriter.parts.at(-1), model, isRegenerate);
-
+            this.handleThinkingMode(streamWriter.parts.at(-1), model, isRegen);
         } catch (error) {
             this.chatUI.addErrorMessage(`Error: ${error.message}`);
         }
@@ -101,12 +100,14 @@ export class SidepanelController {
             (isArenaMode || apiProvider === "gemini")) {
             return new StreamWriter(
                 contentDiv,
+                (role, isThought) => this.chatUI.produceNextContentDiv(role, isThought),
                 () => this.chatUI.scrollIntoView(),
                 isArenaMode ? 2500 : 5000
             );
         }
         return new StreamWriterSimple(
             contentDiv,
+            (role, isThought) => this.chatUI.produceNextContentDiv(role, isThought),
             () => this.chatUI.scrollIntoView()
         );
     }
@@ -206,18 +207,18 @@ export class SidepanelController {
     }
 
     sendUserMessage() {
-        const text = this.chatUI.getTextAreaText().trim();
+        const text = this.chatUI.getTextareaText().trim();
         if (!text) return;
-        this.chatUI.setTextAreaText('');
+        this.chatUI.setTextareaText('');
         this.handleDefaultArenaChoice();
-        this.chatUI.addMessage('user', text);
-        this.chatUI.removeRegenerateButtons();
         this.chatCore.addUserMessage(text);
+        this.chatUI.addMessage('user', this.chatCore.getLatestMessage().contents);
+        this.chatUI.removeRegenerateButtons();
         this.initApiCall();
     }
 
     collectPendingUserMessage() {
-        const text = this.chatUI.getTextAreaText().trim();
+        const text = this.chatUI.getTextareaText().trim();
         return this.chatCore.collectPendingUserMessage(text);
     }
 

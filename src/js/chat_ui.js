@@ -19,18 +19,19 @@ class ChatUI {
         };
     }
 
-    addMessage(role, content = '', options = {}) {
-        if (role === 'user' && this.pendingMediaDiv) this.appendToExistingMessage(content);
-        else this.conversationDiv.appendChild(this.createMessage(role, content, options));
+    addMessage(role, parts = [], options = {}) {
+        if (role === 'user' && this.pendingMediaDiv) this.appendToExistingMessage(parts);
+        else this.conversationDiv.appendChild(this.createMessage(role, parts, options));
     }
 
     // Core message creation methods
-    createMessage(role, content = '', options = {}) {
+    createMessage(role, parts = [], options = {}) {
         const { files, images, ...prefixOptions } = options;
+        if (parts.length > 0 && parts.at(-1).model) prefixOptions.model = parts.at(-1).model;
         const messageBlock = createElementWithClass('div', `${role}-message`);
 
         const prefixWrapper = this.createPrefixWrapper(role, prefixOptions);
-        const messageWrapper = this.createMessageWrapper(role, content, { files, images });
+        const messageWrapper = this.createMessageWrapper(role, parts, { files, images });
 
         messageBlock.appendChild(prefixWrapper);
         messageBlock.appendChild(messageWrapper);
@@ -38,7 +39,7 @@ class ChatUI {
         return messageBlock;
     }
 
-    createMessageWrapper(role, content, { files, images } = {}) {
+    createMessageWrapper(role, parts, { files, images } = {}) {
         const wrapper = createElementWithClass('div', 'message-wrapper');
 
         if (images?.length) {
@@ -48,8 +49,8 @@ class ChatUI {
         if (files?.length) {
             files.forEach(file => wrapper.appendChild(this.createFileDisplay(file)));
         }
-
-        wrapper.appendChild(this.createContentDiv(role, content));
+        if (parts.length === 0) wrapper.appendChild(this.createContentDiv(role, ''));
+        else parts.forEach(part => wrapper.appendChild(this.produceNextContentDiv(role, part.type === 'thought', part.content)));
 
         return wrapper;
     }
@@ -101,35 +102,29 @@ class ChatUI {
 
     // reconstruction of the chat
     buildChat(chat, options = {}) {
-        const { hideModels = false, continueFunc = null, startIndex = 0, endIndex = null, addSystemMsg = false, skipLastUserMessage = false } = options;
-
+        const { hideModels = false, continueFunc = null, addSystemMsg = false } = options;
         this.clearConversation();
-        let previousRole = null;
 
-        const messages = chat.messages.slice(
-            startIndex,
-            endIndex !== null ? endIndex + 1 : undefined
-        );
-
-        messages.forEach((message, index) => {
-            if (message.role === 'user' && skipLastUserMessage && index === messages.length - 1) return;
-
-            if (message.role === 'system') {
-                if (!addSystemMsg) return;
-                this.addSystemMessage(message.content);
-                return;
-            }
-
+        chat.messages.forEach((message, index) => {
             if (message.responses) {
                 this.createArenaMessageWrapperFunc(message, { continueFunc, messageIndex: index });
             } else {
-                const new_options = { isRegeneration: previousRole === message.role, hideModels };
-                if (continueFunc) new_options.continueFunc = () => continueFunc(index);
-                const messageBlock = this.createMessageWrapperFunc(message, new_options);
-                this.conversationDiv.appendChild(messageBlock);
+                if (!addSystemMsg && message.role === 'system') return;
+                this.addFullMessage(message, hideModels, index, continueFunc);
             }
-            previousRole = message.role;
-            if (index !== messages.length - 1) this.pendingMediaDiv = null;
+            if (index !== chat.messages.length - 1) this.pendingMediaDiv = null;
+        });
+    }
+
+    addFullMessage(message, hideModels = false, index = null, continueFunc = null) {
+        const { contents, timestamp, chatId, messageId, ...rest } = message;
+        message.contents.forEach((parts, secIdx) => {
+            const new_options = { hideModels, ...rest };
+            if (continueFunc) new_options.continueFunc = () => continueFunc(index, secIdx);
+            if (secIdx !== 0) new_options.isRegeneration = true;
+            const messageBlock = this.createMessageWrapperFunc(parts, new_options);
+            // due to system message being directly added / being a "full message"
+            if (messageBlock) this.conversationDiv.appendChild(messageBlock);
         });
     }
 
@@ -151,15 +146,15 @@ class ChatUI {
                 hideModels: true
             };
             if (responses) {
-                responses[model].messages.forEach((msg, i) => {
+                responses[model].messages.forEach((parts, i) => {
                     new_options.isRegeneration = i !== 0;
                     if (options.continueFunc) new_options.continueFunc = () => options.continueFunc(options.messageIndex, i, model);
-                    arenaDiv.appendChild(this.createMessage(role, msg, new_options));
+                    arenaDiv.appendChild(this.createMessage(role, parts || [], new_options));
                 });
             }
             else {
                 if (options.continueFunc) new_options.continueFunc = () => options.continueFunc(options.messageIndex, 0, model);
-                arenaDiv.appendChild(this.createMessage('assistant', '', new_options));
+                arenaDiv.appendChild(this.createMessage('assistant', [], new_options));
             }
         });
         this.conversationDiv.appendChild(messageBlock);
@@ -255,7 +250,7 @@ class ChatUI {
     // Media Handling Methods
     initPendingMedia() {
         if (this.pendingMediaDiv) return;
-        this.pendingMediaDiv = this.createMessage('user', '');
+        this.pendingMediaDiv = this.createMessage('user');
         this.pendingMediaDiv.querySelector('.message-content').remove();
         this.conversationDiv.appendChild(this.pendingMediaDiv);
     }
@@ -274,11 +269,10 @@ class ChatUI {
         wrapper.appendChild(fileDisplay);
     }
 
-    appendToExistingMessage(content) {
+    appendToExistingMessage(parts) {
         if (!content.trim()) return;
         const wrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
-        const contentDiv = this.createContentDiv('user', content);
-        wrapper.appendChild(contentDiv);
+        parts.forEach(part => wrapper.appendChild(this.produceNextContentDiv('user', part.type === 'thought', part.content)));
         this.pendingMediaDiv = null;
     }
 
@@ -322,9 +316,12 @@ class ChatUI {
         return arenaDivs;
     }
 
-    createMessageWrapperFunc(message, options = {}) {
-        const { role, content, ...rest } = message;
-        return this.createMessage(role, content, { ...rest, ...options});
+    createMessageWrapperFunc(parts, options = {}) {
+        if (options.role === 'system') {
+            parts.forEach(part => this.addSystemMessage(part.content));
+            return;
+        }
+        return this.createMessage(options.role, parts, options);
     }
 }
 
@@ -366,17 +363,17 @@ export class SidepanelChatUI extends ChatUI {
         this.updateTextareaHeight();
     }
 
-    getTextAreaText() {
+    getTextareaText() {
         return this.textarea.value;
     }
 
-    addMessage(role, content = '', options = {}) {
-        super.addMessage(role, content, options);
+    addMessage(role, parts = [], options = {}) {
+        super.addMessage(role, parts, options);
         this.scrollIntoView();
     }
 
-    createMessage(role, content = '', options = {}) {
-        const message = super.createMessage(role, content, options);
+    createMessage(role, parts = [], options = {}) {
+        const message = super.createMessage(role, parts, options);
         if (!this.stateManager.isArenaModeActive) {
             this.activeMessageDivs = message;
         }
@@ -390,7 +387,7 @@ export class SidepanelChatUI extends ChatUI {
     }
 
     regenerateResponse(model, isRegeneration = true) {
-        const newMessage = this.createMessage('assistant', '', { model, isRegeneration });
+        const newMessage = this.createMessage('assistant', [], { model, isRegeneration });
         if (this.stateManager.isArenaModeActive) {
             const modelIndex = this.stateManager.getModelIndex(model);
             if (modelIndex === -1) return null;
@@ -405,34 +402,12 @@ export class SidepanelChatUI extends ChatUI {
         buttons.forEach(button => button.remove());
     }
 
-    buildChat(chat, options) {
+    buildChat(chat) {
         // Hide models and disable continue buttons for sidepanel
         this.shouldScroll = false;
-        let modifiedChat = chat;
-        if (typeof options?.arenaMessageIndex === 'number') {
-            // avoid modifiying the original chat object
-            modifiedChat = { 
-                ...chat,
-                messages: [...chat.messages]
-            };
-            const lastIndex = modifiedChat.messages.length - 1;
-            modifiedChat.messages[lastIndex] = { 
-                ...chat.messages[lastIndex] 
-            };
-
-            // modify last arena message to only show up to the selected continue message
-            // additionally set the continued_with field to the continued model
-            modifiedChat.messages[lastIndex].continued_with = options.modelChoice;
-            modifiedChat.messages[lastIndex].responses[options.modelChoice].messages =
-                modifiedChat.messages[lastIndex].responses[options.modelChoice].messages
-                    .slice(0, options.arenaMessageIndex + 1);
-        }
-        super.buildChat(modifiedChat, {
-            hideModels: true,
-            skipLastUserMessage: true
-        });
+        super.buildChat(chat, { hideModels: false });
         this.shouldScroll = true;
-        this.updateChatHeader(modifiedChat.title);
+        this.updateChatHeader(chat.title);
         this.scrollIntoView();
     }
 
@@ -598,7 +573,7 @@ export class SidepanelChatUI extends ChatUI {
 export class HistoryChatUI extends ChatUI {
     constructor(options) {
         const {
-            continueFunc = () => { },
+            continueFunc = () => {},
             addPopupActions,
             loadHistoryItems,
             loadChat,
@@ -692,7 +667,7 @@ export class HistoryChatUI extends ChatUI {
         const dotsSpan = createElementWithClass('div', 'action-dots', '\u{22EF}');
 
         item.append(textSpan, dotsSpan);
-        item.onclick = () => this.buildChat(chat);
+        item.onclick = () => this.buildChat(chat.chatId);
         this.addPopupActions(item);
 
         return item;
@@ -740,26 +715,22 @@ export class HistoryChatUI extends ChatUI {
         }
     }
 
-    appendMessages(newMessages, currentMessageIndex, lastRole) {
-        let previousRole = lastRole;
-
+    appendMessages(newMessages, currentMessageIndex) {
         newMessages.forEach(message => {
             const tempIndex = currentMessageIndex;  // fuck
             if (message.responses) {
                 this.createArenaMessageWrapperFunc(message, { continueFunc: this.continueFunc, messageIndex: tempIndex });
             } else {
-                const options = { isRegeneration: previousRole === message.role, hideModels: false, continueFunc: () => this.continueFunc(tempIndex) };
-                const messageBlock = this.createMessageWrapperFunc(message, options);
-                this.conversationDiv.appendChild(messageBlock);
+                this.addFullMessage(message, false, tempIndex, this.continueFunc);
             }
             currentMessageIndex++;
-            previousRole = message.role;
             this.pendingMediaDiv = null;
         });
     }
 
-    appendSingleRegeneratedMessage(fullMessage) {
-
+    appendSingleRegeneratedMessage(message) {
+        const {contents, timestamp, messageId, chatId,  ...options} = message
+        contents.at(-1).forEach(parts => this.createMessageWrapperFunc(parts, options));
     }
 
     updateArenaMessage(updatedMessage, messageIndex) {
@@ -821,7 +792,7 @@ export class HistoryChatUI extends ChatUI {
             const chat = await this.getChatMeta(chatId);
             if (chat) {
                 this.highlightHistoryItem(chatId);
-                this.buildChat({ chatId });
+                this.buildChat(chatId);
             } else {
                 button.classList.add('settings-error');
                 button.addEventListener('animationend', () => {
@@ -871,9 +842,9 @@ export class HistoryChatUI extends ChatUI {
             date.toString().split(' GMT')[0];
     }
 
-    async buildChat(chat) {
+    async buildChat(chatId) {
         // Show models and enable continue buttons for history
-        const chatFull = await this.loadChat(chat.chatId);
+        const chatFull = await this.loadChat(chatId);
         super.buildChat(chatFull, {
             hideModels: false,
             addSystemMsg: true,

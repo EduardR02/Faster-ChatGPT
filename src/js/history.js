@@ -180,7 +180,7 @@ const stateManager = new HistoryStateManager();
 const chatUI = new HistoryChatUI({
     stateManager,
     popupMenu,
-    continueFunc: (index, secondaryIndex = null, modelChoice = null) => 
+    continueFunc: (index, secondaryIndex, modelChoice = null) => 
         sendChatToSidepanel({ chatId: chatCore.getChatId(), index, secondaryIndex, modelChoice }),
     loadHistoryItems: chatStorage.getChatMetadata.bind(chatStorage),
     addPopupActions: popupMenu.addHistoryItem.bind(popupMenu),
@@ -194,7 +194,7 @@ function initMessageListeners() {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         switch (message.type) {
             case 'new_chat_saved':
-                chatUI.handleNewChatSaved(message.chat);
+                handleNewChatSaved(message.chat);
                 break;
             case 'appended_messages_to_saved_chat':
                 handleAppendedMessages(message.chatId, message.addedCount);
@@ -230,6 +230,14 @@ async function handleHistoryItemOnNewMessage(chatId) {
     chatUI.handleNewChatSaved(chatMeta);
 }
 
+function handleNewChatSaved(chatMeta) {
+    chatUI.handleNewChatSaved(chatMeta);
+    // if no chat is open, open the new chat (might remove if annoying)
+    if (chatCore.getChatId() === null) {
+        chatUI.buildChat(chatMeta.chatId);
+    }
+}
+
 async function handleMessageUpdate(chatId, messageId) {
     if (chatCore.getChatId() !== chatId) return;
     
@@ -243,7 +251,7 @@ async function handleMessageUpdate(chatId, messageId) {
     }
     
     handleHistoryItemOnNewMessage(chatId);
-    if (updatedMessage.responses) chatUI.updateArenaMessage(updatedMessage, messageIndex);
+    if (updatedMessage.responses) chatUI.updateArenaMessage(updatedMessage, messageId);
     else chatUI.appendSingleRegeneratedMessage(updatedMessage);
     chatCore.replaceLastFromHistory(updatedMessage);
 }

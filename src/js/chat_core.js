@@ -64,6 +64,10 @@ export class ChatCore {
         this.currentChat = await this.chatStorage.loadChat(chatId);
         return this.currentChat;
     }
+
+    getChat() {
+        return this.currentChat;
+    }
 }
 
 
@@ -71,7 +75,7 @@ export class SidepanelChatCore extends ChatCore {
     constructor(chatStorage, stateManager, chatHeader) {
         super(chatStorage);
         this.stateManager = stateManager;
-        this.renameManager = new SidepanelRenameManager(stateManager);
+        this.renameManager = new SidepanelRenameManager(chatStorage);
         this.continuedChatOptions = {};
         this.chatHeader = chatHeader;
         this.tempMediaId = 0;
@@ -174,7 +178,7 @@ export class SidepanelChatCore extends ChatCore {
             this.continuedChatOptions = {};
             if (this.canContinueWithSameChatId(options, this.currentChat.messages[options.index])) {
                 const toAdd = this.currentChat.messages.length - options.fullChatLength;
-                if (toAdd > 0) this.addMessageToExistingChat(toAdd);
+                if (toAdd > 0) this.addMessagesToExistingChat(toAdd);
                 return;
             }
             // If can't continue with same ID, create new chat with continued-from reference
@@ -182,7 +186,7 @@ export class SidepanelChatCore extends ChatCore {
             return;
         }
         if (!this.currentChat.chatId) this.createNewChat();
-        else this.addMessageToExistingChat();
+        else this.addMessagesToExistingChat();
     }
 
     updateSaved() {

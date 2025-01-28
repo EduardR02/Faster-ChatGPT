@@ -57,12 +57,13 @@ class RenameManagerBase {
         };
 
         const extracted = this.extractSelectionAndUrl(systemMsg);
+        const userMsgContent = userMsg.contents[0].at(-1).content;
 
         if (extracted !== null) {
             const combinedContent = [
                 `Source URL: ${extracted.url}`,
                 `Selected text: ${extracted.selection}`,
-                `User prompt: ${userMsg.content}`
+                `User prompt: ${userMsgContent}`
             ].join('\n\n');
 
             return [systemMessage, {
@@ -72,7 +73,7 @@ class RenameManagerBase {
             }];
         }
 
-        const combinedContent = `User prompt: ${userMsg.content}`;
+        const combinedContent = `User prompt: ${userMsgContent}`;
         return [systemMessage, {
             role: "user",
             content: combinedContent,
@@ -109,7 +110,7 @@ class StorageRenameManager extends RenameManagerBase {
         const [systemMsg, userMsg] = chatData.messages;
         if (systemMsg.role !== 'system' || userMsg.role !== 'user') return null;
 
-        const messages = this.prepareMessages(systemMsg.content, userMsg);
+        const messages = this.prepareMessages(systemMsg.contents[0].at(-1).content, userMsg);
         if (!messages) return null;
 
         let result = null;
