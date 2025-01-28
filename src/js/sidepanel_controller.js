@@ -222,6 +222,7 @@ export class SidepanelController {
         this.chatCore.addUserMessage(text);
         this.chatUI.addMessage('user', this.chatCore.getLatestMessage().contents.at(-1));
         this.chatUI.removeRegenerateButtons();
+        this.chatUI.removeCurrentRemoveMediaButtons();
         this.initApiCall();
     }
 
@@ -259,8 +260,6 @@ export class SidepanelController {
         this.stateManager.initThinkingState(model);
         
         this.chatUI.regenerateResponse(model);
-
-        this.chatUI.initScrollListener();
         
         const actualModel = this.stateManager.isArenaModeActive ? 
             model : 
