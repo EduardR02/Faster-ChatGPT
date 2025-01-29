@@ -325,3 +325,84 @@ export class SidepanelChatCore extends ChatCore {
         return message;
     }
 }
+
+
+class ThinkingChat {
+    constructor(stateManager) {
+        this.messages = [];
+        this.stateManager = stateManager; // For prompt toggling and state checks
+    }
+
+    addMessage(message) {
+        this.messages.push(message);
+    }
+
+    getLatestThinking() {
+        const lastMsg = this.messages.at(-1);
+        if (lastMsg?.role === 'assistant') {
+            if (lastMsg.responses) { // Arena mode
+                const modelKey = lastMsg.continued_with;
+                if (!modelKey || modelKey === "none") return null;
+                return {
+                    role: 'assistant',
+                    content: lastMsg.responses[modelKey].messages.at(-1).at(-1).content
+                };
+            }
+            return {
+                role: 'assistant',
+                content: lastMsg.contents[0].at(-1).content
+            };
+        }
+        return null;
+    }
+
+    getMessagesForAPI(baseMessages, model) {
+        const messages = [...baseMessages];
+        const latestThinking = this.getLatestThinking();
+        if (latestThinking) {
+            messages.push(latestThinking);
+        }
+        return this.togglePrompt(messages, model);
+    }
+
+    getAllMessages() {
+        return this.messages;
+    }
+
+    togglePrompt(messages, model) {
+        if (messages.length === 0) return messages;
+
+        let prompt = messages[0].content;
+        if (messages[0].role !== 'system') prompt = "";
+
+        // Add appropriate prompt based on state
+        if (this.stateManager.isThinking(model)) {
+            prompt += "\n\n" + this.stateManager.getPrompt('thinking_prompt');
+        } else if (this.stateManager.isReflecting(model)) {
+            prompt += "\n\n" + this.stateManager.getPrompt('reflection_prompt');
+        } else if (this.stateManager.isSolving(model)) {
+            prompt += "\n\n" + this.stateManager.getPrompt('solver_prompt');
+        }
+
+        if (messages[0].role === 'system') {
+            messages[0].content = prompt;
+        } else {
+            messages.unshift({ role: 'system', content: prompt });
+        }
+        return messages;
+    }
+
+    // Arena specific methods
+    addArenaMessage(modelKey, message) {
+        const lastMsg = this.messages.at(-1);
+        if (!lastMsg || !lastMsg.responses) return;
+        lastMsg.responses[modelKey].messages.push(message);
+    }
+
+    updateArenaMisc(choice = null, continued_with = null) {
+        const lastMsg = this.messages.at(-1);
+        if (!lastMsg || !lastMsg.responses) return;
+        if (choice) lastMsg.choice = choice;
+        if (continued_with) lastMsg.continued_with = continued_with;
+    }
+}
