@@ -72,8 +72,8 @@ You can install this extension from the Chrome Web Store [here](https://chromewe
 ## Thinking Mode
 - Inspired by o1 release, we let the model run in a while loop so it can "think" longer
 - We append an additional prompt to the system prompt, which tells the model that it either:
-    - Should exclusively do the thinking. You **must** make it clear to the model that it must append "\*\*continue\*\*" to its response if it wants to "think" more.
-    - Should use the thought process to generate the final response - the solution.
+    - Should exclusively do the thinking. Currently, each loop is followed by an automated user prompt that tells the model to reflect and improve on the previous response.
+    - Should use the thought process to generate the final response to the solution.
 - Regenerating works nicely with this, you can toggle thinking mode on and off, and also change the model if you don't like the output.
 
 ## Arena TODO

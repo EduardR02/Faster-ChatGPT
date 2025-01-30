@@ -196,7 +196,8 @@ export class SidepanelChatCore extends ChatCore {
                 return;
             }
             // If can't continue with same ID, create new chat with continued-from reference
-            await this.createNewChat(this.currentChat.chatId, false);
+            const bonus_options = { continued_from_chat_id: this.currentChat.chatId, renamed: this.currentChat.renamed || false };
+            await this.createNewChat(bonus_options, false);
             return;
         }
         if (!this.currentChat.chatId) await this.createNewChat();
@@ -208,11 +209,12 @@ export class SidepanelChatCore extends ChatCore {
         await this.chatStorage.updateMessage(this.getChatId(), this.getLength() - 1, this.getLatestMessage());
     }
 
-    async createNewChat(continuedFromId = null, shouldAutoRename = true) {
+    async createNewChat(bonus_options = {}, shouldAutoRename = true) {
+        // bonus options is for the continued from chat id, and if the chat has been renamed already
         await this.chatStorage.createChatWithMessages(
             this.currentChat.title, 
             this.currentChat.messages,
-            continuedFromId
+            bonus_options
         ).then(res => {
             this.currentChat.chatId = res.chatId;
             if (shouldAutoRename) {

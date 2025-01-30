@@ -190,7 +190,7 @@ export class ChatStorage {
         };
     }
 
-    async createChatWithMessages(title, messages, continuedFromChatId = null) {
+    async createChatWithMessages(title, messages, bonus_options = {}) {
         const db = await this.getDB();
         const tx = db.transaction(['chatMeta', 'messages'], 'readwrite');
         const metaStore = tx.objectStore('chatMeta');
@@ -200,8 +200,8 @@ export class ChatStorage {
             const chatMeta = {
                 title,
                 timestamp: Date.now(),
-                renamed: false,
-                continued_from_chat_id: continuedFromChatId || null
+                renamed: bonus_options.renamed || false,
+                continued_from_chat_id: bonus_options.continued_from_chat_id || null
             };
 
             const metaRequest = metaStore.add(chatMeta);
