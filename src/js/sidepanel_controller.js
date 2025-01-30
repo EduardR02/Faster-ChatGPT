@@ -128,7 +128,7 @@ export class SidepanelController {
     }
 
     handleThinkingMode(model, isRegen) {
-        if (this.chatCore.isDoneThinking()) return;
+        if (this.stateManager.isInactive(model)) return;
         this.chatUI.regenerateResponse(model, isRegen);
         this.makeApiCall(model, isRegen);
     }
@@ -158,6 +158,7 @@ export class SidepanelController {
         
         this.stateManager.initArenaResponse(model1, model2);
         this.stateManager.initThinkingState();
+        this.chatCore.initThinkingChat();   // needs to be before initArena so that the thinking chat exists when the message is added
         this.chatUI.createArenaMessage();
         this.chatCore.initArena(model1, model2);
         
@@ -240,10 +241,15 @@ export class SidepanelController {
         
         this.chatUI.regenerateResponse(model);
         
-        const actualModel = this.stateManager.isArenaModeActive ? 
-            model : 
+        const actualModel = this.stateManager.isArenaModeActive ? model : 
             this.stateManager.getSetting('current_model');
             
+        if (this.stateManager.isArenaModeActive && this.stateManager.thinkingMode) {
+            this.chatCore.initThinkingChat();
+            const [modelA, modelB] = this.stateManager.getArenaModels();
+            this.chatCore.initArena(modelA, modelB);
+        }
+
         this.makeApiCall(actualModel, true);
     }
 }

@@ -359,11 +359,14 @@ class ThinkingChat {
 
     getLatestThinking(model) {
         if (!this.message) return null;
+        if (this.message.responses) {
+            const modelKey = this.stateManager.getArenaModelKey(model);
+            if (this.message.responses[modelKey].messages.length === 0) return null;
+        }
         let messages = null
         if (this.message.responses) { // Arena mode
             if (!model) return null;
-            const models = this.stateManager.getArenaModels();
-            const modelKey = model === models[0] ? 'model_a' : 'model_b';
+            const modelKey = this.stateManager.getArenaModelKey(model);
             messages = this.message.responses[modelKey].messages;
         } else {
             messages = this.message.contents;
@@ -414,6 +417,7 @@ class ThinkingChat {
         if (this.done) return;
         if (modelKey) {
             // Arena message
+            if (this.message.responses[modelKey].messages.length === 0) this.message.responses[modelKey].messages.push([]);
             this.message.responses[modelKey].messages.at(-1).push(...message);
             const index = modelKey === 'model_a' ? 0 : 1;
             const models = this.stateManager.getArenaModels();
