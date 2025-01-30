@@ -370,7 +370,7 @@ class SettingsUI {
     setTextAreaPlaceholder(textarea, promptType) {
         let placeholder = "Type your prompt here...";
         if (promptType === "thinking_prompt") {
-            placeholder += " (You must indicate that if the model wants to continue thinking, it must include *continue* in it's output. This prompt will be appended to the system prompt)";
+            placeholder += " (This prompt will be appended to the system prompt)";
         } else if (promptType === "solver_prompt") {
             placeholder += " (You should make it clear that the model should use the previously generated thinking to now solve the problem. This prompt will be appended to the system prompt)";
         }

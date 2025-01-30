@@ -486,6 +486,11 @@ export class SidepanelStateManager extends ArenaStateManager {
         return state === THINKING_STATE.SOLVING;
     }
 
+    isInactive(model = null) {
+        const state = this.getThinkingState(model);
+        return state === THINKING_STATE.INACTIVE;
+    }
+
     subscribeToChatReset(key, callback) {
         this.chatResetListeners[key] = callback;
     }

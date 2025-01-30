@@ -20,13 +20,10 @@ export class SidepanelController {
         this.arenaRatingManager = new ArenaRatingManager();
         this.arenaRatingManager.initDB();
         this.chatCore = new SidepanelChatCore(chatStorage, stateManager, this.chatUI.getChatHeader());
-        
-        this.thoughtLoops = [0, 0];
     }
 
     initStates(chatName) {
         this.handleDefaultArenaChoice();
-        this.thoughtLoops = [0, 0];
         this.stateManager.resetChatState();
         this.chatCore.reset(chatName);
     }
@@ -34,6 +31,7 @@ export class SidepanelController {
     async makeApiCall(model, isRegen = false) {
         const api_provider = this.apiManager.getProviderForModel(model);
         const tokenCounter = new TokenCounter(api_provider);
+        this.chatCore.initThinkingChat();
         const messages = this.chatCore.getMessagesForAPI(model);
 
         try {
@@ -55,7 +53,7 @@ export class SidepanelController {
 
             tokenCounter.updateLifetimeTokens();
             this.saveResponseMessage(streamWriter.parts, model, isRegen).then(() => {
-                this.handleThinkingMode(streamWriter.parts.at(-1), model, isRegen);
+                this.handleThinkingMode(model, isRegen);
             });
         } catch (error) {
             this.chatUI.addErrorMessage(`Error: ${error.message}`);
@@ -64,14 +62,14 @@ export class SidepanelController {
 
     async saveResponseMessage(message, model, isRegen) {
         if (this.stateManager.isArenaModeActive) {
-            await this.chatCore.updateArena(this.stateManager.getArenaModelKey(model), message);
+            await this.chatCore.updateArena(message, model, this.stateManager.getArenaModelKey(model));
             return;
         }
-        if (isRegen) {
-            await this.chatCore.appendRegenerated(model, message);
+        if (isRegen && !this.stateManager.thinkingMode) {
+            await this.chatCore.appendRegenerated(message, model);
             return;
         }
-        await this.chatCore.addAssistantMessage(model, message);
+        await this.chatCore.addAssistantMessage(message, model);
     }
 
     handleArenaChoice(choice) {;
@@ -129,34 +127,16 @@ export class SidepanelController {
         );
     }
 
-    handleThinkingMode(lastPart, model, isRegenerate) {
-        if (!this.stateManager.isThinking(model)) return;
-        
-        const idx = this.stateManager.getModelIndex(model);
-        this.thoughtLoops[idx]++;
-        
-        const thinkMore = lastPart.content.includes("*continue*");
-        const maxItersReached = this.thoughtLoops[idx] >= this.stateManager.getSetting('loop_threshold');
-        const itersLeft = this.stateManager.getSetting('loop_threshold') - this.thoughtLoops[idx];
-        let systemMessage = `*System message: continue thinking (max ${itersLeft} thinking iterations left)*`;
-        if (!thinkMore || maxItersReached) {
-            systemMessage = maxItersReached ? 
-                "*System message: max iterations reached, solve now*" : 
-                "*System message: solve now*";
-            
-            this.stateManager.nextThinkingState(model);
-        }
-        this.chatCore.addUserMessageWithoutMedia(systemMessage);
-        this.chatUI.regenerateResponse(model, isRegenerate);
-        this.makeApiCall(model);
+    handleThinkingMode(model, isRegen) {
+        if (this.chatCore.isDoneThinking()) return;
+        this.chatUI.regenerateResponse(model, isRegen);
+        this.makeApiCall(model, isRegen);
     }
 
     async initApiCall() {
         this.chatUI.initScrollListener();
         this.stateManager.updateThinkingMode();
         this.stateManager.updateArenaMode();
-        
-        this.thoughtLoops = [0, 0];
 
         if (this.stateManager.isArenaModeActive) {
             await this.initArenaCall();
@@ -256,7 +236,6 @@ export class SidepanelController {
 
     regenerateResponse(model) {
         this.stateManager.updateThinkingMode();
-        this.thoughtLoops[this.stateManager.getModelIndex(model)] = 0;
         this.stateManager.initThinkingState(model);
         
         this.chatUI.regenerateResponse(model);
