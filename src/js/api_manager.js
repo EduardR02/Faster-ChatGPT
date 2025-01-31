@@ -75,10 +75,10 @@ export class ApiManager {
         return null;
     }
 
-    formatMessagesForOpenAI(messages) {
+    formatMessagesForOpenAI(messages, addImages, hasSystemRole) {
         return messages.map(msg => {
-            const role = msg.role === RoleEnum.system ? "developer" : msg.role;
-            if (msg.role === RoleEnum.user && msg.images) {
+            const role = msg.role === RoleEnum.system ? hasSystemRole ? "developer" : RoleEnum.user : msg.role;
+            if (addImages && msg.role === RoleEnum.user && msg.images) {
                 const imgDict = msg.images.map(img => ({ type: 'image_url', image_url: { url: img } }));
                 return { role: role, content: [{ type: 'text', text: msg.content }, ...imgDict] };
             }
@@ -144,19 +144,12 @@ export class ApiManager {
     }
 
     createOpenAIRequest(model, messages, streamResponse, streamWriter, apiKey) {
-        messages = this.formatMessagesForOpenAI(messages);
         const o1 = model.includes('o1');
         const o3 = model.includes('o3');
         const noImage = model.includes('o1-mini') || model.includes('o1-preview') || o3;
         const isReasoner = o1 || o3;
-        if (isReasoner) {
-            messages = messages.map(msg => {
-                const role = (o1 && msg.role === 'developer') ? 'user' : msg.role;
-                return (noImage) ? { role, content: msg.content } : { ...msg, role };
-            });
-            // sama on twitter said that o3 shows reasoning, apparently it doesn't?? Don't have access yet so can't tell
-            if (streamWriter) streamWriter.addThinkingCounter();
-        }
+        messages = this.formatMessagesForOpenAI(messages, !noImage, !o1);
+        if (isReasoner && streamWriter) streamWriter.addThinkingCounter();
 
         return ['https://api.openai.com/v1/chat/completions', {
             method: 'POST',
