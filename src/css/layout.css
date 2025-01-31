@@ -594,7 +594,7 @@ a:visited {
 
 .checkbox {
   appearance:none;
-  border-radius: 30%;
+  border-radius: 50%;
   width: 20px;
   height: 20px;
   margin:auto;
@@ -844,6 +844,7 @@ p {
 
 .std-input {
   padding: 0.5rem;
+  border-radius: 1rem;
   box-sizing: border-box;
   font-family: Consolas, Courier New, monospace;
   border: 1px solid #abb2bf;
@@ -883,7 +884,7 @@ p {
 
 .button {
   font-family: Consolas, Courier New, monospace;
-  border-radius: 0.5rem;
+  border-radius: 1rem;
   position: relative;
   background: var(--check-primary, #61afef);
   border: none;
@@ -947,6 +948,7 @@ p {
   height: 28px;
   padding: 1px 6px;
   font-size: 1.4em;
+  border-radius: 0.5rem;
   background: #abb2bf;
   /* this is so the icons / text are centered inside the button, as we want to keep it fixed size, but need to adjust content size*/
   display: flex;

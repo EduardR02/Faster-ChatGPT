@@ -208,7 +208,7 @@ class SidepanelApp {
         if (options.systemPrompt) this.controller.chatCore.insertSystemMessage(options.systemPrompt);
         // the case where the user clicks to continue from a user message, but has something typed in the textarea is ambiguous...
         // here i decided to prioritize the clicked message, but it could be changed to prioritize the "pending" message
-        if (lastMessage.role !== "user") lastMessage = options.pendingUserMessage;  // important
+        if (lastMessage?.role !== "user") lastMessage = options.pendingUserMessage;  // important
         this.handleIfLastUserMessage(lastMessage || options.pendingUserMessage);
     }
 
