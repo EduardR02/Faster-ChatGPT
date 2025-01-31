@@ -145,12 +145,16 @@ export class ApiManager {
 
     createOpenAIRequest(model, messages, streamResponse, streamWriter, apiKey) {
         messages = this.formatMessagesForOpenAI(messages);
-        const isThinking = model.includes('o1');
-        if (isThinking) {
-            messages = messages.map(msg => ({ 
-                role: msg.role === "developer" ? "user" : msg.role, 
-                content: msg.content 
-            }));
+        const o1 = model.includes('o1');
+        const o3 = model.includes('o3');
+        const noImage = model.includes('o1-mini') || model.includes('o1-preview') || o3;
+        const isReasoner = o1 || o3;
+        if (isReasoner) {
+            messages = messages.map(msg => {
+                const role = (o1 && msg.role === 'developer') ? 'user' : msg.role;
+                return (noImage) ? { role, content: msg.content } : { ...msg, role };
+            });
+            // sama on twitter said that o3 shows reasoning, apparently it doesn't?? Don't have access yet so can't tell
             if (streamWriter) streamWriter.addThinkingCounter();
         }
 
@@ -161,7 +165,7 @@ export class ApiManager {
             body: JSON.stringify({
                 model,
                 messages,
-                ...(isThinking ? {max_completion_tokens: this.settingsManager.getSetting('max_tokens')} : {
+                ...(isReasoner ? {max_completion_tokens: this.settingsManager.getSetting('max_tokens')} : {
                     max_tokens: this.settingsManager.getSetting('max_tokens'),
                     temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.openai)
                 }),

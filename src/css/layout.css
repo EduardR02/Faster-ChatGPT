@@ -855,6 +855,10 @@ p {
   overflow: hidden;
 }
 
+.textarea-wrapper .std-input {
+  border-radius: 0.75rem;
+}
+
 .std-input:focus {
   outline: none;
   border-color: #ef596f;
