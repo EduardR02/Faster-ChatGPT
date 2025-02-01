@@ -158,6 +158,7 @@ export class ApiManager {
             body: JSON.stringify({
                 model,
                 messages,
+                ...(o3 && { reasoning_effort: this.settingsManager.getSetting('reasoning_effort') || 'medium' }),
                 ...(isReasoner ? {max_completion_tokens: this.settingsManager.getSetting('max_tokens')} : {
                     max_tokens: this.settingsManager.getSetting('max_tokens'),
                     temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.openai)

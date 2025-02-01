@@ -44,6 +44,10 @@ class SettingsUI {
             });
         });
 
+        document.querySelectorAll('input[name="reasoning-effort"]').forEach(radio => {
+            radio.addEventListener('change', (e) => this.stateManager.queueSettingChange('reasoning_effort', e.target.value));
+        });
+
         document.getElementById('api-key-input').addEventListener('input', (e) => this.handleApiKeyInput(e));
 
         document.addEventListener('change', (e) => {
@@ -62,6 +66,7 @@ class SettingsUI {
         this.initModels();
         this.setApiLabel();
         this.initTextArea();
+        this.initReasoningEffort();
         this.updateModelCheckboxes();
     }
 
@@ -378,9 +383,16 @@ class SettingsUI {
     }
 
     initTextArea() {
-        document.getElementById("selection-prompt").checked = true;
+        document.getElementById("chat-prompt").checked = true;
         auto_resize_textfield_listener('customize-prompt');
-        this.handlePromptSelection('selection_prompt');
+        this.handlePromptSelection('chat_prompt');
+    }
+
+    initReasoningEffort() {
+        const reasoningEffort = this.stateManager.getSetting('reasoning_effort') || 'medium';
+        if (reasoningEffort) {
+            document.getElementById('reasoning_' + reasoningEffort).checked = true;
+        }
     }
 }
 

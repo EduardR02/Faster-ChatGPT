@@ -115,7 +115,7 @@ export class SettingsManager {
 export class SettingsStateManager extends SettingsManager {
     constructor() {
         super(['api_keys', 'max_tokens', 'temperature', 'loop_threshold', 'current_model', 'close_on_deselect',
-            'stream_response', 'arena_mode', 'arena_models', 'auto_rename', 'auto_rename_model', 'models'
+            'stream_response', 'arena_mode', 'arena_models', 'auto_rename', 'auto_rename_model', 'models', 'reasoning_effort'
         ]);
 
         this.tempState = {
