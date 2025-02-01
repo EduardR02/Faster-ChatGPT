@@ -57,11 +57,14 @@ body {
   overflow-y: auto;
 }
 
-.button-footer-center-group,
 .sidepanel-button-footer {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: min-content 1fr min-content 1fr min-content;
   align-items: center;
+}
+
+.button-footer-center-group {
+  display: flex;
   gap: 0.5em;
 }
 
@@ -189,7 +192,6 @@ body {
   overflow: hidden;
   display: flex;
   opacity: 0;
-  white-space: pre-wrap;
   color: #56b6c2;
   background: transparent;
   font-size: 0.8em;

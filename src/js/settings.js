@@ -296,7 +296,7 @@ class SettingsUI {
         const apiName = radio.id;
         const row = targetLabel.parentElement;
 
-        await this.stateManager.removeModel(apiName);
+        this.stateManager.removeModel(apiName);
         
         row.removeChild(radio);
         row.removeChild(targetLabel);

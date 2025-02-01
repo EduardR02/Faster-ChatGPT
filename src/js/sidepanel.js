@@ -108,27 +108,9 @@ class SidepanelApp {
         const buttonFooter = document.getElementById('sidepanel-button-footer');
         const incognitoToggle = document.getElementById('incognito-toggle');
         const hoverText = buttonFooter.querySelectorAll('.hover-text');
-
-        this.setupIncognitoButtonHandlers(incognitoToggle, buttonFooter, hoverText);
-        this.updateIncognitoButtonVisuals(incognitoToggle);
-    }
-
-    setupIncognitoButtonHandlers(button, footer, hoverText) {
-        button.addEventListener('mouseenter', () => {
-            this.updateIncognitoHoverText(hoverText);
-            footer.classList.add('showing-text');
-        });
-
-        button.addEventListener('mouseleave', () => {
-            footer.classList.remove('showing-text');
-            this.handleIncognitoHoverTextTransition(hoverText);
-        });
-
-        button.addEventListener('click', () => {
-            this.stateManager.toggleChatState(this.controller.chatCore.hasChatStarted());
-            this.updateIncognitoHoverText(hoverText);
-            this.updateIncognitoButtonVisuals(button);
-        });
+        const hasChatStarted = () => this.controller.chatCore.hasChatStarted();
+        this.chatUI.setupIncognitoButtonHandlers(incognitoToggle, buttonFooter, hoverText, hasChatStarted);
+        this.chatUI.updateIncognitoButtonVisuals(incognitoToggle);
     }
 
     initPopoutToggle() {
@@ -200,6 +182,7 @@ class SidepanelApp {
             lastMessage = chat.messages.at(-1);
             const secondaryLength = lastMessage?.contents ? lastMessage.contents.length : lastMessage?.responses[options.modelChoice || 'model_a']?.messages?.length;
             this.controller.chatCore.buildFromDB(chat, null, options.secondaryIndex, options.modelChoice);
+            this.chatUI.updateIncognito(this.controller.chatCore.hasChatStarted());
             this.chatUI.buildChat(this.controller.chatCore.getChat());
             const continueOptions = { fullChatLength, lastMessage, index: options.index, modelChoice: options.modelChoice, secondaryIndex: options.secondaryIndex, secondaryLength };
             this.controller.chatCore.continuedChatOptions = continueOptions;
@@ -223,49 +206,6 @@ class SidepanelApp {
         }
     }
 
-    // Incognito handling methods
-    updateIncognitoButtonVisuals(button) {
-        button.classList.toggle('active', !this.stateManager.shouldSave);
-    }
-
-    updateIncognitoHoverText(hoverText) {
-        const [hoverTextLeft, hoverTextRight] = hoverText;
-        const hasChatStarted = this.controller.chatCore.hasChatStarted();
-
-        let leftText = "start new";
-        let rightText = "incognito chat";
-
-        if (hasChatStarted && this.stateManager.isChatNormal()) {
-            leftText = "continue";
-            rightText = "in incognito";
-        } else if (!hasChatStarted && this.stateManager.isChatIncognito()) {
-            leftText = "leave";
-            rightText = "incognito";
-        } else if (hasChatStarted && this.stateManager.isChatIncognito()) {
-            leftText = "actually,";
-            rightText = "save it please";
-        }
-
-        hoverTextLeft.textContent = leftText;
-        hoverTextRight.textContent = rightText;
-
-        const longestText = Math.max(hoverTextLeft.offsetWidth, hoverTextRight.offsetWidth);
-        hoverText.forEach(text => text.style.width = `${longestText}px`);
-    }
-
-    handleIncognitoHoverTextTransition(hoverText) {
-        hoverText.forEach(label => {
-            const handler = (event) => {
-                if (!label.parentElement.classList.contains('showing-text')) {
-                    label.textContent = "";
-                    label.style.width = "auto";
-                }
-                label.removeEventListener('transitionend', handler);
-            };
-            label.addEventListener('transitionend', handler);
-        });
-    }
-
     // Popout handling methods
     async handlePopoutToggle() {
         const index = Math.max(this.controller.chatCore.getLength() - 1, 0);
@@ -282,7 +222,7 @@ class SidepanelApp {
             options.secondaryIndex = latestMessage.responses[modelChoice].messages.length - 1;
             options.modelChoice = modelChoice;
         }
-        if (latestMessage.role === 'assistant') options.secondaryIndex = latestMessage.contents.length - 1;
+        if (latestMessage?.role === 'assistant') options.secondaryIndex = latestMessage.contents.length - 1;
         if (!options.chatId) options.systemPrompt = this.controller.chatCore.getSystemPrompt();
 
         if (this.stateManager.isSidePanel) {

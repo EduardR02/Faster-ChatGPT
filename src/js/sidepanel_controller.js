@@ -25,6 +25,7 @@ export class SidepanelController {
     initStates(chatName) {
         this.handleDefaultArenaChoice();
         this.stateManager.resetChatState();
+        this.chatUI.updateIncognito();
         this.chatCore.reset(chatName);
     }
 

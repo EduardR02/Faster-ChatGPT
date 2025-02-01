@@ -541,6 +541,70 @@ export class SidepanelChatUI extends ChatUI {
         footer.addEventListener('transitionend', handleTransitionEnd);
     }
 
+    // Incognito handling methods
+    updateIncognitoButtonVisuals(button) {
+        button.classList.toggle('active', !this.stateManager.shouldSave);
+    }
+
+    setupIncognitoButtonHandlers(button, footer, hoverText, hasChatStarted) {
+        button.addEventListener('mouseenter', () => {
+            this.updateIncognitoHoverText(hoverText, hasChatStarted());
+            footer.classList.add('showing-text');
+        });
+
+        button.addEventListener('mouseleave', () => {
+            footer.classList.remove('showing-text');
+            this.handleIncognitoHoverTextTransition(hoverText);
+        });
+
+        button.addEventListener('click', () => {
+            this.stateManager.toggleChatState(hasChatStarted());
+            this.updateIncognitoHoverText(hoverText);
+            this.updateIncognitoButtonVisuals(button);
+        });
+    }
+
+    updateIncognito(hasChatStarted = false) {
+        const buttonFooter = document.getElementById('sidepanel-button-footer');
+        const incognitoToggle = document.getElementById('incognito-toggle');
+        const hoverText = buttonFooter.querySelectorAll('.hover-text');
+        this.updateIncognitoHoverText(hoverText, hasChatStarted);
+        this.updateIncognitoButtonVisuals(incognitoToggle);
+    }
+
+    updateIncognitoHoverText(hoverText, hasChatStarted) {
+        const [hoverTextLeft, hoverTextRight] = hoverText;
+
+        let leftText = "start new";
+        let rightText = "incognito chat";
+
+        if (hasChatStarted && this.stateManager.isChatNormal()) {
+            leftText = "continue";
+            rightText = "in incognito";
+        } else if (!hasChatStarted && this.stateManager.isChatIncognito()) {
+            leftText = "leave";
+            rightText = "incognito";
+        } else if (hasChatStarted && this.stateManager.isChatIncognito()) {
+            leftText = "actually,";
+            rightText = "save it please";
+        }
+
+        hoverTextLeft.textContent = leftText;
+        hoverTextRight.textContent = rightText;
+    }
+
+    handleIncognitoHoverTextTransition(hoverText) {
+        hoverText.forEach(label => {
+            const handler = (event) => {
+                if (!label.parentElement.classList.contains('showing-text')) {
+                    label.textContent = "";
+                }
+                label.removeEventListener('transitionend', handler);
+            };
+            label.addEventListener('transitionend', handler);
+        });
+    }
+
     getContentDiv(model) {
         let nodes = null;
         if (!this.stateManager.isArenaModeActive) {
