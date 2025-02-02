@@ -403,8 +403,13 @@ export class StreamWriter extends StreamWriterSimple {
         if (!isThought) {
             if (!this.thoughtEndToggle) {
                 this.thoughtEndToggle = true;
-                this.pendingSwitch = true;
-                this.parts.at(-1).content = this.parts.at(-1).content.join('');
+                if (this.parts.at(-1).content.length > 0) {
+                    this.pendingSwitch = true;
+                    this.parts.at(-1).content = this.parts.at(-1).content.join('');
+                } else {
+                    this.parts.pop();
+                    this.contentDiv.classList.remove('thoughts');
+                }
                 this.parts.push({ type: isThought ? 'thought' : 'text', content: [] });
             }
         }
