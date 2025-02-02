@@ -385,8 +385,8 @@ export class SidepanelChatUI extends ChatUI {
         return this.activeMessageDivs;
     }
 
-    regenerateResponse(model, isRegeneration = true) {
-        const newMessage = this.createMessage('assistant', [], { model, isRegeneration });
+    regenerateResponse(model, isRegeneration = true, hideModels = true) {
+        const newMessage = this.createMessage('assistant', [], { model, isRegeneration, hideModels });
         if (this.stateManager.isArenaModeActive) {
             const modelIndex = this.stateManager.getModelIndex(model);
             if (modelIndex === -1) return null;
@@ -404,7 +404,7 @@ export class SidepanelChatUI extends ChatUI {
     buildChat(chat) {
         // Hide models and disable continue buttons for sidepanel
         this.shouldScroll = false;
-        super.buildChat(chat, { hideModels: false });
+        super.buildChat(chat, { hideModels: !this.stateManager.getSetting('show_model_name') });
         this.shouldScroll = true;
         this.updateChatHeader(chat.title);
         this.scrollIntoView();

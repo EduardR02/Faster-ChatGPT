@@ -74,6 +74,7 @@ class SettingsUI {
         document.getElementById('max-tokens').value = this.stateManager.getSetting('max_tokens');
         document.getElementById('temperature').value = this.stateManager.getSetting('temperature');
         document.getElementById('loop-threshold').value = this.stateManager.getSetting('loop_threshold') || 1;
+        document.getElementById('show-model-name').checked = this.stateManager.getSetting('show_model_name') || false;
         document.getElementById('close-on-deselect').checked = this.stateManager.getSetting('close_on_deselect');
         document.getElementById('stream-response').checked = this.stateManager.getSetting('stream_response');
         document.getElementById('arena-mode').checked = this.stateManager.getSetting('arena_mode') || false;
@@ -330,6 +331,7 @@ class SettingsUI {
             max_tokens: parseInt(document.getElementById('max-tokens').value),
             temperature: parseFloat(document.getElementById('temperature').value),
             loop_threshold: parseInt(document.getElementById('loop-threshold').value),
+            show_model_name: document.getElementById('show-model-name').checked,
             close_on_deselect: document.getElementById('close-on-deselect').checked,
             stream_response: document.getElementById('stream-response').checked,
             arena_mode: document.getElementById('arena-mode').checked,

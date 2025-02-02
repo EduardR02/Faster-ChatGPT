@@ -169,6 +169,8 @@ export function set_defaults() {
         max_tokens: 4000,
         temperature: 1.0,
         loop_threshold: 3,
+        reasoning_effort: 'medium',
+        show_model_name: false,     // show model name in chat
         current_model: anthropic_models[anthropic_models.length - 1],
         models: MODELS,
         api_keys: {},

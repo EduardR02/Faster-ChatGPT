@@ -114,7 +114,7 @@ export class SettingsManager {
 
 export class SettingsStateManager extends SettingsManager {
     constructor() {
-        super(['api_keys', 'max_tokens', 'temperature', 'loop_threshold', 'current_model', 'close_on_deselect',
+        super(['api_keys', 'max_tokens', 'temperature', 'loop_threshold', 'current_model', 'close_on_deselect', 'show_model_name',
             'stream_response', 'arena_mode', 'arena_models', 'auto_rename', 'auto_rename_model', 'models', 'reasoning_effort'
         ]);
 
@@ -360,7 +360,7 @@ export class HistoryStateManager extends ArenaStateManager {
 
 export class SidepanelStateManager extends ArenaStateManager {
     constructor(requestedPrompt) {
-        super(['loop_threshold', 'current_model', 'arena_models', 'stream_response', 'arena_mode']);
+        super(['loop_threshold', 'current_model', 'arena_models', 'stream_response', 'arena_mode', 'show_model_name']);
 
         // Additional state
         this.state = {

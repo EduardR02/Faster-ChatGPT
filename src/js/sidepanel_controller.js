@@ -143,8 +143,9 @@ export class SidepanelController {
             await this.initArenaCall();
         } else {
             this.stateManager.initThinkingState();
-            this.chatUI.addMessage('assistant');
-            await this.makeApiCall(this.stateManager.getSetting('current_model'));
+            const model = this.stateManager.getSetting('current_model');
+            this.chatUI.addMessage('assistant', [], { model, hideModels: !this.stateManager.getSetting('show_model_name')});
+            await this.makeApiCall(model);
         }
     }
 
@@ -239,11 +240,11 @@ export class SidepanelController {
     regenerateResponse(model) {
         this.stateManager.updateThinkingMode();
         this.stateManager.initThinkingState(model);
-        
-        this.chatUI.regenerateResponse(model);
-        
         const actualModel = this.stateManager.isArenaModeActive ? model : 
             this.stateManager.getSetting('current_model');
+
+            const hideModels = !this.stateManager.getSetting('show_model_name') || this.stateManager.isArenaModeActive;
+        this.chatUI.regenerateResponse(actualModel, true, hideModels); 
             
         if (this.stateManager.isArenaModeActive && this.stateManager.thinkingMode) {
             this.chatCore.initThinkingChat();
