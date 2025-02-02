@@ -9,59 +9,59 @@
     <div class="container">
         <div class="setting_container">
             <div class="setting">
-                <label for="api-key-input" class="setting-label">Your API key:</label>
+                <label for="api_key_input" class="setting-label">Your API key:</label>
                 <div class="row-align">
-                    <input type="text" id="api-key-input" class="std-input setting-input" placeholder="Enter your API key here">
+                    <input type="text" id="api_key_input" class="std-input setting-input" placeholder="Enter your API key here">
                     <button id="button-api-cycle" class="button"><span>Switch </span></button>
                 </div>
             </div>
             <div class="setting">
-                <label for="max-tokens" class="setting-label">Max tokens:</label>
-                <input type="number" id="max-tokens" class="std-input small setting-input">
+                <label for="max_tokens" class="setting-label">Max tokens:</label>
+                <input type="number" id="max_tokens" class="std-input small setting-input">
             </div>
             <div class="setting">
                 <label for="temperature" class="setting-label">Temperature:</label>
                 <input type="number" id="temperature" class="std-input small setting-input">
             </div>
             <div class="setting">
-                <label for="loop-threshold" class="setting-label">Max thinking loops:</label>
-                <input type="number" id="loop-threshold" class="std-input small setting-input">
+                <label for="loop_threshold" class="setting-label">Max thinking loops:</label>
+                <input type="number" id="loop_threshold" class="std-input small setting-input">
             </div>
             <div class="setting">
-                <label for="customize-prompt" class="setting-label">Reasoning effort:</label>
+                <label for="reasoning_effort" class="setting-label">Reasoning effort:</label>
                 <div class="models-dummy">
-                    <input type="radio" id="reasoning_low" name="reasoning-effort" value="low", class="checkbox">
+                    <input type="radio" id="reasoning_low" name="reasoning_effort" value="low", class="checkbox">
                     <label class="checkbox-label">low</label>
-                    <input type="radio" id="reasoning_medium" name="reasoning-effort" value="medium" class="checkbox">
+                    <input type="radio" id="reasoning_medium" name="reasoning_effort" value="medium" class="checkbox">
                     <label class="checkbox-label">medium</label>
-                    <input type="radio" id="reasoning_high" name="reasoning-effort" value="high" class="checkbox">
+                    <input type="radio" id="reasoning_high" name="reasoning_effort" value="high" class="checkbox">
                     <label class="checkbox-label">high</label>
                 </div>
             </div>
             <div class="setting">
-                <label for="show-model-name" class="setting-label">Show Model Name in Chat:</label>
+                <label for="show_model_name" class="setting-label">Show Model Name in Chat:</label>
                 <div class="dummy">
-                    <input type="checkbox" id="show-model-name" class="checkbox">
+                    <input type="checkbox" id="show_model_name" class="checkbox">
                 </div>
             </div>
             <div class="setting">
-                <label for="close-on-deselect" class="setting-label">Close Sidepanel on Deselect:</label>
+                <label for="close_on_deselect" class="setting-label">Close Sidepanel on Deselect:</label>
                 <div class="dummy">
-                    <input type="checkbox" id="close-on-deselect" class="checkbox">
+                    <input type="checkbox" id="close_on_deselect" class="checkbox">
                 </div>
             </div>
             <div class="setting">
-                <label for="stream-response" class="setting-label">Stream Response:</label>
+                <label for="stream_response" class="setting-label">Stream Response:</label>
                 <div class="dummy">
-                    <input type="checkbox" id="stream-response" class="checkbox">
+                    <input type="checkbox" id="stream_response" class="checkbox">
                 </div>
             </div>
             <div class="setting">
                 <label class="setting-label">Auto Rename Chats:</label>
                 <div class="models-dummy">
-                    <input type="checkbox" id="auto-rename" class="checkbox">
+                    <input type="checkbox" id="auto_rename" class="checkbox">
                     <label class="checkbox-label">Enable Rename</label>
-                    <input type="checkbox" id="rename-select" class="checkbox arena-checkbox">
+                    <input type="checkbox" id="rename_select" class="checkbox arena-checkbox">
                     <label class="checkbox-label">Select Model</label>
                 </div>
             </div>
@@ -69,9 +69,9 @@
                 <label class="setting-label">Arena Mode:</label>
                 <div class="row-align">
                     <div class="models-dummy">
-                        <input type="checkbox" id="arena-mode" class="checkbox">
+                        <input type="checkbox" id="arena_mode" class="checkbox">
                         <label class="checkbox-label">Enable Arena</label>
-                        <input type="checkbox" id="arena-select" class="checkbox arena-checkbox">
+                        <input type="checkbox" id="arena_select" class="checkbox arena-checkbox">
                         <label class="checkbox-label">Select Models</label>
                     </div>
                     <button id="button-delete-arena" class="button delete-arena"><span>Reset Arena Matches </span></button>
@@ -88,20 +88,20 @@
                 </div>
             </div>
             <div class="setting">
-                <label for="customize-prompt" class="setting-label">Customize your prompt:</label>
+                <label for="customize_prompt" class="setting-label">Customize your prompt:</label>
                 <div class="models-dummy">
-                    <input type="radio" id="selection-prompt" name="prompt-select" value="selection_prompt", class="checkbox">
+                    <input type="radio" id="selection-prompt" name="prompt_select" value="selection_prompt", class="checkbox">
                     <label class="checkbox-label">Selection Prompt</label>
-                    <input type="radio" id="chat-prompt" name="prompt-select" value="chat_prompt" class="checkbox">
+                    <input type="radio" id="chat-prompt" name="prompt_select" value="chat_prompt" class="checkbox">
                     <label class="checkbox-label">Chat Prompt</label>
-                    <input type="radio" id="thinking-prompt" name="prompt-select" value="thinking_prompt" class="checkbox">
+                    <input type="radio" id="thinking-prompt" name="prompt_select" value="thinking_prompt" class="checkbox">
                     <label class="checkbox-label">Thinking Prompt</label>
-                    <input type="radio" id="solver-prompt" name="prompt-select" value="solver_prompt" class="checkbox">
+                    <input type="radio" id="solver-prompt" name="prompt_select" value="solver_prompt" class="checkbox">
                     <label class="checkbox-label">Solver Prompt</label>
                 </div>
             </div>
         </div>
-        <textarea type="text" id="customize-prompt" placeholder="Type your prompt here..." class="std-input setting-input"></textarea>
+        <textarea type="text" id="customize_prompt" placeholder="Type your prompt here..." class="std-input setting-input"></textarea>
         <button id="buttonSave" class="button"><span>Save </span></button>
         <label class="setting-label">Refer to <a target="blank_" href=https://platform.openai.com/docs/api-reference/chat/create>OpenAI</a>, 
             <a target="blank_" href=https://docs.anthropic.com/en/api/messages>Anthropic</a>, and

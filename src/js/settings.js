@@ -13,7 +13,21 @@ class SettingsUI {
         this.stateManager = new SettingsStateManager();
         this.currentApiIndex = 0;
         this.apiProviders = Object.keys(apiDisplayNames);
+        this.currentAPIProvider = this.apiProviders[0];
         this.dummyRowsOnInit = document.getElementsByClassName('models-dummy').length;
+
+        this.settingsConfig = {
+            inputs: {
+                max_tokens: { type: 'number', parser: parseInt },
+                temperature: { type: 'number', parser: parseFloat },
+                loop_threshold: { type: 'number', parser: parseInt, default: 1 }
+            },
+            checkboxes: [
+                'show_model_name', 'close_on_deselect', 'stream_response',
+                'arena_mode', 'auto_rename'
+            ]
+        };
+
         this.init();
     }
 
@@ -28,30 +42,30 @@ class SettingsUI {
         // Basic buttons
         document.getElementById('buttonSave').addEventListener('click', () => this.save());
         document.getElementById('button-api-cycle').addEventListener('click', () => this.cycleApiKeyInput());
-        document.getElementById('button-model-provider-select').addEventListener('click', (e) => this.cycleModelProvider(e.target));
+        document.getElementById('button-model-provider-select').addEventListener('click', (e) => this.cycleAPIProvider(e.target));
         document.getElementById('button-add-model').addEventListener('click', () => this.addModel());
         document.getElementById('button-remove-models').addEventListener('click', () => this.removeModel());
         
         // Mode toggles
-        document.getElementById('arena-mode').addEventListener('change', () => this.handleModeToggle('arena'));
-        document.getElementById('auto-rename').addEventListener('change', () => this.handleModeToggle('rename'));
-        document.getElementById('arena-select').addEventListener('change', () => this.handleSelectToggle('arena'));
-        document.getElementById('rename-select').addEventListener('change', () => this.handleSelectToggle('rename'));
+        document.getElementById('arena_mode').addEventListener('change', () => this.handleModeToggle('arena'));
+        document.getElementById('auto_rename').addEventListener('change', () => this.handleModeToggle('rename'));
+        document.getElementById('arena_select').addEventListener('change', () => this.handleSelectToggle('arena'));
+        document.getElementById('rename_select').addEventListener('change', () => this.handleSelectToggle('rename'));
 
-        document.querySelectorAll('input[name="prompt-select"]').forEach(radio => {
-            radio.addEventListener('change', (e) => {
-                this.handlePromptSelection(e.target.value);
+        // Radio groups
+        new Map([
+            ['prompt_select', (v) => this.handlePromptSelection(v)],
+            ['reasoning_effort', (v) => this.stateManager.queueSettingChange('reasoning_effort', v)]
+        ]).forEach((handler, name) => {
+            document.querySelectorAll(`input[name="${name}"]`).forEach(radio => {
+                radio.addEventListener('change', e => handler(e.target.value));
             });
         });
 
-        document.querySelectorAll('input[name="reasoning-effort"]').forEach(radio => {
-            radio.addEventListener('change', (e) => this.stateManager.queueSettingChange('reasoning_effort', e.target.value));
-        });
-
-        document.getElementById('api-key-input').addEventListener('input', (e) => this.handleApiKeyInput(e));
+        document.getElementById('api_key_input').addEventListener('input', (e) => this.handleApiKeyInput(e));
 
         document.addEventListener('change', (e) => {
-            if (e.target.name === 'model-select') {
+            if (e.target.name === 'model_select') {
                 this.handleModelSelection(e);
             }
         });
@@ -71,16 +85,15 @@ class SettingsUI {
     }
 
     initInputValues() {
-        document.getElementById('max-tokens').value = this.stateManager.getSetting('max_tokens');
-        document.getElementById('temperature').value = this.stateManager.getSetting('temperature');
-        document.getElementById('loop-threshold').value = this.stateManager.getSetting('loop_threshold') || 1;
-        document.getElementById('show-model-name').checked = this.stateManager.getSetting('show_model_name') || false;
-        document.getElementById('close-on-deselect').checked = this.stateManager.getSetting('close_on_deselect');
-        document.getElementById('stream-response').checked = this.stateManager.getSetting('stream_response');
-        document.getElementById('arena-mode').checked = this.stateManager.getSetting('arena_mode') || false;
-        document.getElementById('auto-rename').checked = this.stateManager.getSetting('auto_rename') || false;
-        document.getElementById('rename-select').checked = false;
-        document.getElementById('arena-select').checked = false;
+        Object.entries(this.settingsConfig.inputs).forEach(([id, { parser, default: def }]) => {
+            document.getElementById(id).value = this.stateManager.getSetting(id) ?? def;
+        });
+
+        this.settingsConfig.checkboxes.forEach(id => {
+            document.getElementById(id).checked = this.stateManager.getSetting(id) || false;
+        });
+
+        ['arena', 'rename'].forEach(mode => document.getElementById(`${mode}_select`).checked = false);
     }
 
     initModels() {
@@ -109,7 +122,7 @@ class SettingsUI {
         
         switch (currentMode) {
             case 'arena':
-                const selectedModels = document.querySelectorAll('input[name="model-select"]:checked');
+                const selectedModels = document.querySelectorAll('input[name="model_select"]:checked');
                 const hasEnoughModels = selectedModels.length >= 2;
                 document.getElementById('models-label').classList.toggle('settings-error', !hasEnoughModels);
                 if (hasEnoughModels) {
@@ -128,13 +141,13 @@ class SettingsUI {
     }
 
     handleModeToggle(mode) {
-        const isEnabled = document.getElementById(`${mode === 'arena' ? 'arena-mode' : 'auto-rename'}`).checked;
-        const selectToggle = document.getElementById(`${mode}-select`);
+        const isEnabled = document.getElementById(`${mode === 'arena' ? 'arena_mode' : 'auto_rename'}`).checked;
+        const selectToggle = document.getElementById(`${mode}_select`);
     
         if (isEnabled) {
             selectToggle.checked = true;
             const otherMode = mode === 'arena' ? 'rename' : 'arena';
-            document.getElementById(`${otherMode}-select`).checked = false;
+            document.getElementById(`${otherMode}_select`).checked = false;
         }
     
         this.stateManager.queueSettingChange(
@@ -146,12 +159,12 @@ class SettingsUI {
     }
     
     handleSelectToggle(mode) {
-        const selectToggle = document.getElementById(`${mode}-select`);
+        const selectToggle = document.getElementById(`${mode}_select`);
         
         // If enabling this select, disable the other one
         if (selectToggle.checked) {
             const otherMode = mode === 'arena' ? 'rename' : 'arena';
-            document.getElementById(`${otherMode}-select`).checked = false;
+            document.getElementById(`${otherMode}_select`).checked = false;
         }
     
         this.updateModelCheckboxes();
@@ -164,7 +177,7 @@ class SettingsUI {
     }
 
     updateModelCheckboxes() {
-        const modelCheckboxes = document.getElementsByName('model-select');
+        const modelCheckboxes = document.getElementsByName('model_select');
         const currentMode = this.getCurrentMode();
     
         modelCheckboxes.forEach(input => {
@@ -195,22 +208,20 @@ class SettingsUI {
     }
 
     getCurrentMode() {
-        if (document.getElementById('arena-select').checked) return 'arena';
-        if (document.getElementById('rename-select').checked) return 'rename';
+        if (document.getElementById('arena_select').checked) return 'arena';
+        if (document.getElementById('rename_select').checked) return 'rename';
         return 'normal';
     }
 
     addModel() {
         const apiName = document.getElementById('model-api-name-input').value.trim();
         const displayName = document.getElementById('model-display-name-input').value.trim();
-        const provider = document.getElementById('button-model-provider-select')
-            .textContent.split(' ')[0].toLowerCase();
         
         if (!apiName || !displayName) return;
         
         if (!this.checkModelExists(apiName, displayName)) {
             this.addModelToUI(apiName, displayName);
-            this.stateManager.addModel(provider, apiName, displayName);
+            this.stateManager.addModel(this.currentAPIProvider, apiName, displayName);
         }
     }
 
@@ -261,7 +272,7 @@ class SettingsUI {
         input.className = 'checkbox';
         input.type = 'radio';
         input.id = apiName;
-        input.name = 'model-select';
+        input.name = 'model_select';
         input.value = apiName;
         
         const label = createElementWithClass('label', 'model-label', displayName);
@@ -316,8 +327,8 @@ class SettingsUI {
 
     validateSettings() {
         const currentMode = this.getCurrentMode();
-        if (currentMode === 'arena-mode') {
-            const selectedCount = document.querySelectorAll('input[name="model-select"]:checked').length;
+        if (currentMode === 'arena_mode') {
+            const selectedCount = document.querySelectorAll('input[name="model_select"]:checked').length;
             if (selectedCount < 2) {
                 document.getElementById('models-label').classList.add('settings-error');
                 return false;
@@ -327,16 +338,17 @@ class SettingsUI {
     }
 
     saveSettings() {
-        this.stateManager.queueSettingChange({
-            max_tokens: parseInt(document.getElementById('max-tokens').value),
-            temperature: parseFloat(document.getElementById('temperature').value),
-            loop_threshold: parseInt(document.getElementById('loop-threshold').value),
-            show_model_name: document.getElementById('show-model-name').checked,
-            close_on_deselect: document.getElementById('close-on-deselect').checked,
-            stream_response: document.getElementById('stream-response').checked,
-            arena_mode: document.getElementById('arena-mode').checked,
-            auto_rename: document.getElementById('auto-rename').checked
+        const settings = {};
+
+        Object.entries(this.settingsConfig.inputs).forEach(([id, { parser }]) => {
+            settings[id] = parser(document.getElementById(id).value);
         });
+
+        this.settingsConfig.checkboxes.forEach(id => {
+            settings[id] = document.getElementById(id).checked;
+        });
+
+        this.stateManager.queueSettingChange(settings);
     }
 
     cycleApiKeyInput() {
@@ -345,7 +357,7 @@ class SettingsUI {
     }
 
     setApiLabel() {
-        const input = document.getElementById('api-key-input');
+        const input = document.getElementById('api_key_input');
         const label = input.labels[0];
         const currentProvider = this.apiProviders[this.currentApiIndex];
         
@@ -355,15 +367,13 @@ class SettingsUI {
         input.value = "";
     }
 
-    cycleModelProvider(button) {
-        const [currentProvider] = button.textContent.split(' ');
-        const providers = Object.values(apiDisplayNames);
-        const nextProvider = providers[(providers.indexOf(currentProvider) + 1) % providers.length];
-        button.textContent = `${nextProvider} ⟳`;
+    cycleAPIProvider(button) {
+        this.currentAPIProvider = this.apiProviders[(this.apiProviders.indexOf(this.currentAPIProvider) + 1) % this.apiProviders.length];
+        button.textContent = `${apiDisplayNames[this.currentAPIProvider]} ⟳`;
     }
 
     async handlePromptSelection(promptType) {
-        const textarea = document.getElementById('customize-prompt');
+        const textarea = document.getElementById('customize_prompt');
         this.setTextAreaPlaceholder(textarea, promptType);
         const promptValue = await this.stateManager.getPrompt(promptType);
         textarea.value = promptValue || '';
@@ -386,7 +396,7 @@ class SettingsUI {
 
     initTextArea() {
         document.getElementById("chat-prompt").checked = true;
-        auto_resize_textfield_listener('customize-prompt');
+        auto_resize_textfield_listener('customize_prompt');
         this.handlePromptSelection('chat_prompt');
     }
 
