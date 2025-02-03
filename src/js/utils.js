@@ -201,13 +201,12 @@ export class TokenCounter {
     }
 
     update(inputTokens, outputTokens) {
-        if (this.provider === 'gemini') {
-            // Gemini API returns the total token count up to that point in the stream, so last value is the total.
-            this.inputTokens = inputTokens;
-            this.outputTokens = outputTokens;
-        } else {
-            this.inputTokens += inputTokens;
-            this.outputTokens += outputTokens;
+        const isGemini = this.provider === 'gemini';
+        if (typeof inputTokens === 'number') {
+            this.inputTokens = isGemini ? inputTokens : this.inputTokens + inputTokens;
+        }
+        if (typeof outputTokens === 'number') {
+            this.outputTokens = isGemini ? outputTokens : this.outputTokens + outputTokens;
         }
     }
 
@@ -303,6 +302,7 @@ export class StreamWriterSimple {
         this.scrollFunc = scrollFunc;
         this.parts = [ { type: 'text', content: [] } ];
         this.thoughtEndToggle = true;
+        this.thinkingModelWithCounter = false;
     }
 
     setThinkingModel() {
@@ -314,7 +314,8 @@ export class StreamWriterSimple {
     addThinkingCounter() {
         const span = this.contentDiv.parentElement.parentElement.querySelector('.message-prefix');
         if (!span) return;
-
+        
+        this.thinkingModelWithCounter = true;
         let seconds = 0;
         let intervalId = null;
         let hasProcessed = false;

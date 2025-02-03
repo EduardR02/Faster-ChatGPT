@@ -122,6 +122,11 @@ export class SidepanelChatCore extends ChatCore {
     }
 
     async appendRegenerated(message, model) {
+        // no check for if the message exists, as this should never be called in that case then
+        if (this.getLatestMessage().role !== 'assistant') {
+            this.addAssistantMessage(message, model);
+            return;
+        }
         message.forEach(msg => msg.model = model);
         this.getLatestMessage().contents.push(message);
         await this.updateSaved();

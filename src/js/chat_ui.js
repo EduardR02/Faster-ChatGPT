@@ -606,13 +606,9 @@ export class SidepanelChatUI extends ChatUI {
     }
 
     getContentDiv(model) {
-        let nodes = null;
-        if (!this.stateManager.isArenaModeActive) {
-            nodes = this.activeMessageDivs.querySelectorAll('.message-content');
-        } else {
-            const modelIndex = this.stateManager.getModelIndex(model);
-            nodes =  this.activeMessageDivs[modelIndex].querySelectorAll('.message-content');
-        }
+        const container = this.getActiveMessageElement(model);
+        if (!container) return null;
+        const nodes = container.querySelectorAll('.message-content');
         return nodes[nodes.length - 1];
     }
 
@@ -629,6 +625,53 @@ export class SidepanelChatUI extends ChatUI {
         this.activeMessageDivs = null;
         this.updateChatHeader('conversation');
         this.setTextareaText('');
+    }
+
+    // Returns the active message container for the given model.
+    getActiveMessageElement(model) {
+        if (this.stateManager.isArenaModeActive) {
+            const index = this.stateManager.getModelIndex(model);
+            return (index !== -1 && Array.isArray(this.activeMessageDivs))
+                ? this.activeMessageDivs[index]
+                : null;
+        }
+        return this.activeMessageDivs;
+    }
+
+    getActiveMessagePrefixElement(model) {
+        const container = this.getActiveMessageElement(model);
+        if (!container) return null;
+        if (this.stateManager.isArenaModeActive) {
+            const prefixes = container.querySelectorAll('.history-prefix-wrapper');
+            return prefixes.length ? prefixes[prefixes.length - 1] : container;
+        }
+        return container.querySelector('.history-prefix-wrapper') || container;
+    }
+
+    addManualAbortButton(model, manualAbort) {
+        const prefixElem = this.getActiveMessagePrefixElement(model);
+        if (!prefixElem) return;
+        const abortButton = this.createRemoveFileButton(manualAbort);
+        abortButton.classList.add('manual-abort-button');
+        abortButton.textContent = '\u{23F8}'; // Unicode for a stop button.
+        prefixElem.appendChild(abortButton);
+    }
+
+    removeManualAbortButton(model) {
+        const prefixElem = this.getActiveMessagePrefixElement(model);
+        if (!prefixElem) return;
+        const abortButton = prefixElem.querySelector('.manual-abort-button');
+        if (abortButton) {
+            abortButton.disabled = true;
+            abortButton.classList.add('fade-out');
+            const onTransitionEnd = (event) => {
+                if (event.propertyName === "opacity") {
+                    abortButton.removeEventListener('transitionend', onTransitionEnd);
+                    abortButton.remove();
+                }
+            };
+            abortButton.addEventListener('transitionend', onTransitionEnd);
+        }
     }
 }
 

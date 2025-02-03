@@ -35,29 +35,52 @@ export class SidepanelController {
         this.chatCore.initThinkingChat();
         const messages = this.chatCore.getMessagesForAPI(model);
 
+        const abortController = new AbortController();
+        let manualAborted = false;
+        const manualAbort = () => {
+            manualAborted = true;
+            abortController.abort();
+        };
+        this.chatUI.addManualAbortButton(model, manualAbort);
+
+        const streamWriter = this.createStreamWriter(
+            this.chatUI.getContentDiv(model),
+            this.stateManager.isArenaModeActive,
+            api_provider
+        );
+
+        const streamResponse = this.stateManager.getSetting('stream_response');
+        let success = false;
+        let responseResult;
         try {
-            let streamWriter = this.createStreamWriter(this.chatUI.getContentDiv(model), this.stateManager.isArenaModeActive, api_provider);
-            const streamResponse = this.stateManager.getSetting('stream_response');
-            const response = await this.apiManager.callApi(
+            responseResult = await this.apiManager.callApi(
                 model,
                 messages,
                 tokenCounter,
-                streamResponse ? streamWriter : null
+                streamResponse ? streamWriter : null,
+                abortController
             );
 
             if (!streamResponse) {
-                response.forEach(msg => streamWriter.processContent(msg.content, msg.type === 'thought'));
+                responseResult.forEach(msg =>
+                    streamWriter.processContent(msg.content, msg.type === 'thought')
+                );
             }
-
-            const msgFooter = this.createMessageFooter(tokenCounter, model);
-            await streamWriter.addFooter(msgFooter);
-
-            tokenCounter.updateLifetimeTokens();
-            this.saveResponseMessage(streamWriter.parts, model, isRegen).then(() => {
-                this.handleThinkingMode(model, isRegen);
-            });
+            success = true;
         } catch (error) {
-            this.chatUI.addErrorMessage(`Error: ${error.message}`);
+            if (!manualAborted) this.chatUI.addErrorMessage(`Error: ${error.message}`);
+        } finally {
+            tokenCounter.updateLifetimeTokens();
+            this.chatUI.removeManualAbortButton(model);
+            // if the response fails or is stopped in thinking mode, the footer should still create a regenerate button,
+            // which due to chatCore management conveniently continues with the thinking chain, discarding the invalid message
+            const isThinkingFunc = success ? null : () => false;
+            await streamWriter.addFooter(this.createMessageFooter(tokenCounter, model, isThinkingFunc));
+        }
+
+        if (success) {
+            await this.saveResponseMessage(streamWriter.parts, model, isRegen);
+            this.handleThinkingMode(model, isRegen);
         }
     }
 
@@ -118,12 +141,12 @@ export class SidepanelController {
         );
     }
 
-    createMessageFooter(tokenCounter, model) {
+    createMessageFooter(tokenCounter, model, isThinkingFunc = null) {
         return new Footer(
             tokenCounter.inputTokens,
             tokenCounter.outputTokens,
             this.stateManager.isArenaModeActive,
-            () => this.stateManager.isThinking(model),
+            isThinkingFunc !== null ? isThinkingFunc : () => this.stateManager.isThinking(model),
             () => this.regenerateResponse(model)
         );
     }

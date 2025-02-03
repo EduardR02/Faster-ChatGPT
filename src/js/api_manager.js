@@ -10,7 +10,7 @@ export class ApiManager {
         return this.settingsManager.getSetting('current_model');
     }
 
-    async callApi(model, messages, tokenCounter, streamWriter = null) {
+    async callApi(model, messages, tokenCounter, streamWriter = null, abortController = null) {
         const provider = this.getProviderForModel(model);
         const apiKeys = this.settingsManager.getSetting('api_keys') || {};
         
@@ -26,14 +26,28 @@ export class ApiManager {
             throw new Error("Invalid API request configuration.");
         }
 
+        if (!abortController) abortController = new AbortController();
+        requestOptions.signal = abortController.signal;
+
+        // Determine timeout duration (longer for "thinking" models)
+        const timeoutDuration = streamWriter?.thinkingModelWithCounter ? 60000 : 15000;
+        const timeoutId = setTimeout(() => {
+            abortController.abort();
+        }, timeoutDuration);
+
         try {
             const response = await fetch(apiLink, requestOptions);
+            clearTimeout(timeoutId);
             if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
 
             return streamResponse 
                 ? this.handleStreamResponse(response, model, tokenCounter, streamWriter)
                 : this.handleNonStreamResponse(response, model, tokenCounter);
         } catch (error) {
+            clearTimeout(timeoutId);
+            if (error.name === 'AbortError') {
+                throw new Error(`API request for ${model} was aborted after ${timeoutDuration / 1000} seconds.`);
+            }
             throw new Error(`API request error: ${error.message}`);
         }
     }

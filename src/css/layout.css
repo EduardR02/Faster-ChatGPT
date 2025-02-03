@@ -504,6 +504,18 @@ body {
   border-radius: 1rem;
 }
 
+.manual-abort-button {
+  background: rgba(239, 89, 111);
+  color: #ffffff;
+  font-size: 0.85rem;
+  transition: opacity 0.2s ease-out, color 0.1s ease-out;
+  border-radius: 0.5rem;
+  padding: 2px 5px;
+  line-height: 1;
+  width: fit-content;
+  height: fit-content;
+}
+
 .history-system-content {
   padding: 1em;
   padding-top: 0;
@@ -906,11 +918,13 @@ p {
 }
 
 .regenerate-button {
-  padding: 1px 6px;
+  padding: 2px 6px;
   background: #98c379;
+  border-radius: 0.5rem;
+  line-height: 1;
 }
 
-.regenerate-button.fade-out {
+.fade-out {
   transition: opacity 0.3s ease;
   opacity: 0;
 }
