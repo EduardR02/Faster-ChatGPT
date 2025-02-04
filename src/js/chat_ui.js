@@ -497,14 +497,14 @@ export class SidepanelChatUI extends ChatUI {
             allButtons.forEach(otherBtn => {
                 if (otherBtn !== button) {
                     if (isEnter) {
-                        if (otherBtn.classList.contains('choice')) {
+                        if (button.classList.contains('choice') && otherBtn.classList.contains('choice')) {
                             otherBtn.classList.add('choice-not-hovered');
                             otherBtn.textContent = 'X';
                         } else {
                             otherBtn.classList.add('hovered');
                         }
                     } else {
-                        if (otherBtn.classList.contains('choice')) {
+                        if (button.classList.contains('choice') && otherBtn.classList.contains('choice')) {
                             otherBtn.classList.remove('choice-not-hovered');
                             otherBtn.textContent = '\u{2713}';
                         } else {
