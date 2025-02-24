@@ -377,9 +377,24 @@ export class ApiManager {
     handleAnthropicStreamData(parsed, tokenCounter, streamWriter) {
         switch (parsed.type) {
             case 'content_block_delta':
-                const content = parsed.delta.text;
-                if (content) {
-                    streamWriter.processContent(content);
+                if (parsed.delta.type === 'text_delta') {
+                    const content = parsed.delta.text;
+                    if (content) {
+                        streamWriter.processContent(content);
+                    }
+                } else if (parsed.delta.type === 'thinking_delta') {
+                    // First time we see a thinking delta, set up the thinking UI
+                    if (!streamWriter.isThinkingModel) {
+                        streamWriter.setThinkingModel();
+                    }
+                    
+                    const thinking = parsed.delta.thinking;
+                    if (thinking) {
+                        streamWriter.processContent(thinking, true);
+                    }
+                } else if (parsed.delta.text) {
+                    // Legacy format support
+                    streamWriter.processContent(parsed.delta.text);
                 }
                 break;
             case 'message_start':
