@@ -111,9 +111,20 @@ export function auto_resize_textfield_listener(element_id) {
 
 export function update_textfield_height(inputField) {
     inputField.style.height = 'auto';
-    let buttonArea = document.querySelector('.chatbox-button-container');
-    let buttonAreaHeight = buttonArea ? buttonArea.offsetHeight : 0;
-    inputField.style.height = (Math.max(inputField.scrollHeight, buttonAreaHeight)) + 'px';
+    
+    // Get heights of button containers
+    let topButtonArea = document.querySelector('.chatbox-button-container');
+    let topButtonHeight = topButtonArea ? topButtonArea.offsetHeight : 0;
+    
+    // Get thinking button height if visible
+    let thinkButton = document.getElementById('sonnet-thinking-toggle');
+    let thinkButtonHeight = 0;
+    if (thinkButton && thinkButton.style.display !== 'none') {
+        thinkButtonHeight = thinkButton.offsetHeight + 10; // Button height plus padding
+    }
+    
+    // Use the larger of the heights
+    inputField.style.height = (Math.max(inputField.scrollHeight + thinkButtonHeight, topButtonHeight)) + 'px';
 }
 
 

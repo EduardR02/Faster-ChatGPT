@@ -5,6 +5,7 @@ export class ApiManager {
     constructor() {
         this.settingsManager = new SettingsManager(['api_keys', 'max_tokens', 'temperature', 'models', 'current_model']);
         this.lastContentWasRedacted = false;
+        this.shouldSonnetThink = false;
     }
 
     getCurrentModel() {
@@ -190,9 +191,9 @@ export class ApiManager {
         
         // Configure thinking for Sonnet 3.7
         let thinkingConfig = null;
-        if (isSonnet37) {
-            // Calculate thinking budget (half of max_tokens, minimum 1024)
-            const thinkingBudget = Math.max(1024, Math.floor(max_tokens / 2));
+        if (isSonnet37 && this.shouldSonnetThink) {
+            // Calculate thinking budget (leave 2000 tokens for answer)
+            const thinkingBudget = Math.max(1024, max_tokens - 2000);
             thinkingConfig = {
                 type: "enabled",
                 budget_tokens: thinkingBudget

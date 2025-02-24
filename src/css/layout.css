@@ -137,7 +137,8 @@ body {
 .incognito-toggle,
 .history-auto-rename,
 .sidepanel-open-history,
-.sidepanel-open-settings {
+.sidepanel-open-settings,
+.sonnet-thinking-toggle {
   overflow: hidden;
   border-radius: 0.5rem;
   font-size: 0.8em;
@@ -149,6 +150,36 @@ body {
   min-width: fit-content;
   transition: background 0.1s ease-out;
   color: #282c34;
+}
+
+.sonnet-thinking-toggle {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  display: flex;
+  border-radius: 9999px;
+  align-items: center;
+  gap: 2px;
+  transition: background 0.1s ease-out, color 0.2s ease-out;
+  z-index: 2;
+}
+
+.sonnet-thinking-toggle svg {
+  height: 16px;
+  fill: currentColor;
+}
+
+.sonnet-thinking-toggle:hover {
+  color: #ffffff;
+}
+
+.sonnet-thinking-toggle.active {
+  background: #5c6980;
+  color: #ffffff;
+}
+
+.sonnet-thinking-toggle.active:hover {
+  color: #1e1e1e;
 }
 
 .linked-chat {

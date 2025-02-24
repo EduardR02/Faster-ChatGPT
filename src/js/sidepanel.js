@@ -1,4 +1,4 @@
-import { auto_resize_textfield_listener } from "./utils.js";
+import { auto_resize_textfield_listener, update_textfield_height } from "./utils.js";
 import { ApiManager } from "./api_manager.js";
 import { ChatStorage } from './chat_storage.js';
 import { SidepanelStateManager } from './state_manager.js';
@@ -34,6 +34,7 @@ class SidepanelApp {
         this.initTextareaImageHandling();
         this.setupMessageListeners();
         this.stateManager.subscribeToChatReset("chat", () => {this.handleNewChat()});
+        this.initSonnetThinking();
     }
 
     initInputListener() {
@@ -400,6 +401,42 @@ class SidepanelApp {
                            textarea.value.slice(textarea.selectionEnd);
             this.chatUI.setTextareaText(value);
         }
+    }
+
+    initSonnetThinking() {
+        const sonnetThinkButton = document.getElementById('sonnet-thinking-toggle');
+        if (!sonnetThinkButton) return;
+        
+        // Initially hide the button
+        sonnetThinkButton.style.display = 'none';
+        
+        // Set up the click handler
+        sonnetThinkButton.addEventListener('click', () => {
+            this.apiManager.shouldSonnetThink = !this.apiManager.shouldSonnetThink;
+            sonnetThinkButton.classList.toggle('active', this.apiManager.shouldSonnetThink);
+        });
+        
+        // Define the update function
+        const updateSonnetThinkingButton = () => {
+            let model = this.stateManager.getSetting('current_model');
+            const isSonnet = model && model.includes('3-7-sonnet');
+            
+            if (isSonnet) {
+                sonnetThinkButton.style.display = 'flex';
+                // Set the active state based on current thinking setting
+                sonnetThinkButton.classList.toggle('active', this.apiManager.shouldSonnetThink);
+            } else {
+                sonnetThinkButton.style.display = 'none';
+                // Reset the thinking flag when switching away from Sonnet
+                this.apiManager.shouldSonnetThink = false;
+            }
+            update_textfield_height(document.getElementById('textInput'));
+        };
+        
+        // Run the update function immediately with the current model
+        this.stateManager.runOnReady(updateSonnetThinkingButton);
+        // Subscribe to model changes
+        this.stateManager.subscribeToSetting('current_model', updateSonnetThinkingButton);
     }
 }
 
