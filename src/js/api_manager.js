@@ -4,6 +4,7 @@ import { SettingsManager } from './state_manager.js';
 export class ApiManager {
     constructor() {
         this.settingsManager = new SettingsManager(['api_keys', 'max_tokens', 'temperature', 'models', 'current_model']);
+        this.lastContentWasRedacted = false;
     }
 
     getCurrentModel() {
@@ -71,7 +72,7 @@ export class ApiManager {
             case 'openai':
                 return this.createOpenAIRequest(model, messages, streamResponse, streamWriter, apiKeys.openai);
             case 'anthropic':
-                return this.createAnthropicRequest(model, messages, streamResponse, apiKeys.anthropic);
+                return this.createAnthropicRequest(model, messages, streamResponse, streamWriter, apiKeys.anthropic);
             case 'gemini':
                 return this.createGeminiRequest(model, messages, streamResponse, streamWriter, apiKeys.gemini);
             case 'deepseek':
@@ -183,7 +184,24 @@ export class ApiManager {
         }];
     }
 
-    createAnthropicRequest(model, messages, streamResponse, apiKey) {
+    createAnthropicRequest(model, messages, streamResponse, streamWriter, apiKey) {
+        const isSonnet37 = model.includes('3-7-sonnet');
+        const max_tokens = this.settingsManager.getSetting('max_tokens');
+        
+        // Configure thinking for Sonnet 3.7
+        let thinkingConfig = null;
+        if (isSonnet37) {
+            // Calculate thinking budget (half of max_tokens, minimum 1024)
+            const thinkingBudget = Math.max(1024, Math.floor(max_tokens / 2));
+            thinkingConfig = {
+                type: "enabled",
+                budget_tokens: thinkingBudget
+            };
+            
+            // Set up thinking UI if using streaming
+            if (streamWriter) streamWriter.setThinkingModel();
+        }
+        
         messages = this.formatMessagesForAnthropic(messages);
         return ['https://api.anthropic.com/v1/messages', {
             method: 'POST',
@@ -198,8 +216,9 @@ export class ApiManager {
                 model,
                 system: [messages[0].content[0]],
                 messages: messages.slice(1),
-                max_tokens: this.settingsManager.getSetting('max_tokens'),
-                temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.anthropic),
+                max_tokens,
+                ...((!thinkingConfig) && { temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.anthropic) }),
+                ...(thinkingConfig && { thinking: thinkingConfig }),
                 stream: streamResponse
             })
         }];
@@ -383,11 +402,6 @@ export class ApiManager {
                         streamWriter.processContent(content);
                     }
                 } else if (parsed.delta.type === 'thinking_delta') {
-                    // First time we see a thinking delta, set up the thinking UI
-                    if (!streamWriter.isThinkingModel) {
-                        streamWriter.setThinkingModel();
-                    }
-                    
                     const thinking = parsed.delta.thinking;
                     if (thinking) {
                         streamWriter.processContent(thinking, true);
@@ -395,6 +409,16 @@ export class ApiManager {
                 } else if (parsed.delta.text) {
                     // Legacy format support
                     streamWriter.processContent(parsed.delta.text);
+                }
+                break;
+            case 'content_block_start':
+                if (parsed.content_block && parsed.content_block.type === 'redacted_thinking') {
+                    if (!this.lastContentWasRedacted) {
+                        streamWriter.processContent("\n\n```\n*redacted thinking*\n```\n\n", true);
+                        this.lastContentWasRedacted = true;
+                    }
+                } else {
+                    this.lastContentWasRedacted = false;
                 }
                 break;
             case 'message_start':
@@ -450,5 +474,7 @@ const MaxTemp = {
     gemini: 2.0,
     deepseek: 2.0
 };
+
+// for now decided against of having a "max tokens" for every api, as it varies by model... let the user figure it out :)
 
 const RoleEnum = { system: "system", user: "user", assistant: "assistant" };
