@@ -8,7 +8,7 @@ body {
 
 ::selection {
   background: rgba(255, 255, 255, 0.15);
-  color: #98C379;
+  color: #ffffff;
 }
 
 ::-webkit-scrollbar {
@@ -758,6 +758,10 @@ p {
   white-space: pre-wrap;
 }
 
+.message-content::selection {
+  color: #98C379;
+}
+
 .history-system-content {
   color: #d4d4d4;
 }
@@ -817,6 +821,10 @@ p {
 
 .thoughts {
   color: #abb2bf;
+}
+
+.thoughts::selection {
+  color: #61afef;
 }
 
 .message-footer {
@@ -898,6 +906,10 @@ p {
   resize: none;
   height: auto;
   overflow: hidden;
+}
+
+.std-input::selection {
+  color: #fdaaaa;
 }
 
 .textarea-wrapper .std-input {
