@@ -167,6 +167,11 @@ export class ApiManager {
         messages = this.formatMessagesForOpenAI(messages, !noImage, !o1);
         if (isReasoner && streamWriter) streamWriter.addThinkingCounter();
 
+        const maxTokens = Math.min(
+            this.settingsManager.getSetting('max_tokens'),
+            isReasoner ? MaxTokens.openai_thinking : MaxTokens.openai
+        );
+
         return ['https://api.openai.com/v1/chat/completions', {
             method: 'POST',
             credentials: 'omit',
@@ -175,8 +180,8 @@ export class ApiManager {
                 model,
                 messages,
                 ...(o3 && { reasoning_effort: this.settingsManager.getSetting('reasoning_effort') || 'medium' }),
-                ...(isReasoner ? {max_completion_tokens: this.settingsManager.getSetting('max_tokens')} : {
-                    max_tokens: this.settingsManager.getSetting('max_tokens'),
+                ...(isReasoner ? {max_completion_tokens: maxTokens} : {
+                    max_tokens: maxTokens,
                     temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.openai)
                 }),
                 stream: streamResponse,
@@ -187,13 +192,17 @@ export class ApiManager {
 
     createAnthropicRequest(model, messages, streamResponse, streamWriter, apiKey) {
         const isSonnet37 = model.includes('3-7-sonnet');
-        const max_tokens = this.settingsManager.getSetting('max_tokens');
+        const isThinking = isSonnet37 && this.shouldSonnetThink;
+        const maxTokens = Math.min(
+            this.settingsManager.getSetting('max_tokens'),
+            isThinking ? MaxTokens.anthropic_thinking : MaxTokens.anthropic
+        );
         
         // Configure thinking for Sonnet 3.7
         let thinkingConfig = null;
-        if (isSonnet37 && this.shouldSonnetThink) {
-            // Calculate thinking budget (leave 2000 tokens for answer)
-            const thinkingBudget = Math.max(1024, max_tokens - 2000);
+        if (isThinking) {
+            // Calculate thinking budget (leave at least 4000 tokens for answer)
+            const thinkingBudget = Math.max(1024, maxTokens - 4000);
             thinkingConfig = {
                 type: "enabled",
                 budget_tokens: thinkingBudget
@@ -217,7 +226,7 @@ export class ApiManager {
                 model,
                 system: [messages[0].content[0]],
                 messages: messages.slice(1),
-                max_tokens,
+                max_tokens: maxTokens,
                 ...((!thinkingConfig) && { temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.anthropic) }),
                 ...(thinkingConfig && { thinking: thinkingConfig }),
                 stream: streamResponse
@@ -229,6 +238,11 @@ export class ApiManager {
         const isReasoner = model.includes('reasoner');
         if (isReasoner && streamWriter) streamWriter.setThinkingModel();
         
+        const maxTokens = Math.min(
+            this.settingsManager.getSetting('max_tokens'),
+            MaxTokens.deepseek
+        );
+        
         return ['https://api.deepseek.com/v1/chat/completions', {
             method: 'POST',
             credentials: 'omit',
@@ -236,7 +250,7 @@ export class ApiManager {
             body: JSON.stringify({
                 model,
                 messages: this.formatMessagesForDeepseek(messages),
-                max_tokens: this.settingsManager.getSetting('max_tokens'),
+                max_tokens: maxTokens,
                 ...(!isReasoner && {temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.deepseek)}),
                 stream: streamResponse,
                 ...(streamResponse && {stream_options: {include_usage: true}})
@@ -250,6 +264,11 @@ export class ApiManager {
             messages = messages.map(({role, content}) => ({role, content}));
             if (streamWriter) streamWriter.setThinkingModel();
         }
+        
+        const maxTokens = Math.min(
+            this.settingsManager.getSetting('max_tokens'),
+            isThinking ? MaxTokens.gemini_thinking : MaxTokens.gemini
+        );
         
         messages = this.formatMessagesForGemini(messages);
         const apiVersion = isThinking ? 'v1alpha' : 'v1beta';
@@ -265,7 +284,7 @@ export class ApiManager {
                 safetySettings: this.getGeminiSafetySettings(),
                 generationConfig: {
                     temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.gemini),
-                    maxOutputTokens: this.settingsManager.getSetting('max_tokens'),
+                    maxOutputTokens: maxTokens,
                     responseMimeType: "text/plain",
                     ...(isThinking && {thinking_config: {include_thoughts: true}})
                 }
@@ -474,6 +493,16 @@ const MaxTemp = {
     anthropic: 1.0,
     gemini: 2.0,
     deepseek: 2.0
+};
+
+const MaxTokens = {
+    openai: 16384,
+    openai_thinking: 100000,
+    anthropic: 8192,
+    anthropic_thinking: 64000,
+    gemini: 8192,
+    gemini_thinking: 65536,
+    deepseek: 8000
 };
 
 // for now decided against of having a "max tokens" for every api, as it varies by model... let the user figure it out :)
