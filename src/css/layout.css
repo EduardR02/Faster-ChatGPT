@@ -1,5 +1,12 @@
+@import url('https://fonts.googleapis.com/css2?family=Source+Code+Pro&display=swap');
+
+* {
+  /* Try Consolas first, then the imported fonts, then system defaults */
+  font-family: Consolas, 'Source Code Pro', 'Cascadia Code', monospace;
+}
+
 body {
-  font-family: Consolas, Courier New, monospace;
+  font-family: Consolas, 'Source Code Pro', 'Cascadia Code', monospace;
   font-size: 14px;
   background-color: #282c34;
   padding:0;

@@ -74,7 +74,7 @@ class ChatUI {
 
         if (role === 'assistant') {
             prefix = hideModels ? prefix : model;
-            if (isRegeneration) prefix += ' ⟳';
+            if (isRegeneration) prefix += ' \u{27F3}';
             if (this.stateManager.isThinking(model)) prefix += ' 🧠';
             else if (this.stateManager.isSolving(model)) prefix += ' 💡';
         }
@@ -85,7 +85,7 @@ class ChatUI {
     createSystemMessage(content, title = 'System Prompt') {
         const messageDiv = createElementWithClass('div', 'history-system-message collapsed');
         const toggleButton = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
-        const toggleIcon = createElementWithClass('span', 'toggle-icon', '⯈');
+        const toggleIcon = createElementWithClass('span', 'toggle-icon', '\u{25B6}');
         const contentDiv = createElementWithClass('div', 'message-content history-system-content');
 
         contentDiv.innerHTML = add_codeblock_html(content);
@@ -284,7 +284,7 @@ class ChatUI {
 
     createFileToggleButton(fileName) {
         const button = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
-        const icon = createElementWithClass('span', 'toggle-icon', '⯈');
+        const icon = createElementWithClass('span', 'toggle-icon', '\u{25B6}');
         button.append(icon, fileName);
         button.onclick = () => button.closest('.history-system-message').classList.toggle('collapsed');
         return button;
