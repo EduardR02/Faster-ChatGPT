@@ -416,11 +416,13 @@ body {
   z-index: -1;
 }
 
+.history-sidebar-item.keyboard-navigating::before,
 .history-sidebar-item:hover::before {
   transform: scaleX(1);
   transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+.history-sidebar-item.keyboard-navigating,
 .history-sidebar-item:hover {
   color: #ffffff;
 }

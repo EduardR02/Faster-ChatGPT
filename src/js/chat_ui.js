@@ -699,6 +699,137 @@ export class HistoryChatUI extends ChatUI {
         this.getChatMeta = getChatMeta;
 
         this.initHistoryListHandling();
+        this.initKeyboardNavigation();
+    }
+
+    // we need all of this just for the animations. If we don't care then it's like a 15 line function. But we care... also gemini loves comments lol
+    initKeyboardNavigation() {
+        // State for tracking the item currently undergoing keyboard navigation animation
+        const keyboardNavState = {
+            targetItem: null,       // The element currently being animated
+            transitionEndHandler: null, // Reference to the specific transitionend listener
+            cleanupTimeoutId: null      // ID for the failsafe cleanup timeout
+        };
+    
+        // Central cleanup: Remove styles, listener, and timeout for a given item
+        const cleanupKeyboardStyles = (item) => {
+            if (!item) return;
+    
+            item.classList.remove('keyboard-navigating');
+    
+            // If this item is the one we're currently tracking, clear its associated state
+            if (keyboardNavState.targetItem === item) {
+                if (keyboardNavState.transitionEndHandler) {
+                    item.removeEventListener('transitionend', keyboardNavState.transitionEndHandler);
+                }
+                if (keyboardNavState.cleanupTimeoutId) {
+                    clearTimeout(keyboardNavState.cleanupTimeoutId);
+                }
+                // Reset state tracking
+                keyboardNavState.targetItem = null;
+                keyboardNavState.transitionEndHandler = null;
+                keyboardNavState.cleanupTimeoutId = null;
+            }
+            // Note: We don't reset state if 'item' is not the current targetItem,
+            // because the cleanup might be preemptive (on the *next* item).
+        };
+    
+        // Helper to find the next focusable history item, skipping dividers
+        const findNextHistoryItem = (currentItem, direction) => {
+            const siblingProp = direction === 'up' ? 'previousElementSibling' : 'nextElementSibling';
+            let candidate = currentItem[siblingProp];
+            while (candidate && candidate.classList.contains('history-divider')) {
+                candidate = candidate[siblingProp];
+            }
+            // Ensure it's actually a history item before returning
+            return (candidate && candidate.classList.contains('history-sidebar-item')) ? candidate : null;
+        };
+    
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    
+            const currentItem = document.activeElement;
+            // Ensure focus is valid and within the history list
+            if (!currentItem || !currentItem.classList.contains('history-sidebar-item') || !this.historyList.contains(currentItem)) {
+                return;
+            }
+    
+            e.preventDefault(); // Stop default page scroll
+    
+            const direction = e.key === 'ArrowUp' ? 'up' : 'down';
+            const nextItem = findNextHistoryItem(currentItem, direction);
+    
+            if (nextItem) {
+                // --- Aggressive Cleanup ---
+                // 1. Clean the *previously* targeted item (handles rapid navigation)
+                cleanupKeyboardStyles(keyboardNavState.targetItem);
+                // 2. Clean the item we are *moving to* (handles potential stale states, e.g., from hover)
+                cleanupKeyboardStyles(nextItem);
+    
+                // --- Navigation ---
+                nextItem.focus();
+                nextItem.click(); // Assuming click side-effect is desired
+                nextItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    
+                // --- Apply Effect & Setup Cleanup Handlers ---
+    
+                // Handler executed when the CSS transition finishes
+                const specificTransitionEndHandler = (event) => {
+                    // Ensure we only handle the transform transition on the correct target
+                    if (event.target === nextItem && event.propertyName === 'transform') {
+                        // If this item is still the tracked target, clean it up.
+                        // The check prevents cleanup if the user navigated away *extremely* fast.
+                        if (keyboardNavState.targetItem === nextItem) {
+                             // Normal cleanup via transitionend, cancel the failsafe timeout
+                            if (keyboardNavState.cleanupTimeoutId) {
+                               clearTimeout(keyboardNavState.cleanupTimeoutId);
+                               // keyboardNavState.cleanupTimeoutId = null; // cleanupKeyboardStyles will null it
+                            }
+                            cleanupKeyboardStyles(nextItem);
+                        } else {
+                            // If target changed before transitionend fired, ensure listener is removed anyway.
+                            // cleanupKeyboardStyles for the *new* target would handle state reset.
+                            nextItem.removeEventListener('transitionend', specificTransitionEndHandler);
+                        }
+                    }
+                };
+    
+                // Apply animation class & attach listener
+                nextItem.classList.add('keyboard-navigating');
+                nextItem.addEventListener('transitionend', specificTransitionEndHandler);
+    
+                // Update state to track the new item and its handler
+                keyboardNavState.targetItem = nextItem;
+                keyboardNavState.transitionEndHandler = specificTransitionEndHandler;
+    
+                // --- Failsafe Timeout ---
+                // Guarantees cleanup even if transitionend doesn't fire reliably.
+                const transitionDurationMs = parseFloat(getComputedStyle(nextItem).transitionDuration) * 1000;
+                const failsafeDelay = isNaN(transitionDurationMs) ? 300 : transitionDurationMs + 100; // Duration + buffer
+    
+                 // Clear any previous failsafe timeout before setting a new one.
+                 if (keyboardNavState.cleanupTimeoutId) {
+                     clearTimeout(keyboardNavState.cleanupTimeoutId);
+                 }
+    
+                keyboardNavState.cleanupTimeoutId = setTimeout(() => {
+                    // Double-check if this item is *still* the target when the timeout fires
+                    if (keyboardNavState.targetItem === nextItem) {
+                        // console.warn(`Keyboard nav style cleanup triggered by timeout for:`, nextItem);
+                        cleanupKeyboardStyles(nextItem); // Force cleanup
+                    }
+                    // Ensure timeout ID is cleared regardless once it executes (or is cleared elsewhere)
+                    // cleanupKeyboardStyles handles nulling if targetItem matches. If not, we should null it here?
+                    // Let's rethink: if targetItem isn't nextItem anymore when timeout fires, the timeout belongs
+                    // to an "orphaned" state. It should just null itself out.
+                    if (keyboardNavState.targetItem !== nextItem) {
+                        keyboardNavState.cleanupTimeoutId = null; // Timeout fired for a stale target
+                    }
+                    // If targetItem WAS nextItem, cleanupKeyboardStyles already nulled it.
+    
+                }, failsafeDelay);
+            }
+        });
     }
 
     reloadHistoryList() {
