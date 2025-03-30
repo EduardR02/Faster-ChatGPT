@@ -39,7 +39,7 @@ function is_mode_on(callback) {
 function listener(event) {
     let selection = window.getSelection().toString().trim();
     // only do anything if ctrl is also pressed, to not spam panel when not intended
-    if (selection.length > 0 && selection !== previous_selection && event.ctrlKey) {
+    if (selection.length > 0 && selection !== previous_selection && (event.ctrlKey || event.metaKey)) {
         (async () => {
             let current_url = window.location.href;
             let response = await chrome.runtime.sendMessage({ type: "is_sidepanel_open" });
