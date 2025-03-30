@@ -906,7 +906,6 @@ p {
   padding: 0.5rem;
   border-radius: 1rem;
   box-sizing: border-box;
-  font-family: Consolas, Courier New, monospace;
   border: 1px solid #abb2bf;
   background-color: #21252b;
   color: #ffffff;
@@ -951,7 +950,6 @@ p {
 }
 
 .button {
-  font-family: Consolas, Courier New, monospace;
   border-radius: 1rem;
   position: relative;
   background: var(--check-primary, #61afef);
