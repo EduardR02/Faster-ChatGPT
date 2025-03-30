@@ -82,6 +82,7 @@ export function remove_model_from_storage(apiString) {
 
 // Process code blocks only at the end (poor man's streamed codeblock) (claude magic)
 export function add_codeblock_html(message) {
+    initializeCodeblockCopyHandler();   // fast easy add on, we get this "for free"
     // First escape ALL HTML
     const escapedMessage = message
         .replace(/&/g, '&amp;')
@@ -93,9 +94,53 @@ export function add_codeblock_html(message) {
     // Then handle code blocks
     const codeBlockRegex = /(\n*)```(\w*)\n([\s\S]*?)```(\n+|$)/g;
     return escapedMessage.replace(codeBlockRegex, (match, preNewlines, lang, code, postNewlines) => {
-        const paddingBack = '\n';
-        const paddingFront = paddingBack + '\n';
-        return `${paddingFront}<div class="code-style"><pre><code class="language-${lang}">${code}</code></pre></div>${paddingBack}`;
+        const buttonHtml = createCopyButtonHtml();
+        return `\n\n<div class="code-container">${buttonHtml}<div class="code-style"><pre><code class="language-${lang}">${code}</code></pre></div></div>\n`;
+    });
+}
+
+
+const copyButtonSvg = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="icon-xs"><path fill-rule="evenodd" clip-rule="evenodd" d="M7 5C7 3.34315 8.34315 2 10 2H19C20.6569 2 22 3.34315 22 5V14C22 15.6569 20.6569 17 19 17H17V19C17 20.6569 15.6569 22 14 22H5C3.34315 22 2 20.6569 2 19V10C2 8.34315 3.34315 7 5 7H7V5ZM9 7H14C15.6569 7 17 8.34315 17 10V15H19C19.5523 15 20 14.5523 20 14V5C20 4.44772 19.5523 4 19 4H10C9.44772 4 9 4.44772 9 5V7ZM5 9C4.44772 9 4 9.44772 4 10V19C4 19.5523 4.44772 20 5 20H14C14.5523 20 15 19.5523 15 19V10C15 9.44772 14.5523 9 14 9H5Z" fill="currentColor"></path></svg>`;
+function createCopyButtonHtml() {
+    return `<button class="unset-button copy-code-button" aria-label="Copy to clipboard" title="Copy">${copyButtonSvg}</button>`;
+}
+
+
+let isCopyHandlerInitialized = false;   // make sure only one listener per script
+function initializeCodeblockCopyHandler() {
+    if (isCopyHandlerInitialized) return;
+
+    document.addEventListener('click', (event) => {
+        // Use closest to find a relevant button ancestor from the clicked target
+        const copyButton = event.target.closest('.copy-code-button');
+
+        // If a non-disabled button was clicked, handle it
+        if (copyButton && !copyButton.disabled) {
+            handleCopyClick(copyButton);
+        }
+    });
+
+    isCopyHandlerInitialized = true;
+}
+
+
+function handleCopyClick(buttonElement) {
+    const container = buttonElement.closest('.code-container');
+    const codeElement = container?.querySelector('.code-style code');
+
+    if (!codeElement) return;
+
+    const codeToCopy = codeElement.textContent.trim();
+
+    navigator.clipboard.writeText(codeToCopy).then(() => {
+        buttonElement.classList.add('copied');
+
+        const handleTransitionEnd = () => {
+            buttonElement.classList.remove('copied');
+            buttonElement.removeEventListener('transitionend', handleTransitionEnd);
+        };
+        
+        buttonElement.addEventListener('transitionend', handleTransitionEnd);
     });
 }
 

@@ -291,7 +291,7 @@ class ChatUI {
     }
 
     createRemoveFileButton(onClickHandler) {
-        const button = createElementWithClass('button', 'unset-button rename-cancel remove-file-button', '✕');
+        const button = createElementWithClass('button', 'unset-button rename-cancel remove-file-button', '\u{2715}');
         button.onclick = onClickHandler;
         return button;
     }

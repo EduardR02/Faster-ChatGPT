@@ -36,6 +36,12 @@ body {
   background: #5c6980;
 }
 
+.code-container {
+  position: relative;
+  margin: 0;
+  padding: 0;
+}
+
 .code-style {
   background: #1e1e1e;
   color: #d4d4d4;
@@ -145,6 +151,7 @@ body {
 .history-auto-rename,
 .sidepanel-open-history,
 .sidepanel-open-settings,
+.copy-code-button,
 .sonnet-thinking-toggle {
   overflow: hidden;
   border-radius: 0.5rem;
@@ -171,9 +178,41 @@ body {
   z-index: 2;
 }
 
+.copy-code-button {
+  position: absolute;
+  top: 0px;
+  right: 0px;
+  z-index: 1;
+  background-color: transparent;
+  color: #ffffff;
+  padding: 3px;
+  border-radius: 4px;
+  transition: background 0.15s ease-out, color 1s ease-out;
+  line-height: 0;
+}
+
 .sonnet-thinking-toggle svg {
   height: 16px;
   fill: currentColor;
+}
+
+.copy-code-button svg {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
+.copy-code-button:hover {
+  background: #4b5363;
+}
+
+.copy-code-button:active {
+  color: #98C379;
+  transition: color 0s;
+}
+
+.copy-code-button.copied {
+  color: #98C379;
 }
 
 .sonnet-thinking-toggle:hover {
