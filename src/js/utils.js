@@ -95,7 +95,7 @@ export function add_codeblock_html(message) {
     const codeBlockRegex = /(\n*)```(\w*)\n([\s\S]*?)```(\n+|$)/g;
     return escapedMessage.replace(codeBlockRegex, (match, preNewlines, lang, code, postNewlines) => {
         const buttonHtml = createCopyButtonHtml();
-        return `\n\n<div class="code-container">${buttonHtml}<div class="code-style"><pre><code class="language-${lang}">${code}</code></pre></div></div>\n`;
+        return `\n\n<div class="code-container">${buttonHtml}<div class="code-style"><code class="language-${lang}">${code}</code></div></div>\n`;
     });
 }
 
