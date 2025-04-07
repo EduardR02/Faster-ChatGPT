@@ -261,7 +261,6 @@ export class ApiManager {
     createGeminiRequest(model, messages, streamResponse, streamWriter, apiKey) {
         const isThinking = model.includes('thinking') || model.includes('gemini-2.5-pro-exp');  // very specific but no better way to do this rn
         if (isThinking) {
-            messages = messages.map(({role, content}) => ({role, content}));
             if (streamWriter) streamWriter.addThinkingCounter();
         }
         
