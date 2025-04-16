@@ -163,7 +163,7 @@ export class ApiManager {
         const o1 = model.includes('o1');
         const o3 = model.includes('o3');
         const o4 = model.includes('o4');
-        const noImage = model.includes('o1-mini') || model.includes('o1-preview') || o3;
+        const noImage = model.includes('o1-mini') || model.includes('o1-preview') || model.includes('o3-mini');
         const isReasoner = o1 || o3 || o4;
         messages = this.formatMessagesForOpenAI(messages, !noImage, !o1);
         if (isReasoner && streamWriter) streamWriter.addThinkingCounter();
