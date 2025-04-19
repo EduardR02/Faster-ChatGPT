@@ -387,6 +387,10 @@ body {
   border-radius: 0.5rem;
 }
 
+.unset-button.model-picker-toggle:hover {
+  color: #fdaaaa;
+}
+
 /* Popup list of models */
 .model-picker-popup {
   position: absolute;
