@@ -169,15 +169,21 @@ body {
 }
 
 .sonnet-thinking-toggle {
-  position: absolute;
-  bottom: 10px;
-  left: 10px;
   display: flex;
   border-radius: 9999px;
   align-items: center;
   gap: 2px;
   transition: background 0.1s ease-out, color 0.2s ease-out;
-  z-index: 2;
+  overflow: hidden;
+  border-radius: 0.5rem;
+  font-size: 0.8em;
+  width: min-content;
+  cursor: pointer;
+  padding: 1px 5px;
+  background: #abb2bf;
+  white-space: nowrap;
+  min-width: fit-content;
+  color: #282c34;
 }
 
 .copy-code-button {
@@ -369,6 +375,66 @@ body {
   mask-image: linear-gradient(to right, black 85%, transparent 100%);
   transition: mask-image 0.2s ease-out;
   min-width: 0;
+}
+
+/* Model picker button */
+.unset-button.model-picker-toggle {
+  background: transparent;
+  font-size: 0.8em;
+  padding: 1px 5px;
+  cursor: pointer;
+  color: #d4d4d4;
+  border-radius: 0.5rem;
+}
+
+/* Popup list of models */
+.model-picker-popup {
+  position: absolute;
+  display: none;
+  font-size: 0.7rem;
+  flex-direction: column;
+  background: #21252b;
+  border: 1px solid #abb2bf;
+  border-radius: 0.5rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+  max-height: 200px;
+  overflow-y: auto;
+  overflow-x: auto;
+  width: 150px;
+  z-index: 3;
+}
+.model-picker-popup ul {
+  margin: 0;
+  padding: 0.5em;
+  list-style: none;
+  min-width: 100%;
+  width: max-content;
+  box-sizing: border-box;
+}
+.model-picker-popup li {
+  padding: 0.2em 0.5em;
+  cursor: pointer;
+  white-space: nowrap;
+  display: block;
+  border-radius: 9999px;
+}
+.model-picker-popup li:hover {
+  background: #3a3f4a;
+}
+.model-picker-popup::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.model-picker-popup::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background:#4b5363;
+  transition: background 0.2s ease-out;
+}
+.model-picker-popup::-webkit-scrollbar-track {
+  background: transparent;
+}
+.model-picker-popup::-webkit-scrollbar-thumb:hover {
+  background: #5c6980;
 }
 
 .action-dots {
@@ -1179,4 +1245,15 @@ p {
 
 .clearfix {
   clear: both;
+}
+
+/* Container for bottom-left controls */
+.textarea-bottom-left-controls {
+  position: absolute;
+  bottom: 10px;
+  left: 10px; /* Base padding from the left edge */
+  display: flex;
+  align-items: center;
+  gap: 5px; /* Space between buttons when both visible */
+  z-index: 2;
 }

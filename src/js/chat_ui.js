@@ -1,4 +1,4 @@
-import { createElementWithClass, add_codeblock_html } from './utils.js';
+import { createElementWithClass, add_codeblock_html, update_textfield_height } from './utils.js';
 
 
 class ChatUI {
@@ -351,10 +351,7 @@ export class SidepanelChatUI extends ChatUI {
     }
 
     updateTextareaHeight() {
-        this.textarea.style.height = 'auto';
-        let buttonArea = document.querySelector('.chatbox-button-container');
-        let buttonAreaHeight = buttonArea ? buttonArea.offsetHeight : 0;
-        this.textarea.style.height = (Math.max(this.textarea.scrollHeight, buttonAreaHeight)) + 'px';
+        update_textfield_height(this.textarea);
     }
 
     setTextareaText(text) {

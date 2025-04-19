@@ -360,7 +360,7 @@ export class HistoryStateManager extends ArenaStateManager {
 
 export class SidepanelStateManager extends ArenaStateManager {
     constructor(requestedPrompt) {
-        super(['loop_threshold', 'current_model', 'arena_models', 'stream_response', 'arena_mode', 'show_model_name']);
+        super(['loop_threshold', 'current_model', 'arena_models', 'stream_response', 'arena_mode', 'show_model_name', 'models']);
 
         // Additional state
         this.state = {

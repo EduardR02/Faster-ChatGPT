@@ -35,6 +35,7 @@ class SidepanelApp {
         this.setupMessageListeners();
         this.stateManager.subscribeToChatReset("chat", () => {this.handleNewChat()});
         this.initSonnetThinking();
+        this.stateManager.runOnReady(() => {this.initModelPicker()});
     }
 
     initInputListener() {
@@ -406,37 +407,137 @@ class SidepanelApp {
     initSonnetThinking() {
         const sonnetThinkButton = document.getElementById('sonnet-thinking-toggle');
         if (!sonnetThinkButton) return;
-        
-        // Initially hide the button
-        sonnetThinkButton.style.display = 'none';
-        
-        // Set up the click handler
+
+        sonnetThinkButton.style.display = 'none'; // Start hidden
+
         sonnetThinkButton.addEventListener('click', () => {
             this.apiManager.shouldSonnetThink = !this.apiManager.shouldSonnetThink;
             sonnetThinkButton.classList.toggle('active', this.apiManager.shouldSonnetThink);
         });
-        
-        // Define the update function
+
         const updateSonnetThinkingButton = () => {
             let model = this.stateManager.getSetting('current_model');
             const isSonnet = model && model.includes('3-7-sonnet');
             
             if (isSonnet) {
-                sonnetThinkButton.style.display = 'flex';
-                // Set the active state based on current thinking setting
+                sonnetThinkButton.style.display = 'flex'; // Use flex to show
                 sonnetThinkButton.classList.toggle('active', this.apiManager.shouldSonnetThink);
             } else {
-                sonnetThinkButton.style.display = 'none';
-                // Reset the thinking flag when switching away from Sonnet
-                this.apiManager.shouldSonnetThink = false;
+                sonnetThinkButton.style.display = 'none'; // Hide
+                this.apiManager.shouldSonnetThink = false; // Reset flag if not Sonnet
             }
+            // Trigger height update when visibility changes
             update_textfield_height(document.getElementById('textInput'));
         };
-        
-        // Run the update function immediately with the current model
+
         this.stateManager.runOnReady(updateSonnetThinkingButton);
-        // Subscribe to model changes
         this.stateManager.subscribeToSetting('current_model', updateSonnetThinkingButton);
+    }
+
+    initModelPicker() {
+        // Container div for the popup, relative to the wrapper
+        const controlsContainer = document.querySelector('.textarea-bottom-left-controls');
+        const pickerBtn = document.getElementById('model-picker-toggle');
+        // Popup div itself, absolutely positioned relative to viewport for up/down check
+        const popup = document.createElement('div');
+
+        if (!pickerBtn || !controlsContainer) return;
+
+        // --- Build Model List --- (No changes needed here)
+        const modelsObj = this.stateManager.getSetting('models') || {};
+        const modelArr = [];
+        for (const provider in modelsObj) {
+            for (const apiName in modelsObj[provider]) {
+                modelArr.push({ apiName, display: modelsObj[provider][apiName] });
+            }
+        }
+
+        // --- Create Popup DOM --- (No changes needed here)
+        popup.id = 'model-picker-popup';
+        popup.className = 'model-picker-popup';
+        const ul = document.createElement('ul');
+        modelArr.forEach(m => {
+            const li = document.createElement('li');
+            li.textContent = m.display;
+            li.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.stateManager.updateSettingsLocal({ current_model: m.apiName });
+                popup.style.display = 'none';
+            });
+            ul.appendChild(li);
+        });
+        popup.appendChild(ul);
+        // IMPORTANT: Append popup to the main body or a container *outside* the
+        // relatively positioned textarea-wrapper to avoid clipping/z-index issues.
+        document.body.appendChild(popup);
+
+
+        // --- Button Text Update --- (No changes needed here)
+        const updateButtonText = (key) => {
+             const currentDisp = modelArr.find(x => x.apiName === key)?.display || key;
+             pickerBtn.textContent = currentDisp + ' ▾';
+        }
+        this.stateManager.runOnReady(() => {
+             updateButtonText(this.stateManager.getSetting('current_model'));
+        });
+         this.stateManager.subscribeToSetting('current_model', updateButtonText);
+
+
+        // --- Toggle Popup Visibility & Position ---
+        pickerBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isOpen = popup.style.display === 'flex';
+
+            if (isOpen) {
+                popup.style.display = 'none';
+            } else {
+                // Get button position relative to viewport *before* showing popup
+                const buttonRect = pickerBtn.getBoundingClientRect();
+
+                // Set display to calculate height, but keep off-screen initially
+                popup.style.visibility = 'hidden';
+                popup.style.display = 'flex';
+                const popupHeight = popup.offsetHeight;
+                 // Hide it again immediately
+                popup.style.display = 'none';
+                popup.style.visibility = 'visible';
+
+
+                const spaceBelow = window.innerHeight - buttonRect.bottom;
+                const spaceAbove = buttonRect.top;
+
+                // Default: position below
+                let popupTop = buttonRect.bottom + 5; // 5px gap below button
+                let popupBottom = 'auto';
+
+                // If not enough space below AND there's more space above
+                if (spaceBelow < popupHeight && spaceAbove > spaceBelow) {
+                    popupBottom = (window.innerHeight - buttonRect.top + 5) + 'px'; // 5px gap above button
+                    popupTop = 'auto';
+                } else {
+                     // Prevent going off-screen downwards
+                     if (popupTop + popupHeight > window.innerHeight) {
+                         popupTop = window.innerHeight - popupHeight - 5; // Adjust to fit
+                         if (popupTop < 0) popupTop = 5; // Prevent going off-screen upwards if window is tiny
+                     }
+                }
+
+                // Set final position and display
+                popup.style.top = typeof popupTop === 'number' ? `${popupTop}px` : popupTop;
+                popup.style.bottom = popupBottom;
+                // Align left edge of popup with left edge of button
+                popup.style.left   = buttonRect.left + 'px';
+                popup.style.display = 'flex'; // Show the popup
+            }
+        });
+
+        // --- Close Popup on Outside Click --- (No changes needed here)
+        document.addEventListener('click', (e) => {
+            // Check if the click is outside the popup AND outside the toggle button
+            if (popup.style.display === 'flex' && !popup.contains(e.target) && !pickerBtn.contains(e.target)) {
+                popup.style.display = 'none';
+            }
+        });
     }
 }
 

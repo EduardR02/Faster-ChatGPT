@@ -155,21 +155,34 @@ export function auto_resize_textfield_listener(element_id) {
 
 
 export function update_textfield_height(inputField) {
-    inputField.style.height = 'auto';
-    
-    // Get heights of button containers
-    let topButtonArea = document.querySelector('.chatbox-button-container');
-    let topButtonHeight = topButtonArea ? topButtonArea.offsetHeight : 0;
-    
-    // Get thinking button height if visible
-    let thinkButton = document.getElementById('sonnet-thinking-toggle');
-    let thinkButtonHeight = 0;
-    if (thinkButton && thinkButton.style.display !== 'none') {
-        thinkButtonHeight = thinkButton.offsetHeight + 10; // Button height plus padding
+    if (!inputField) return;
+    inputField.style.height = 'auto'; // Reset height first
+
+    const topButtonArea = document.querySelector('.chatbox-button-container');
+    const topButtonHeight = topButtonArea ? topButtonArea.offsetHeight : 0;
+
+    // Get the container for bottom-left controls
+    const bottomLeftControls = document.querySelector('.textarea-bottom-left-controls');
+    let bottomOffset = 0;
+
+    if (bottomLeftControls) {
+        // Temporarily make visible if needed to measure accurately, then hide back if needed
+        // This is tricky if the sonnet button visibility logic runs separately.
+        // A simpler way is to check if *any* child is visible.
+        const isAnyControlVisible = Array.from(bottomLeftControls.children).some(
+            child => child.offsetParent !== null // Check if element is rendered
+        );
+
+        if (isAnyControlVisible) {
+             // Get the actual rendered height of the container
+             const controlsHeight = bottomLeftControls.offsetHeight;
+             bottomOffset = controlsHeight > 0 ? controlsHeight + 10 : 0; // Use container height + 10px padding
+        }
     }
-    
-    // Use the larger of the heights
-    inputField.style.height = (Math.max(inputField.scrollHeight + thinkButtonHeight, topButtonHeight)) + 'px';
+
+    // Use the larger of the top buttons height or the scroll height + bottom offset
+    const requiredHeight = Math.max(inputField.scrollHeight + bottomOffset, topButtonHeight);
+    inputField.style.height = requiredHeight + 'px';
 }
 
 
