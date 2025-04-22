@@ -3,7 +3,7 @@ import { SettingsManager } from './state_manager.js';
 
 export class ApiManager {
     constructor() {
-        this.settingsManager = new SettingsManager(['api_keys', 'max_tokens', 'temperature', 'models', 'current_model']);
+        this.settingsManager = new SettingsManager(['api_keys', 'max_tokens', 'temperature', 'models', 'current_model', 'web_search', 'reasoning_effort']);
         this.lastContentWasRedacted = false;
         this.shouldSonnetThink = false;
     }
@@ -170,6 +170,7 @@ export class ApiManager {
         const webSearchCompatibleModels = ['gpt-4.1']; // Add model substrings here
         const webSearchExcludedModels = ['gpt-4.1-nano'];
         const hasWebSearch = webSearchCompatibleModels.some(m => model.includes(m)) && !webSearchExcludedModels.some(m => model.includes(m));
+        const enableWebSearch = this.settingsManager.getSetting('web_search') && hasWebSearch;
         
         // Use regex to check for 'o' followed by a digit (e.g., o1, o3, o4)
         const isReasoner = /o\d/.test(model); 
@@ -189,7 +190,7 @@ export class ApiManager {
             model,
             input: formattedInput,
             ...(systemMessage && { instructions: systemMessage }),
-            ...(hasWebSearch && { tools: [{ type: "web_search_preview" }] }),   // tools is only used if model requests it
+            ...(enableWebSearch && { tools: [{ type: "web_search_preview" }] }),   // tools is only used if model requests it
             ...(isReasoner && { reasoning: { effort: this.settingsManager.getSetting('reasoning_effort') || 'medium' } }),
             max_output_tokens: maxOutputTokens,
             // Temperature is not directly settable for reasoning models in /v1/responses it seems, omit for them

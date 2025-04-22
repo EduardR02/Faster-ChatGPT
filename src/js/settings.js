@@ -24,7 +24,7 @@ class SettingsUI {
             },
             checkboxes: [
                 'show_model_name', 'close_on_deselect', 'stream_response',
-                'arena_mode', 'auto_rename'
+                'arena_mode', 'auto_rename', 'web_search'
             ]
         };
 
