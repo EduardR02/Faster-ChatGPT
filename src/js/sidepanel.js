@@ -435,15 +435,22 @@ class SidepanelApp {
     }
 
     initModelPicker() {
-        // Container div for the popup, relative to the wrapper
+        // Container div for the popup, now positioning context
         const controlsContainer = document.querySelector('.textarea-bottom-left-controls');
         const pickerBtn = document.getElementById('model-picker-toggle');
-        // Popup div itself, absolutely positioned relative to viewport for up/down check
-        const popup = document.createElement('div');
+        // Popup will be created and appended later
 
         if (!pickerBtn || !controlsContainer) return;
 
-        // --- Build Model List --- (No changes needed here)
+        // --- Ensure container is positioned for relative absolute positioning ---
+        // This makes controlsContainer the reference for the popup's position.
+        const containerStyle = window.getComputedStyle(controlsContainer);
+        if (containerStyle.position === 'static') {
+            controlsContainer.style.position = 'relative';
+        }
+
+
+        // --- Build Model List ---
         const modelsObj = this.stateManager.getSetting('models') || {};
         const modelArr = [];
         for (const provider in modelsObj) {
@@ -452,8 +459,10 @@ class SidepanelApp {
             }
         }
 
-        // --- Create Popup DOM --- (No changes needed here)
+        // --- Create Popup DOM ---
+        const popup = document.createElement('div');
         popup.id = 'model-picker-popup';
+        // Ensure CSS for .model-picker-popup includes 'position: absolute;'
         popup.className = 'model-picker-popup';
         const ul = document.createElement('ul');
         modelArr.forEach(m => {
@@ -462,20 +471,22 @@ class SidepanelApp {
             li.addEventListener('click', (e) => {
                 e.stopPropagation();
                 this.stateManager.updateSettingsLocal({ current_model: m.apiName });
-                popup.style.display = 'none';
+                popup.style.display = 'none'; // Hide on selection
             });
             ul.appendChild(li);
         });
         popup.appendChild(ul);
-        // IMPORTANT: Append popup to the main body or a container *outside* the
-        // relatively positioned textarea-wrapper to avoid clipping/z-index issues.
-        document.body.appendChild(popup);
+        // --- Append popup to the CONTROLS CONTAINER ---
+        // This anchors the popup's position relative to the controls near the button.
+        controlsContainer.appendChild(popup);
+        popup.style.display = 'none'; // Start hidden
 
 
         // --- Button Text Update --- (No changes needed here)
         const updateButtonText = (key) => {
              const currentDisp = modelArr.find(x => x.apiName === key)?.display || key;
-             pickerBtn.textContent = currentDisp + ' ▾';
+             // Ensure the down arrow symbol is consistently applied
+             pickerBtn.textContent = `${currentDisp} \u25BE`; // Using unicode for down arrow
         }
         this.stateManager.runOnReady(() => {
              updateButtonText(this.stateManager.getSetting('current_model'));
@@ -483,7 +494,7 @@ class SidepanelApp {
          this.stateManager.subscribeToSetting('current_model', updateButtonText);
 
 
-        // --- Toggle Popup Visibility & Position ---
+        // --- Toggle Popup Visibility & Position (Revised Logic) ---
         pickerBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             const isOpen = popup.style.display === 'flex';
@@ -491,42 +502,47 @@ class SidepanelApp {
             if (isOpen) {
                 popup.style.display = 'none';
             } else {
-                // Get button position relative to viewport *before* showing popup
-                const buttonRect = pickerBtn.getBoundingClientRect();
+                // --- Calculate necessary dimensions ---
+                // Use offset properties for positioning relative to the container
+                const buttonTopRelContainer = pickerBtn.offsetTop;
+                const buttonHeight = pickerBtn.offsetHeight;
 
-                // Set display to calculate height, but keep off-screen initially
+                // Temporarily display off-screen to measure its height accurately
                 popup.style.visibility = 'hidden';
-                popup.style.display = 'flex';
+                popup.style.display = 'flex'; // Use 'flex' as per original code/CSS
                 const popupHeight = popup.offsetHeight;
-                 // Hide it again immediately
-                popup.style.display = 'none';
+                popup.style.display = 'none'; // Hide again before positioning
                 popup.style.visibility = 'visible';
 
+                // --- Determine direction based on viewport space ---
+                // Use viewport rect just to decide up/down direction
+                const buttonRectViewport = pickerBtn.getBoundingClientRect();
+                const spaceBelowViewport = window.innerHeight - buttonRectViewport.bottom;
+                const spaceAboveViewport = buttonRectViewport.top;
 
-                const spaceBelow = window.innerHeight - buttonRect.bottom;
-                const spaceAbove = buttonRect.top;
+                let popupTopStyle = 'auto';
+                let popupBottomStyle = 'auto';
 
-                // Default: position below
-                let popupTop = buttonRect.bottom + 5; // 5px gap below button
-                let popupBottom = 'auto';
-
-                // If not enough space below AND there's more space above
-                if (spaceBelow < popupHeight && spaceAbove > spaceBelow) {
-                    popupBottom = (window.innerHeight - buttonRect.top + 5) + 'px'; // 5px gap above button
-                    popupTop = 'auto';
-                } else {
-                     // Prevent going off-screen downwards
-                     if (popupTop + popupHeight > window.innerHeight) {
-                         popupTop = window.innerHeight - popupHeight - 5; // Adjust to fit
-                         if (popupTop < 0) popupTop = 5; // Prevent going off-screen upwards if window is tiny
-                     }
+                // Prefer positioning below the button
+                if (spaceBelowViewport >= popupHeight || spaceBelowViewport >= spaceAboveViewport) {
+                    // Set top relative to container: button's top + button's height + gap
+                    popupTopStyle = `${buttonTopRelContainer + buttonHeight + 5}px`;
+                }
+                // Position above the button
+                else {
+                    // Set bottom relative to container: container height - button's top + gap
+                    // This positions the popup's bottom edge 5px above the button's top edge.
+                    popupBottomStyle = `${controlsContainer.offsetHeight - buttonTopRelContainer + 5}px`;
                 }
 
-                // Set final position and display
-                popup.style.top = typeof popupTop === 'number' ? `${popupTop}px` : popupTop;
-                popup.style.bottom = popupBottom;
-                // Align left edge of popup with left edge of button
-                popup.style.left   = buttonRect.left + 'px';
+                // --- Apply styles ---
+                popup.style.top = popupTopStyle;
+                popup.style.bottom = popupBottomStyle;
+                // Align left edge of popup with left edge of button (relative to container)
+                popup.style.left = `${pickerBtn.offsetLeft}px`;
+                // Ensure width constraints if needed (e.g., via CSS max-width or min-width)
+                // popup.style.minWidth = `${pickerBtn.offsetWidth}px`; // Optional: Match button width
+
                 popup.style.display = 'flex'; // Show the popup
             }
         });
