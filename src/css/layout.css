@@ -72,6 +72,10 @@ body {
   overflow-y: auto;
 }
 
+.side-panel .conversation-wrapper {
+  overflow-y: hidden;
+}
+
 .sidepanel-button-footer {
   display: grid;
   grid-template-columns: min-content 1fr min-content 1fr min-content;
@@ -756,8 +760,7 @@ a {
   transition: color 0.2s, background-color 0.2s, font-size 0.2s;
 }
 
-a:hover, 
-a:focus {
+a:hover {
   color: #fdaaaa;
   background-color: rgba(255, 255, 255, 0.2);  /* subtle highlight */
   font-size: 1.03em;  /* nice hover effect */
