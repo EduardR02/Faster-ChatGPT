@@ -1,4 +1,4 @@
-import { createElementWithClass, formatContent, update_textfield_height } from './utils.js';
+import { createElementWithClass, formatContent, update_textfield_height, highlightCodeBlocks } from './utils.js';
 
 
 class ChatUI {
@@ -89,6 +89,7 @@ class ChatUI {
         const contentDiv = createElementWithClass('div', 'message-content history-system-content');
 
         contentDiv.innerHTML = formatContent(content);
+        highlightCodeBlocks(contentDiv);
         toggleButton.append(toggleIcon, title);
         toggleButton.onclick = () => messageDiv.classList.toggle('collapsed');
         messageDiv.append(toggleButton, contentDiv);
@@ -204,6 +205,7 @@ class ChatUI {
     createContentDiv(role, content) {
         const div = createElementWithClass('div', `message-content ${role}-content`);
         if (content) div.innerHTML = formatContent(content);
+        highlightCodeBlocks(div);
         return div;
     }
 
