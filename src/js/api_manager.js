@@ -91,14 +91,21 @@ export class ApiManager {
         return null;
     }
 
-    formatMessagesForOpenAI(messages, addImages, hasSystemRole) {
-        return messages.map(msg => {
-            const role = msg.role === RoleEnum.system ? hasSystemRole ? "developer" : RoleEnum.user : msg.role;
-            if (addImages && msg.role === RoleEnum.user && msg.images) {
-                const imgDict = msg.images.map(img => ({ type: 'image_url', image_url: { url: img } }));
-                return { role: role, content: [{ type: 'text', text: msg.content }, ...imgDict] };
+    formatMessagesForOpenAI(messages, addImages) {
+        // Note: System message is handled separately as 'instructions' in the /v1/responses API
+        return messages.filter(msg => msg.role !== RoleEnum.system).map(msg => {
+            const content = [];
+            if (msg.content) {
+                content.push({ type: 'input_text', text: msg.content });
             }
-            return { role: role, content: msg.content };
+            if (addImages && msg.role === RoleEnum.user && msg.images) {
+                msg.images.forEach(img => {
+                    // Assuming base64 data URI format "data:[<mediatype>];base64,<data>"
+                    content.push({ type: 'input_image', image_url: img }); 
+                });
+            }
+            // Map internal roles to OpenAI /v1/responses roles if needed, though 'user' and 'assistant' match
+            return { role: msg.role, content: content };
         });
     }
 
@@ -160,34 +167,45 @@ export class ApiManager {
     }
 
     createOpenAIRequest(model, messages, streamResponse, streamWriter, apiKey) {
-        const o1 = model.includes('o1');
-        const o3 = model.includes('o3');
-        const o4 = model.includes('o4');
+        const webSearchCompatibleModels = ['gpt-4.1']; // Add model substrings here
+        const webSearchExcludedModels = ['gpt-4.1-nano'];
+        const hasWebSearch = webSearchCompatibleModels.some(m => model.includes(m)) && !webSearchExcludedModels.some(m => model.includes(m));
+        
+        // Use regex to check for 'o' followed by a digit (e.g., o1, o3, o4)
+        const isReasoner = /o\d/.test(model); 
         const noImage = model.includes('o1-mini') || model.includes('o1-preview') || model.includes('o3-mini');
-        const isReasoner = o1 || o3 || o4;
-        messages = this.formatMessagesForOpenAI(messages, !noImage, !o1);
+
+        const systemMessage = messages.find(msg => msg.role === RoleEnum.system)?.content;
+        const formattedInput = this.formatMessagesForOpenAI(messages, !noImage);
+
         if (isReasoner && streamWriter) streamWriter.addThinkingCounter();
 
-        const maxTokens = Math.min(
+        const maxOutputTokens = Math.min(
             this.settingsManager.getSetting('max_tokens'),
-            isReasoner ? MaxTokens.openai_thinking : MaxTokens.openai
+            isReasoner ? MaxTokens.openai_thinking : MaxTokens.openai // Assuming same limits apply roughly
         );
 
-        return ['https://api.openai.com/v1/chat/completions', {
+        const body = {
+            model,
+            input: formattedInput,
+            ...(systemMessage && { instructions: systemMessage }),
+            ...(hasWebSearch && { tools: [{ type: "web_search_preview" }] }),   // tools is only used if model requests it
+            ...(isReasoner && { reasoning: { effort: this.settingsManager.getSetting('reasoning_effort') || 'medium' } }),
+            max_output_tokens: maxOutputTokens,
+            // Temperature is not directly settable for reasoning models in /v1/responses it seems, omit for them
+            ...(!isReasoner && { temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.openai) }),
+            stream: streamResponse,
+        };
+
+        // Remove null/undefined values from body
+        Object.keys(body).forEach(key => (body[key] == null) && delete body[key]);
+
+
+        return ['https://api.openai.com/v1/responses', {
             method: 'POST',
             credentials: 'omit',
             headers: {'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}`},
-            body: JSON.stringify({
-                model,
-                messages,
-                ...(o3 && { reasoning_effort: this.settingsManager.getSetting('reasoning_effort') || 'medium' }),
-                ...(isReasoner ? {max_completion_tokens: maxTokens} : {
-                    max_tokens: maxTokens,
-                    temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.openai)
-                }),
-                stream: streamResponse,
-                ...(streamResponse && {stream_options: {include_usage: true}})
-            })
+            body: JSON.stringify(body)
         }];
     }
 
@@ -343,8 +361,18 @@ export class ApiManager {
     }
 
     handleOpenAINonStreamResponse(data, tokenCounter) {
-        tokenCounter.update(data.usage.prompt_tokens, data.usage.completion_tokens);
-        return this.returnMessage([data.choices[0].message.content]);
+        // Extract content from the new response structure
+        const outputMessage = data.output?.find(item => item.type === 'message');
+        const textContent = outputMessage?.content?.find(part => part.type === 'output_text')?.text || '';
+        
+        // Extract token counts
+        const inputTokens = data.usage?.input_tokens || 0;
+        const outputTokens = data.usage?.output_tokens || 0;
+        // Could potentially check data.usage.output_tokens_details.reasoning_tokens for reasoning cost
+        tokenCounter.update(inputTokens, outputTokens);
+        
+        // For now, not extracting separate reasoning text, assuming it's part of output_text if present
+        return this.returnMessage([textContent]);
     }
     
     handleAnthropicNonStreamResponse(data, tokenCounter) {
@@ -403,13 +431,26 @@ export class ApiManager {
     }
 
     handleOpenAIStreamData(parsed, tokenCounter, streamWriter) {
-        if (parsed.choices && parsed.choices.length > 0) {
-            const content = parsed.choices[0].delta.content;
-            if (content) {
-                streamWriter.processContent(content);
-            }
-        } else if (parsed.usage && parsed.usage.prompt_tokens) {
-            tokenCounter.update(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);
+        // Handle the new SSE event types from /v1/responses
+        switch (parsed.type) {
+            case 'response.output_text.delta':
+                if (parsed.delta) {
+                    streamWriter.processContent(parsed.delta);
+                }
+                break;
+            case 'response.completed':
+                if (parsed.response?.usage) {
+                    const inputTokens = parsed.response.usage.input_tokens || 0;
+                    const outputTokens = parsed.response.usage.output_tokens || 0;
+                    tokenCounter.update(inputTokens, outputTokens);
+                }
+                break;
+            // TODO: Potentially handle other events like 'response.reasoning.delta' if needed
+            // TODO: Handle 'response.web_search_call.started/completed' etc. if UI feedback is desired
+            // TODO: Handle 'response.error' for stream errors
+            default:
+                // Ignore other event types for now
+                break;
         }
     }
 
