@@ -47,6 +47,9 @@ export class ApiManager {
                 : this.handleNonStreamResponse(response, model, tokenCounter);
         } catch (error) {
             clearTimeout(timeoutId);
+            if (streamWriter?.stopThinkingCounter) {
+                streamWriter.stopThinkingCounter();
+            }
             if (error.name === 'AbortError') {
                 throw new Error(`API request for ${model} was aborted after ${timeoutDuration / 1000} seconds.`);
             }

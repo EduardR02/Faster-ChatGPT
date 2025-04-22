@@ -387,6 +387,7 @@ export class StreamWriterSimple {
         this.parts = [ { type: 'text', content: [] } ];
         this.thoughtEndToggle = true;
         this.thinkingModelWithCounter = false;
+        this.thinkingIntervalId = null;
     }
 
     setThinkingModel() {
@@ -401,7 +402,6 @@ export class StreamWriterSimple {
         
         this.thinkingModelWithCounter = true;
         let seconds = 0;
-        let intervalId = null;
         let hasProcessed = false;
 
         // Split and preserve all parts of the text
@@ -415,18 +415,28 @@ export class StreamWriterSimple {
             span.textContent = `${firstWord} thinking for ${seconds} seconds...${remainingText}`;
         };
 
-        intervalId = setInterval(updateCounter, 1000);
+        this.stopThinkingCounter();
+        this.thinkingIntervalId = setInterval(updateCounter, 1000);
 
         // Override processContent to catch first content
         const originalProcessContent = this.processContent.bind(this);
         this.processContent = (content) => {
             if (!hasProcessed) {
                 hasProcessed = true;
-                clearInterval(intervalId);
-                span.textContent = `${firstWord} thought for ${seconds} seconds${remainingText}`;
+                this.stopThinkingCounter();
+                if (content) {
+                    span.textContent = `${firstWord} thought for ${seconds} seconds${remainingText}`;
+                }
             }
             originalProcessContent(content);
         };
+    }
+
+    stopThinkingCounter() {
+        if (this.thinkingIntervalId) {
+            clearInterval(this.thinkingIntervalId);
+            this.thinkingIntervalId = null;
+        }
     }
 
     processContent(content, isThought = false) {
