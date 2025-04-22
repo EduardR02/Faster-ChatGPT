@@ -1,4 +1,4 @@
-import { createElementWithClass, add_codeblock_html, update_textfield_height } from './utils.js';
+import { createElementWithClass, formatContent, update_textfield_height } from './utils.js';
 
 
 class ChatUI {
@@ -88,7 +88,7 @@ class ChatUI {
         const toggleIcon = createElementWithClass('span', 'toggle-icon', '\u{25B6}');
         const contentDiv = createElementWithClass('div', 'message-content history-system-content');
 
-        contentDiv.innerHTML = add_codeblock_html(content);
+        contentDiv.innerHTML = formatContent(content);
         toggleButton.append(toggleIcon, title);
         toggleButton.onclick = () => messageDiv.classList.toggle('collapsed');
         messageDiv.append(toggleButton, contentDiv);
@@ -203,7 +203,7 @@ class ChatUI {
     // UI Component Creation Methods
     createContentDiv(role, content) {
         const div = createElementWithClass('div', `message-content ${role}-content`);
-        if (content) div.innerHTML = add_codeblock_html(content);
+        if (content) div.innerHTML = formatContent(content);
         return div;
     }
 

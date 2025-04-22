@@ -742,7 +742,25 @@ input::-webkit-inner-spin-button {
 }
 
 a:link {
-  color:#61afef;
+  color:#fdaaaa;
+  text-decoration: none;
+}
+
+a {
+  color: #fdaaaa;
+  text-decoration: none;
+  position: relative;
+  padding: 1px 5px;
+  border-radius: 9999px;
+  transform-origin: center;
+  transition: color 0.2s, background-color 0.2s, font-size 0.2s;
+}
+
+a:hover, 
+a:focus {
+  color: #fdaaaa;
+  background-color: rgba(255, 255, 255, 0.2);  /* subtle highlight */
+  font-size: 1.03em;  /* nice hover effect */
 }
 
 a:visited {

@@ -81,22 +81,28 @@ export function remove_model_from_storage(apiString) {
 
 
 // Process code blocks only at the end (poor man's streamed codeblock) (claude magic)
-export function add_codeblock_html(message) {
-    initializeCodeblockCopyHandler();   // fast easy add on, we get this "for free"
-    // First escape ALL HTML
-    const escapedMessage = message
+export function formatContent(message) {
+    initializeCodeblockCopyHandler();
+
+    let processedMessage = message
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#039;');
 
-    // Then handle code blocks
     const codeBlockRegex = /(\n*)```(\w*)\n([\s\S]*?)```(\n+|$)/g;
-    return escapedMessage.replace(codeBlockRegex, (match, preNewlines, lang, code, postNewlines) => {
+    processedMessage = processedMessage.replace(codeBlockRegex, (match, preNewlines, lang, code, postNewlines) => {
         const buttonHtml = createCopyButtonHtml();
         return `\n\n<div class="code-container">${buttonHtml}<div class="code-style"><code class="language-${lang}">${code}</code></div></div>\n`;
     });
+
+    const markdownLinkRegex = /\[([^\]]+)\]\((https?:\/\/[^\)\s]+)\)/g;
+    processedMessage = processedMessage.replace(markdownLinkRegex, (match, linkText, url) => {
+        return `<a href="${url}" target="_blank" rel="noopener noreferrer">${linkText}</a>`;
+    });
+
+    return processedMessage;
 }
 
 
@@ -439,8 +445,9 @@ export class StreamWriterSimple {
     }
 
     finalizePart() {
-        this.parts.at(-1).content = this.parts.at(-1).content.join('');
-        this.contentDiv.innerHTML = add_codeblock_html(this.parts.at(-1).content);
+        const textContent = this.parts.at(-1).content.join('');
+        this.parts.at(-1).content = textContent;
+        this.contentDiv.innerHTML = formatContent(textContent);
     }
 
     addFooter(footer) {
@@ -520,7 +527,7 @@ export class StreamWriter extends StreamWriterSimple {
                     this.pendingSwitch = false;
                     this.contentQueue.push(...this.pendingQueue);
                     delete this.pendingQueue;
-                    this.contentDiv.innerHTML = add_codeblock_html(this.parts.at(-2).content);
+                    this.contentDiv.innerHTML = formatContent(this.parts.at(-2).content);
                     this.switchContentDiv(this.parts.at(-1).type === 'thought');
                 }
 
@@ -531,7 +538,7 @@ export class StreamWriter extends StreamWriterSimple {
                 if (this.pendingFooter) {
                     const { footer, resolve } = this.pendingFooter;
                     this.pendingFooter = null;
-                    super.addFooter(footer).then(resolve);  // Resolve the promise after processing the footer
+                    super.addFooter(footer).then(resolve);
                 }
             }
         });
