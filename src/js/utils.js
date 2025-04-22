@@ -368,7 +368,7 @@ export class StreamWriterBase {
                 this.contentDiv.textContent = "";
                 this.isFirstChunk = false;
             }
-            this.contentDiv.textContent += content;
+            this.contentDiv.append(content);
         }
     }
 
@@ -447,7 +447,7 @@ export class StreamWriterSimple {
             }
         }
         this.parts.at(-1).content.push(content);
-        this.contentDiv.textContent += content;
+        this.contentDiv.append(content);
         this.scrollFunc();
     }
 
@@ -464,9 +464,8 @@ export class StreamWriterSimple {
     }
 
     finalizePart() {
-        const textContent = this.parts.at(-1).content.join('');
-        this.parts.at(-1).content = textContent;
-        this.contentDiv.innerHTML = formatContent(textContent);
+        this.parts.at(-1).content = this.parts.at(-1).content.join('');
+        this.contentDiv.innerHTML = formatContent(this.parts.at(-1).content);
         highlightCodeBlocks(this.contentDiv);
     }
 
@@ -540,7 +539,7 @@ export class StreamWriter extends StreamWriterSimple {
 
                 const chunk = this.contentQueue.splice(0, charsToProcess);
 
-                this.contentDiv.textContent += chunk.join('');
+                this.contentDiv.append(chunk.join(''));
                 this.scrollFunc();
 
                 if (this.thoughtEndToggle && this.pendingSwitch && this.contentQueue.length === 0) {
