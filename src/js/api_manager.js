@@ -96,12 +96,14 @@ export class ApiManager {
         return messages.filter(msg => msg.role !== RoleEnum.system).map(msg => {
             const content = [];
             if (msg.content) {
-                content.push({ type: 'input_text', text: msg.content });
+                // Use 'output_text' for assistant messages, 'input_text' otherwise (for user messages)
+                const textType = msg.role === RoleEnum.assistant ? 'output_text' : 'input_text';
+                content.push({ type: textType, text: msg.content });
             }
             if (addImages && msg.role === RoleEnum.user && msg.images) {
                 msg.images.forEach(img => {
                     // Assuming base64 data URI format "data:[<mediatype>];base64,<data>"
-                    content.push({ type: 'input_image', image_url: img }); 
+                    content.push({ type: 'input_image', image_url: img });
                 });
             }
             // Map internal roles to OpenAI /v1/responses roles if needed, though 'user' and 'assistant' match
