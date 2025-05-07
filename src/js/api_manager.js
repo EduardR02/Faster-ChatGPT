@@ -284,7 +284,7 @@ export class ApiManager {
     }
 
     createGeminiRequest(model, messages, streamResponse, streamWriter, apiKey) {
-        const isThinking = model.includes('thinking') || model.includes('gemini-2.5-pro-exp');  // very specific but no better way to do this rn
+        const isThinking = model.includes('thinking') || model.includes('gemini-2.5-pro') || model.includes('gemini-2.5-flash');  // very specific but no better way to do this rn
         if (isThinking) {
             if (streamWriter) streamWriter.addThinkingCounter();
         }
@@ -310,7 +310,7 @@ export class ApiManager {
                     temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.gemini),
                     maxOutputTokens: maxTokens,
                     responseMimeType: "text/plain",
-                    ...(isThinking && {thinking_config: {include_thoughts: true}})
+                    ...(isThinking && {thinking_config: {include_thoughts: true}})  // this param doesn't work anymore, they stopped giving thoughts in response...
                 }
             })
         }];
