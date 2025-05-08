@@ -236,8 +236,22 @@ export class ApiManager {
             // Set up thinking UI if using streaming
             if (streamWriter) streamWriter.setThinkingModel();
         }
+
+        const webSearchCompatibleModelSubstrings = ['claude-3-7-sonnet', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest'];
+        const enableWebSearch = this.settingsManager.getSetting('web_search') && webSearchCompatibleModelSubstrings.some(substring => model.includes(substring));
         
         messages = this.formatMessagesForAnthropic(messages);
+        const requestBody = {
+            model,
+            system: [messages[0].content[0]],
+            messages: messages.slice(1),
+            max_tokens: maxTokens,
+            ...(!thinkingConfig && { temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.anthropic) }),
+            ...(thinkingConfig && { thinking: thinkingConfig }),
+            ...(enableWebSearch && { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 2 }] }),
+            stream: streamResponse
+        };
+
         return ['https://api.anthropic.com/v1/messages', {
             method: 'POST',
             credentials: 'omit',
@@ -247,15 +261,7 @@ export class ApiManager {
                 'anthropic-version': '2023-06-01',
                 'anthropic-dangerous-direct-browser-access': 'true'
             },
-            body: JSON.stringify({
-                model,
-                system: [messages[0].content[0]],
-                messages: messages.slice(1),
-                max_tokens: maxTokens,
-                ...((!thinkingConfig) && { temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.anthropic) }),
-                ...(thinkingConfig && { thinking: thinkingConfig }),
-                stream: streamResponse
-            })
+            body: JSON.stringify(requestBody)
         }];
     }
 
