@@ -216,7 +216,7 @@ export class ApiManager {
     }
 
     createAnthropicRequest(model, messages, streamResponse, streamWriter, apiKey) {
-        const canThink = model.includes('3-7-sonnet', 'sonnet-4', 'opus-4');
+        const canThink = ['3-7-sonnet', 'sonnet-4', 'opus-4'].some(sub => model.includes(sub));
         const isThinking = canThink && this.shouldSonnetThink;
         const maxTokens = Math.min(
             this.settingsManager.getSetting('max_tokens'),
