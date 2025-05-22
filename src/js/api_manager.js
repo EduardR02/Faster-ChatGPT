@@ -216,8 +216,8 @@ export class ApiManager {
     }
 
     createAnthropicRequest(model, messages, streamResponse, streamWriter, apiKey) {
-        const isSonnet37 = model.includes('3-7-sonnet');
-        const isThinking = isSonnet37 && this.shouldSonnetThink;
+        const canThink = model.includes('3-7-sonnet', 'sonnet-4', 'opus-4');
+        const isThinking = canThink && this.shouldSonnetThink;
         const maxTokens = Math.min(
             this.settingsManager.getSetting('max_tokens'),
             isThinking ? MaxTokens.anthropic_thinking : MaxTokens.anthropic
@@ -237,7 +237,7 @@ export class ApiManager {
             if (streamWriter) streamWriter.setThinkingModel();
         }
 
-        const webSearchCompatibleModelSubstrings = ['claude-3-7-sonnet', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest'];
+        const webSearchCompatibleModelSubstrings = ['claude-3-7-sonnet', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest', 'sonnet-4', 'opus-4'];
         const enableWebSearch = this.settingsManager.getSetting('web_search') && webSearchCompatibleModelSubstrings.some(substring => model.includes(substring));
         
         messages = this.formatMessagesForAnthropic(messages);

@@ -417,7 +417,7 @@ class SidepanelApp {
 
         const updateSonnetThinkingButton = () => {
             let model = this.stateManager.getSetting('current_model');
-            const isSonnet = model && model.includes('3-7-sonnet');
+            const isSonnet = model && model.includes('3-7-sonnet', 'sonnet-4', 'opus-4');
             
             if (isSonnet) {
                 sonnetThinkButton.style.display = 'flex'; // Use flex to show
