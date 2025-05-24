@@ -220,6 +220,8 @@ export class ApiManager {
         const isThinking = canThink && this.shouldSonnetThink;
         const maxTokens = Math.min(
             this.settingsManager.getSetting('max_tokens'),
+            model.includes('opus') ? MaxTokens.anthropic :
+            !canThink ? MaxTokens.anthropic_old :
             isThinking ? MaxTokens.anthropic_thinking : MaxTokens.anthropic
         );
         
@@ -551,11 +553,12 @@ const MaxTemp = {
 const MaxTokens = {
     openai: 16384,
     openai_thinking: 100000,
-    anthropic: 8192,
+    anthropic: 32000,   // sonnet-4 is 64k, opus-4 is 32k, older models like original sonnet 3.5 are 8k or less
     anthropic_thinking: 64000,
     gemini: 8192,
     gemini_thinking: 65536,
-    deepseek: 8000
+    deepseek: 8000,
+    anthropic_old: 8192
 };
 
 // for now decided against of having a "max tokens" for every api, as it varies by model... let the user figure it out :)
