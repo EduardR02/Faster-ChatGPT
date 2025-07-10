@@ -5,7 +5,7 @@ export class ApiManager {
     constructor() {
         this.settingsManager = new SettingsManager(['api_keys', 'max_tokens', 'temperature', 'models', 'current_model', 'web_search', 'reasoning_effort']);
         this.lastContentWasRedacted = false;
-        this.shouldSonnetThink = false;
+        this.shouldThink = false;
     }
 
     getCurrentModel() {
@@ -81,6 +81,8 @@ export class ApiManager {
                 return this.createGeminiRequest(model, messages, streamResponse, streamWriter, apiKeys.gemini);
             case 'deepseek':
                 return this.createDeepseekRequest(model, messages, streamResponse, streamWriter, apiKeys.deepseek);
+            case 'grok':
+                return this.createGrokRequest(model, messages, streamResponse, streamWriter, apiKeys.grok);
             default:
                 throw new Error(`Unsupported model provider: ${provider}`);
         }
@@ -163,6 +165,24 @@ export class ApiManager {
         return messages.map(msg => ({ role: msg.role, content: msg.content }));
     }
 
+    formatMessagesForGrok(messages) {
+        // Grok uses standard OpenAI format and supports vision - always include images
+        return messages.map(msg => {
+            if (msg.role === RoleEnum.user && msg.images) {
+                const content = [];
+                content.push({ type: 'text', text: msg.content });
+                msg.images.forEach(img => {
+                    content.push({
+                        type: 'image_url',
+                        image_url: { url: img }
+                    });
+                });
+                return { role: msg.role, content: content };
+            }
+            return { role: msg.role, content: msg.content };
+        });
+    }
+
     getBase64MediaType(base64String) {
         return base64String.split(':')[1].split(';')[0];
     }
@@ -217,7 +237,7 @@ export class ApiManager {
 
     createAnthropicRequest(model, messages, streamResponse, streamWriter, apiKey) {
         const canThink = ['3-7-sonnet', 'sonnet-4', 'opus-4'].some(sub => model.includes(sub));
-        const isThinking = canThink && this.shouldSonnetThink;
+        const isThinking = canThink && this.shouldThink;
         const maxTokens = Math.min(
             this.settingsManager.getSetting('max_tokens'),
             model.includes('opus') ? MaxTokens.anthropic :
@@ -324,6 +344,38 @@ export class ApiManager {
         }];
     }
 
+    createGrokRequest(model, messages, streamResponse, streamWriter, apiKey) {
+        const isGrok4 = model.includes('grok-4');
+        const canThink = isGrok4;
+        const isThinking = canThink && this.shouldThink;
+        
+        // looks like currently grok 4 is always thinking...
+        if (canThink && streamWriter) {
+            streamWriter.setThinkingModel();
+        }
+        
+        const maxTokens = Math.min(
+            this.settingsManager.getSetting('max_tokens'),
+            MaxTokens.grok
+        );
+        
+        const requestBody = {
+            model,
+            messages: this.formatMessagesForGrok(messages),
+            max_tokens: maxTokens,
+            temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.grok),
+            stream: streamResponse,
+            ...(streamResponse && {stream_options: {include_usage: true}})
+        };
+        
+        return ['https://api.x.ai/v1/chat/completions', {
+            method: 'POST',
+            credentials: 'omit',
+            headers: {'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}`},
+            body: JSON.stringify(requestBody)
+        }];
+    }
+
     getGeminiSafetySettings() {
         return [
             { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
@@ -369,6 +421,8 @@ export class ApiManager {
                 return this.handleGeminiNonStreamResponse(data, tokenCounter);
             case 'deepseek':
                 return this.handleDeepseekNonStreamResponse(data, tokenCounter);
+            case 'grok':
+                return this.handleGrokNonStreamResponse(data, tokenCounter);
             default:
                 throw new Error(`Unsupported model provider: ${provider}`);
         }
@@ -411,6 +465,13 @@ export class ApiManager {
         return this.returnMessage([message.content], thoughts);
     }
 
+    handleGrokNonStreamResponse(data, tokenCounter) {
+        tokenCounter.update(data.usage.prompt_tokens, data.usage.completion_tokens);
+        const message = data.choices[0].message;
+        const thoughts = message.reasoning_content ? [message.reasoning_content] : [];
+        return this.returnMessage([message.content], thoughts);
+    }
+
     returnMessage(parts, thoughts = []) {
         message = [];
         thoughts.forEach(thought => {
@@ -438,6 +499,9 @@ export class ApiManager {
                 break;
             case 'deepseek':
                 this.handleDeepseekStreamData(parsed, tokenCounter, streamWriter);
+                break;
+            case 'grok':
+                this.handleGrokStreamData(parsed, tokenCounter, streamWriter);
                 break;
             default:
                 throw new Error(`Unsupported model provider: ${provider}`);
@@ -540,6 +604,23 @@ export class ApiManager {
             streamWriter.processContent(content);
         }
     }
+
+    handleGrokStreamData(parsed, tokenCounter, streamWriter) {
+        if (parsed?.usage && parsed?.choices?.length === 0) {
+            tokenCounter.update(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);
+            return;
+        }
+        
+        const reasoningContent = parsed?.choices?.[0]?.delta?.reasoning_content;
+        const content = parsed?.choices?.[0]?.delta?.content;
+        
+        if (reasoningContent) {
+            streamWriter.processContent(reasoningContent, true);
+        }
+        if (content) {
+            streamWriter.processContent(content);
+        }
+    }
 }
 
 
@@ -547,7 +628,8 @@ const MaxTemp = {
     openai: 2.0,
     anthropic: 1.0,
     gemini: 2.0,
-    deepseek: 2.0
+    deepseek: 2.0,
+    grok: 2.0
 };
 
 const MaxTokens = {
@@ -558,7 +640,8 @@ const MaxTokens = {
     gemini: 8192,
     gemini_thinking: 65536,
     deepseek: 8000,
-    anthropic_old: 8192
+    anthropic_old: 8192,
+    grok: 131072
 };
 
 // for now decided against of having a "max tokens" for every api, as it varies by model... let the user figure it out :)

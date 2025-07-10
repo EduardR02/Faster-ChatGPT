@@ -243,6 +243,11 @@ export function set_defaults() {
         deepseek: {
             "deepseek-chat": "DeepSeek V3",
             "deepseek-reasoner": "DeepSeek R1"
+        },
+        grok: {
+            "grok-3": "Grok 3",
+            "grok-3-mini": "Grok 3 Mini",
+            "grok-4": "Grok 4"
         }
     };
     const anthropic_models = Object.keys(MODELS.anthropic);

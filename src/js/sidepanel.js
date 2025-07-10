@@ -411,20 +411,22 @@ class SidepanelApp {
         sonnetThinkButton.style.display = 'none'; // Start hidden
 
         sonnetThinkButton.addEventListener('click', () => {
-            this.apiManager.shouldSonnetThink = !this.apiManager.shouldSonnetThink;
-            sonnetThinkButton.classList.toggle('active', this.apiManager.shouldSonnetThink);
+            this.apiManager.shouldThink = !this.apiManager.shouldThink;
+            sonnetThinkButton.classList.toggle('active', this.apiManager.shouldThink);
         });
 
         const updateSonnetThinkingButton = () => {
             let model = this.stateManager.getSetting('current_model');
             const isSonnet = ['3-7-sonnet', 'sonnet-4', 'opus-4'].some(sub => model.includes(sub));
+            const isGrok4 = model.includes('grok-4');
+            const canThink = isSonnet || isGrok4;
             
-            if (isSonnet) {
+            if (canThink) {
                 sonnetThinkButton.style.display = 'flex'; // Use flex to show
-                sonnetThinkButton.classList.toggle('active', this.apiManager.shouldSonnetThink);
+                sonnetThinkButton.classList.toggle('active', this.apiManager.shouldThink);
             } else {
                 sonnetThinkButton.style.display = 'none'; // Hide
-                this.apiManager.shouldSonnetThink = false; // Reset flag if not Sonnet
+                this.apiManager.shouldThink = false; // Reset flag when not applicable
             }
             // Trigger height update when visibility changes
             update_textfield_height(document.getElementById('textInput'));

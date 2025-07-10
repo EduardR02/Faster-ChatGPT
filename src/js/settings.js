@@ -5,7 +5,8 @@ const apiDisplayNames = {
     anthropic: 'Anthropic',
     openai: 'OpenAI',
     gemini: 'Gemini',
-    deepseek: 'DeepSeek'
+    deepseek: 'DeepSeek',
+    grok: 'Grok'
 };
 
 class SettingsUI {
