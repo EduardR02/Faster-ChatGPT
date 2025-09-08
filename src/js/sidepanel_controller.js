@@ -49,9 +49,23 @@ export class SidepanelController {
             api_provider
         );
 
+        // Start fetching model name immediately for llamacpp (in parallel with API call)
+        let actualModelNamePromise = Promise.resolve(model);
+        if (api_provider === 'llamacpp') {
+            actualModelNamePromise = this.apiManager.fetchLlamaCppModelName().then(name => {
+                // Update UI as soon as we have the name
+                this.chatUI.updateLastMessageModelName(name);
+                return name;
+            }).catch(error => {
+                console.log('Failed to fetch llamacpp model name:', error);
+                return model; // fallback to placeholder
+            });
+        }
+
         const streamResponse = this.stateManager.getSetting('stream_response');
         let success = false;
         let responseResult;
+        
         try {
             responseResult = await this.apiManager.callApi(
                 model,
@@ -75,12 +89,18 @@ export class SidepanelController {
             // if the response fails or is stopped in thinking mode, the footer should still create a regenerate button,
             // which due to chatCore management conveniently continues with the thinking chain, discarding the invalid message
             const isThinkingFunc = success ? null : () => false;
-            await streamWriter.addFooter(this.createMessageFooter(tokenCounter, model, isThinkingFunc));
+            
+            // Wait for actual model name for the footer too in case of arena and llamacpp
+            const footerModelName = await actualModelNamePromise;
+            await streamWriter.addFooter(this.createMessageFooter(tokenCounter, footerModelName, isThinkingFunc));
         }
 
         if (success) {
-            await this.saveResponseMessage(streamWriter.parts, model, isRegen);
-            this.handleThinkingMode(model, isRegen);
+            // Wait for the actual model name (should be fast since it started early)
+            const actualModelName = await actualModelNamePromise;
+            
+            await this.saveResponseMessage(streamWriter.parts, actualModelName, isRegen);
+            this.handleThinkingMode(model, isRegen); // Use placeholder for thinking consistency
         }
     }
 

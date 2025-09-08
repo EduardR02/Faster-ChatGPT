@@ -16,7 +16,7 @@ export class ApiManager {
         const provider = this.getProviderForModel(model);
         const apiKeys = this.settingsManager.getSetting('api_keys') || {};
         
-        if (!apiKeys[provider]?.trim()) {
+        if (provider !== 'llamacpp' && !apiKeys[provider]?.trim()) {
             throw new Error(`${provider} API key is empty, switch to another model or enter a key in the settings.`);
         }
 
@@ -83,6 +83,8 @@ export class ApiManager {
                 return this.createDeepseekRequest(model, messages, streamResponse, streamWriter, apiKeys.deepseek);
             case 'grok':
                 return this.createGrokRequest(model, messages, streamResponse, streamWriter, apiKeys.grok);
+            case 'llamacpp':
+                return this.createLlamaCppRequest(model, messages, streamResponse, streamWriter);
             default:
                 throw new Error(`Unsupported model provider: ${provider}`);
         }
@@ -376,6 +378,22 @@ export class ApiManager {
         }];
     }
 
+    createLlamaCppRequest(model, messages, streamResponse, streamWriter) {
+        const body = {
+            model: "local",
+            messages: this.formatMessagesForGrok(messages),
+            stream: streamResponse,
+            temperature: this.settingsManager.getSetting('temperature')
+        };
+
+        return ['http://localhost:8080/v1/chat/completions', {
+            method: 'POST',
+            credentials: 'omit',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        }];
+    }
+
     getGeminiSafetySettings() {
         return [
             { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
@@ -423,6 +441,8 @@ export class ApiManager {
                 return this.handleDeepseekNonStreamResponse(data, tokenCounter);
             case 'grok':
                 return this.handleGrokNonStreamResponse(data, tokenCounter);
+            case 'llamacpp':
+                return this.handleLlamaCppNonStreamResponse(data, tokenCounter);
             default:
                 throw new Error(`Unsupported model provider: ${provider}`);
         }
@@ -472,6 +492,16 @@ export class ApiManager {
         return this.returnMessage([message.content], thoughts);
     }
 
+    async handleLlamaCppNonStreamResponse(data, tokenCounter) {
+        if (data.usage) {
+            tokenCounter.update(data.usage.prompt_tokens || 0, data.usage.completion_tokens || 0);
+        }
+        
+        const message = data.choices[0].message;
+        const thoughts = message.reasoning_content ? [message.reasoning_content] : [];
+        return this.returnMessage([message.content], thoughts);
+    }
+
     returnMessage(parts, thoughts = []) {
         message = [];
         thoughts.forEach(thought => {
@@ -502,6 +532,9 @@ export class ApiManager {
                 break;
             case 'grok':
                 this.handleGrokStreamData(parsed, tokenCounter, streamWriter);
+                break;
+            case 'llamacpp':
+                this.handleLlamaCppStreamData(parsed, tokenCounter, streamWriter);
                 break;
             default:
                 throw new Error(`Unsupported model provider: ${provider}`);
@@ -620,6 +653,65 @@ export class ApiManager {
         if (content) {
             streamWriter.processContent(content);
         }
+    }
+
+    handleLlamaCppStreamData(parsed, tokenCounter, streamWriter) {
+        // Handle final chunk with usage info but empty choices
+        if (parsed.usage && parsed.choices.length === 0) {
+            tokenCounter.update(parsed.usage.prompt_tokens || 0, parsed.usage.completion_tokens || 0);
+            if (parsed.timings) {
+                console.log(`Llama.cpp performance - Speed: ${parsed.timings.predicted_per_second?.toFixed(1)} tokens/sec`);
+            }
+            
+            // Notify that we can now fetch the model name
+            if (streamWriter && streamWriter.onComplete) {
+                streamWriter.onComplete();
+            }
+            return;
+        }
+        
+        // Handle content chunks
+        if (parsed.choices?.[0]?.delta) {
+            const reasoningContent = parsed.choices[0].delta.reasoning_content;
+            const content = parsed.choices[0].delta.content;
+            
+            // Auto-detect reasoning model and enable thinking UI
+            if (reasoningContent && !streamWriter.isThinkingModel) {
+                console.log('Detected reasoning model - enabling thinking mode');
+                streamWriter.setThinkingModel();
+            }
+            
+            if (reasoningContent) {
+                streamWriter.processContent(reasoningContent, true);
+            }
+            if (content) {
+                streamWriter.processContent(content);
+            }
+        }
+    }
+
+    async fetchLlamaCppModelName() {
+        try {
+            const response = await fetch('http://localhost:8080/v1/models');
+            if (response.ok) {
+                const data = await response.json();
+                const rawName = data.data?.[0]?.id || 'Local Model';
+                return this.parseModelName(rawName);
+            }
+        } catch (error) {
+            console.log('Could not fetch llama.cpp model name');
+        }
+        return 'Local Model';
+    }
+
+    parseModelName(rawPath) {
+        if (!rawPath || rawPath === 'local-model') return 'Local Model';
+        
+        const filename = rawPath.split(/[/\\]/).pop();
+        return filename
+            .replace(/\.(gguf|ggml|bin|safetensors)$/i, '')
+            .replace(/[-_]/g, ' ')
+            .replace(/\b\w/g, l => l.toUpperCase()) || 'Local Model';
     }
 }
 

@@ -615,6 +615,30 @@ export class SidepanelChatUI extends ChatUI {
         document.getElementById('conversation-title').textContent = title;
     }
 
+    updateLastMessageModelName(actualModelName) {
+        // Only update if show_model_name is enabled and not in arena mode
+        if (!this.stateManager.getSetting('show_model_name') || this.stateManager.isArenaModeActive) {
+            return;
+        }
+        
+        // Find the last assistant message
+        const messages = this.conversationDiv.querySelectorAll('.assistant-message');
+        const lastMessage = messages[messages.length - 1];
+        
+        if (lastMessage) {
+            const prefixElement = lastMessage.querySelector('.message-prefix');
+            if (prefixElement) {
+                // Update with actual model name, preserving any existing icons
+                let newText = actualModelName;
+                if (prefixElement.textContent.includes('🧠')) newText += ' 🧠';
+                if (prefixElement.textContent.includes('💡')) newText += ' 💡';
+                if (prefixElement.textContent.includes('\u{27F3}')) newText += ' \u{27F3}';
+                
+                prefixElement.textContent = newText;
+            }
+        }
+    }
+
     getChatHeader() {
         return document.getElementById('conversation-title');
     }

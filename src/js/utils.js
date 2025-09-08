@@ -248,6 +248,9 @@ export function set_defaults() {
             "grok-3": "Grok 3",
             "grok-3-mini": "Grok 3 Mini",
             "grok-4": "Grok 4"
+        },
+        llamacpp: {
+            "local-model": "Local Model"
         }
     };
     const anthropic_models = Object.keys(MODELS.anthropic);
@@ -391,6 +394,7 @@ export class StreamWriterSimple {
         this.scrollFunc = scrollFunc;
         this.parts = [ { type: 'text', content: [] } ];
         this.thoughtEndToggle = true;
+        this.isThinkingModel = false;
         this.thinkingModelWithCounter = false;
         this.thinkingIntervalId = null;
     }
@@ -399,6 +403,7 @@ export class StreamWriterSimple {
         this.thoughtEndToggle = false;
         this.contentDiv.classList.add('thoughts');
         this.parts = [ { type: 'thought', content: [] } ];
+        this.isThinkingModel = true;
     }
 
     addThinkingCounter() {
