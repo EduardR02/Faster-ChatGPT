@@ -95,7 +95,7 @@ export class ApiManager {
         for (const [provider, providerModels] of Object.entries(models)) {
             if (model in providerModels) return provider;
         }
-        return null;
+        return "llamacpp";  // fallback to llamacpp if unknown model, this is intended as local model names are not stored in the settings
     }
 
     formatMessagesForOpenAI(messages, addImages) {
@@ -194,13 +194,13 @@ export class ApiManager {
     }
 
     createOpenAIRequest(model, messages, streamResponse, streamWriter, apiKey) {
-        const webSearchCompatibleModels = ['gpt-4.1']; // Add model substrings here
-        const webSearchExcludedModels = ['gpt-4.1-nano'];
+        const webSearchCompatibleModels = ['gpt-4.1', 'gpt-5']; // Add model substrings here
+        const webSearchExcludedModels = ['gpt-4.1-nano', 'gpt-5-nano'];
         const hasWebSearch = webSearchCompatibleModels.some(m => model.includes(m)) && !webSearchExcludedModels.some(m => model.includes(m));
         const enableWebSearch = this.settingsManager.getSetting('web_search') && hasWebSearch;
         
         // Use regex to check for 'o' followed by a digit (e.g., o1, o3, o4)
-        const isReasoner = /o\d/.test(model); 
+        const isReasoner = /o\d/.test(model) || model.includes('gpt-5');    // looks like gpt-5 and o3 require "verification" for now, (gpt-5 for streaming), which is just fking 
         const noImage = model.includes('o1-mini') || model.includes('o1-preview') || model.includes('o3-mini');
 
         const systemMessage = messages.find(msg => msg.role === RoleEnum.system)?.content;
@@ -218,7 +218,7 @@ export class ApiManager {
             input: formattedInput,
             ...(systemMessage && { instructions: systemMessage }),
             ...(enableWebSearch && { tools: [{ type: "web_search_preview" }] }),   // tools is only used if model requests it
-            ...(isReasoner && { reasoning: { effort: this.settingsManager.getSetting('reasoning_effort') || 'medium' } }),
+            ...(isReasoner && { reasoning: { effort: this.settingsManager.getSetting('reasoning_effort') || 'medium' } }),  // summary parameter also requires "verification"
             max_output_tokens: maxOutputTokens,
             // Temperature is not directly settable for reasoning models in /v1/responses it seems, omit for them
             ...(!isReasoner && { temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.openai) }),
@@ -449,18 +449,21 @@ export class ApiManager {
     }
 
     handleOpenAINonStreamResponse(data, tokenCounter) {
-        // Extract content from the new response structure
-        const outputMessage = data.output?.find(item => item.type === 'message');
-        const textContent = outputMessage?.content?.find(part => part.type === 'output_text')?.text || '';
-        
-        // Extract token counts
+        const messageItem = data.output?.find(item => item.type === 'message');
+        const textContent = (messageItem?.content || [])
+            .filter(part => part.type === 'output_text' && typeof part.text === 'string')
+            .map(part => part.text)
+            .join('') || '';
+
+        const reasoningItem = data.output?.find(item => item.type === 'reasoning');
+        const reasoningSummary = Array.isArray(reasoningItem?.summary) ? reasoningItem.summary.join('') : (reasoningItem?.summary || '');
+        const thoughts = reasoningSummary ? [reasoningSummary] : [];
+
         const inputTokens = data.usage?.input_tokens || 0;
         const outputTokens = data.usage?.output_tokens || 0;
-        // Could potentially check data.usage.output_tokens_details.reasoning_tokens for reasoning cost
         tokenCounter.update(inputTokens, outputTokens);
-        
-        // For now, not extracting separate reasoning text, assuming it's part of output_text if present
-        return this.returnMessage([textContent]);
+
+        return this.returnMessage([textContent], thoughts);
     }
     
     handleAnthropicNonStreamResponse(data, tokenCounter) {
@@ -503,12 +506,12 @@ export class ApiManager {
     }
 
     returnMessage(parts, thoughts = []) {
-        message = [];
+        const message = [];
         thoughts.forEach(thought => {
-            message.push({ type: 'thought', content: thought });
+            if (thought) message.push({ type: 'thought', content: thought });
         });
         parts.forEach(part => {
-            message.push({ type: 'text', content: part });
+            if (part) message.push({ type: 'text', content: part });
         });
         return message;
     }
