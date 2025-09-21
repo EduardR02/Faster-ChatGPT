@@ -348,12 +348,14 @@ export class ApiManager {
 
     createGrokRequest(model, messages, streamResponse, streamWriter, apiKey) {
         const isGrok4 = model.includes('grok-4');
-        const canThink = isGrok4;
-        const isThinking = canThink && this.shouldThink;
+        const isNonThinking = model.includes('non-reasoning');
+        const canThink = isGrok4 && !isNonThinking;
         
-        // looks like currently grok 4 is always thinking...
+        // For Grok-4 variants, use thinking counter instead of thinking model
+        // (they don't return thinking traces but do consume reasoning tokens)
+        // Exception: non-thinking variants don't need either
         if (canThink && streamWriter) {
-            streamWriter.setThinkingModel();
+            streamWriter.addThinkingCounter();
         }
         
         const maxTokens = Math.min(
@@ -643,7 +645,12 @@ export class ApiManager {
 
     handleGrokStreamData(parsed, tokenCounter, streamWriter) {
         if (parsed?.usage && parsed?.choices?.length === 0) {
-            tokenCounter.update(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);
+            // Include reasoning tokens in the completion token count for Grok models
+            const baseCompletionTokens = parsed.usage.completion_tokens || 0;
+            const reasoningTokens = parsed.usage.completion_tokens_details?.reasoning_tokens || 0;
+            const totalCompletionTokens = baseCompletionTokens + reasoningTokens;
+            
+            tokenCounter.update(parsed.usage.prompt_tokens, totalCompletionTokens);
             return;
         }
         
