@@ -280,7 +280,28 @@ export function set_defaults() {
         ),
         loadTextFromFile("src/prompts/chat_prompt.txt").then((text) =>
             new Promise((resolve) => chrome.storage.local.set({ chat_prompt: text.trim() }, resolve))
-        )
+        ),
+        new Promise((resolve) => chrome.storage.local.set({
+            thinking_prompt: `[APPENDED INSTRUCTION: This modifies response behavior for this turn only, layering on the core system prompt.]
+
+In this response, skip any direct answer, solution, or conclusion to the user's query. Instead, devote your entire output to building a robust thought process that will enable an optimal, accurate, and comprehensive response in the next turn—whether that's answering, advising, creating, or acting on the user's request.
+
+To maximize value for the future:
+- Start by rephrasing the query to ensure full grasp, then dissect it into key elements (assumptions, goals, nuances).
+- Freely explore relevant ideas: Draw on knowledge, first principles, potential angles, risks, or alternatives. Think aloud step-by-step, noting connections, gaps, or insights that could shape the final output.
+- Wrap up by highlighting the strongest threads or "building blocks" you've assembled, explicitly linking how they'll power a superior next response.
+
+Stay focused, insightful, and unfiltered—aim to arm yourself (and the conversation) with everything needed to nail it later. No finals here; this is all setup.`.trim()
+        }, resolve)),
+        new Promise((resolve) => chrome.storage.local.set({
+            solver_prompt: `[APPENDED INSTRUCTION: This shifts response mode for this turn only, building directly on the core system prompt and your prior thoughts.]
+
+You've now received the detailed thought process from the previous turn—use it to its full extent as the foundation for your response. Synthesize those insights, breakdowns, and building blocks to craft a complete, direct, and high-quality reply to the original user query or statement, whatever it may be (question, observation, casual remark, or anything else).
+
+Respond appropriately and engagingly: Draw deeply from the prep to ensure accuracy, depth, creativity, or humor as fits the context. Cover all key angles without deferring or recapping the thoughts themselves—deliver the polished, final output that resolves or advances the conversation.
+
+Keep it natural, insightful, and on-point; this is where it all comes together.`.trim()
+        }, resolve))
     ]);
 }
 
