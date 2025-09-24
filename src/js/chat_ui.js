@@ -138,6 +138,8 @@ class ChatUI {
         const arenaDivs = [null, null];
         ['model_a', 'model_b'].forEach((model, index) => {
             const arenaDiv = createElementWithClass('div', 'arena-wrapper');
+            // Track logical model id for later lookups (e.g., reveal names)
+            arenaDiv.dataset.modelId = this.stateManager.getArenaModel(index);
             arenaDivs[index] = arenaDiv;
             container.appendChild(arenaDiv);
             let new_options = {
@@ -173,7 +175,8 @@ class ChatUI {
                 const prefix = message.querySelector('.message-prefix');
 
                 const elo = updatedElo ? updatedElo[index] : null;
-                prefix.textContent = this.formatArenaPrefix(prefix.textContent, this.stateManager.getArenaModel(index), choice, modelKeys[index], elo);
+                const displayName = wrapper.dataset.displayName || this.stateManager.getArenaModel(index);
+                prefix.textContent = this.formatArenaPrefix(prefix.textContent, displayName, choice, modelKeys[index], elo);
 
                 this.arenaUpdateTokenFooter(message.querySelector('.message-footer'));
             });
@@ -669,6 +672,14 @@ export class SidepanelChatUI extends ChatUI {
             return prefixes.length ? prefixes[prefixes.length - 1] : container;
         }
         return container.querySelector('.history-prefix-wrapper') || container;
+    }
+
+    // Store display name for a given logical arena model id (used when revealing)
+    setArenaModelDisplayName(logicalModelId, displayName) {
+        if (!this.stateManager.isArenaModeActive) return;
+        const container = this.getActiveMessageElement(logicalModelId);
+        if (!container) return;
+        container.dataset.displayName = displayName;
     }
 
     addManualAbortButton(model, manualAbort) {

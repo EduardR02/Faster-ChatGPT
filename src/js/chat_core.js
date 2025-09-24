@@ -148,6 +148,14 @@ export class SidepanelChatCore extends ChatCore {
         }
     }
 
+    // Update stored display name for arena model (used when llama.cpp resolves actual model)
+    async setArenaModelName(modelKey, displayName) {
+        const last = this.getLatestMessage();
+        if (!last?.responses || !last.responses[modelKey]) return;
+        last.responses[modelKey].name = displayName;
+        await this.updateSaved();
+    }
+
     async updateArenaMisc(choice = null, continued_with = null) {
         const message = this.getLatestMessage();
         if (choice) message.choice = choice;

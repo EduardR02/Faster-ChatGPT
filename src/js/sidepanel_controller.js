@@ -50,17 +50,7 @@ export class SidepanelController {
         );
 
         // Start fetching model name immediately for llamacpp (in parallel with API call)
-        let actualModelNamePromise = Promise.resolve(model);
-        if (api_provider === 'llamacpp') {
-            actualModelNamePromise = this.apiManager.fetchLlamaCppModelName().then(name => {
-                // Update UI as soon as we have the name
-                this.chatUI.updateLastMessageModelName(name);
-                return name;
-            }).catch(error => {
-                console.log('Failed to fetch llamacpp model name:', error);
-                return model; // fallback to placeholder
-            });
-        }
+        const actualModelNamePromise = this.startLlamaModelNameFetch(api_provider, model);
 
         const streamResponse = this.stateManager.getSetting('stream_response');
         let success = false;
@@ -85,22 +75,51 @@ export class SidepanelController {
             if (!manualAborted) this.chatUI.addErrorMessage(`Error: ${error.message}`);
         } finally {
             tokenCounter.updateLifetimeTokens();
+            // Always remove by logical model key so arena lookup works
             this.chatUI.removeManualAbortButton(model);
             // if the response fails or is stopped in thinking mode, the footer should still create a regenerate button,
             // which due to chatCore management conveniently continues with the thinking chain, discarding the invalid message
             const isThinkingFunc = success ? null : () => false;
-            
-            // Wait for actual model name for the footer too in case of arena and llamacpp
-            const footerModelName = await actualModelNamePromise;
-            await streamWriter.addFooter(this.createMessageFooter(tokenCounter, footerModelName, isThinkingFunc));
+            // Footer actions (thinking/regenerate) must use the logical model id
+            await streamWriter.addFooter(this.createMessageFooter(tokenCounter, model, isThinkingFunc));
         }
 
         if (success) {
             // Wait for the actual model name (should be fast since it started early)
             const actualModelName = await actualModelNamePromise;
-            
-            await this.saveResponseMessage(streamWriter.parts, actualModelName, isRegen);
-            this.handleThinkingMode(model, isRegen); // Use placeholder for thinking consistency
+
+            // Update arena display and storage names while keeping logical keys intact
+            await this.applyResolvedLlamaName(api_provider, model, actualModelName);
+
+            // For normal mode, save with display name; for arena keep logical id for routing
+            const saveModel = this.stateManager.isArenaModeActive ? model : actualModelName;
+            await this.saveResponseMessage(streamWriter.parts, saveModel, isRegen);
+            // Thinking loop routing must use logical model id
+            this.handleThinkingMode(model, isRegen);
+        }
+    }
+
+    // Start fetching the local llama.cpp display name; updates normal-mode UI when it resolves.
+    startLlamaModelNameFetch(apiProvider, model) {
+        if (apiProvider !== 'llamacpp') return Promise.resolve(model);
+        return this.apiManager.fetchLlamaCppModelName().then(name => {
+            this.chatUI.updateLastMessageModelName(name);
+            return name;
+        }).catch(error => {
+            console.log('Failed to fetch llamacpp model name:', error);
+            return model; // fallback to logical id as placeholder
+        });
+    }
+
+    // Apply resolved llama.cpp display name in arena (UI + storage), keeping logical model ids for routing.
+    async applyResolvedLlamaName(apiProvider, logicalModelId, displayName) {
+        if (!this.stateManager.isArenaModeActive || apiProvider !== 'llamacpp') return;
+        try {
+            const modelKey = this.stateManager.getArenaModelKey(logicalModelId);
+            await this.chatCore.setArenaModelName(modelKey, displayName);
+            this.chatUI.setArenaModelDisplayName(logicalModelId, displayName);
+        } catch (_) {
+            // Arena state might have been cleared mid-flight; ignore.
         }
     }
 
