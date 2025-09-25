@@ -359,27 +359,52 @@ export class SidepanelChatUI extends ChatUI {
         update_textfield_height(this.textarea);
     }
 
-    // Thinking/reasoning toggle for Sonnet/Grok models
+    // Thinking/reasoning toggle for Sonnet/Grok and OpenAI reasoners
     initSonnetThinking() {
         const sonnetThinkButton = document.getElementById('sonnet-thinking-toggle');
         if (!sonnetThinkButton) return;
 
         sonnetThinkButton.style.display = 'none';
 
+        const isOpenAIReasoner = (model) => (/o\d/.test(model) || model.includes('gpt-5'));
+        const isSonnet = (model) => ['3-7-sonnet', 'sonnet-4', 'opus-4'].some(sub => model.includes(sub));
+        const setReasoningLabel = (model) => {
+            const span = sonnetThinkButton.querySelector('.reasoning-label');
+            if (!span) return; // span is in HTML now
+            span.textContent = isOpenAIReasoner(model)
+                ? this.stateManager.getOpenAIReasoningEffort()
+                : 'reason';
+        };
+
         sonnetThinkButton.addEventListener('click', () => {
-            this.stateManager.toggleShouldThink();
-            sonnetThinkButton.classList.toggle('active', this.stateManager.getShouldThink());
+            const model = this.stateManager.getSetting('current_model') || '';
+            if (isOpenAIReasoner(model)) {
+                const next = this.stateManager.cycleOpenAIReasoningEffort();
+                sonnetThinkButton.title = `Reasoning: ${next}`;
+                setReasoningLabel(model);
+                sonnetThinkButton.classList.add('active');
+            } else {
+                this.stateManager.toggleShouldThink();
+                sonnetThinkButton.classList.toggle('active', this.stateManager.getShouldThink());
+                setReasoningLabel(model);
+            }
         });
 
         const updateSonnetThinkingButton = () => {
-            const model = this.stateManager.getSetting('current_model');
-            const isSonnet = ['3-7-sonnet', 'sonnet-4', 'opus-4'].some(sub => model.includes(sub));
-            const isGrok4 = model.includes('grok-4');
-            const canThink = isSonnet || isGrok4;
+            const model = this.stateManager.getSetting('current_model') || '';
+            const canThink = isSonnet(model) || isOpenAIReasoner(model);
 
             if (canThink) {
                 sonnetThinkButton.style.display = 'flex';
-                sonnetThinkButton.classList.toggle('active', this.stateManager.getShouldThink());
+                if (isOpenAIReasoner(model)) {
+                    const effort = this.stateManager.getOpenAIReasoningEffort();
+                    sonnetThinkButton.title = `Reasoning: ${effort}`;
+                    sonnetThinkButton.classList.add('active');
+                } else {
+                    sonnetThinkButton.title = 'Reasoning';
+                    sonnetThinkButton.classList.toggle('active', this.stateManager.getShouldThink());
+                }
+                setReasoningLabel(model);
             } else {
                 sonnetThinkButton.style.display = 'none';
                 this.stateManager.setShouldThink(false);
@@ -389,6 +414,51 @@ export class SidepanelChatUI extends ChatUI {
 
         this.stateManager.runOnReady(updateSonnetThinkingButton);
         this.stateManager.subscribeToSetting('current_model', updateSonnetThinkingButton);
+    }
+
+    // Web search toggle (per-chat, init from global setting)
+    initWebSearchToggle() {
+        const webButton = document.getElementById('web-search-toggle');
+        if (!webButton) return;
+
+        webButton.style.display = 'none';
+
+        const openaiSupport = (model) => {
+            const include = ['gpt-4.1', 'gpt-5'];
+            const exclude = ['gpt-4.1-nano', 'gpt-5-nano'];
+            return include.some(s => model.includes(s)) && !exclude.some(s => model.includes(s));
+        };
+        const anthropicSupport = (model) => {
+            const subs = ['claude-3-7-sonnet', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest', 'sonnet-4', 'opus-4'];
+            return subs.some(s => model.includes(s));
+        };
+        const grokSupport = (model) => {
+            const subs = ['grok-4'];
+            return subs.some(s => model.includes(s));
+        };
+
+        const hasSupport = (model) => openaiSupport(model) || anthropicSupport(model) || grokSupport(model);
+
+        webButton.addEventListener('click', () => {
+            this.stateManager.toggleShouldWebSearch();
+            webButton.classList.toggle('active', this.stateManager.getShouldWebSearch());
+        });
+
+        const updateWebButton = () => {
+            const model = this.stateManager.getSetting('current_model') || '';
+            if (hasSupport(model)) {
+                this.stateManager.ensureWebSearchInitialized();
+                webButton.style.display = 'flex';
+                webButton.classList.toggle('active', this.stateManager.getShouldWebSearch());
+            } else {
+                webButton.style.display = 'none';
+                this.stateManager.setShouldWebSearch(false);
+            }
+            update_textfield_height(this.textarea);
+        };
+
+        this.stateManager.runOnReady(updateWebButton);
+        this.stateManager.subscribeToSetting('current_model', updateWebButton);
     }
 
     // Model picker popup next to the textarea controls

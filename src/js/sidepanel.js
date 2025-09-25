@@ -9,7 +9,9 @@ class SidepanelApp {
     constructor() {
         this.stateManager = new SidepanelStateManager('chat_prompt');
         this.apiManager = new ApiManager({
-            getShouldThink: () => this.stateManager.getShouldThink()
+            getShouldThink: () => this.stateManager.getShouldThink(),
+            getWebSearch: () => this.stateManager.getShouldWebSearch(),
+            getOpenAIReasoningEffort: () => this.stateManager.getOpenAIReasoningEffort()
         });
         this.chatStorage = new ChatStorage();
 
@@ -37,7 +39,10 @@ class SidepanelApp {
         this.setupMessageListeners();
         this.stateManager.subscribeToChatReset("chat", () => {this.handleNewChat()});
         this.chatUI.initSonnetThinking();
-        this.stateManager.runOnReady(() => { this.chatUI.initModelPicker() });
+        this.stateManager.runOnReady(() => { 
+            this.chatUI.initWebSearchToggle();
+            this.chatUI.initModelPicker();
+        });
     }
 
     initInputListener() {

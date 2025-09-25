@@ -158,7 +158,8 @@ body {
 .sidepanel-open-history,
 .sidepanel-open-settings,
 .copy-code-button,
-.sonnet-thinking-toggle {
+.sonnet-thinking-toggle,
+.web-search-toggle {
   overflow: hidden;
   border-radius: 0.5rem;
   font-size: 0.8em;
@@ -172,22 +173,13 @@ body {
   color: #282c34;
 }
 
-.sonnet-thinking-toggle {
+.sonnet-thinking-toggle,
+.web-search-toggle {
   display: flex;
   border-radius: 9999px;
   align-items: center;
   gap: 2px;
   transition: background 0.1s ease-out, color 0.2s ease-out;
-  overflow: hidden;
-  border-radius: 0.5rem;
-  font-size: 0.8em;
-  width: min-content;
-  cursor: pointer;
-  padding: 1px 5px;
-  background: #abb2bf;
-  white-space: nowrap;
-  min-width: fit-content;
-  color: #282c34;
 }
 
 .copy-code-button {
@@ -203,9 +195,14 @@ body {
   line-height: 0;
 }
 
-.sonnet-thinking-toggle svg {
+.sonnet-thinking-toggle svg,
+.web-search-toggle svg {
   height: 16px;
   fill: currentColor;
+}
+
+.web-search-toggle svg {
+  height: 18px;
 }
 
 .copy-code-button svg {
@@ -227,17 +224,26 @@ body {
   color: #98C379;
 }
 
-.sonnet-thinking-toggle:hover {
+.sonnet-thinking-toggle:hover,
+.web-search-toggle:hover {
   color: #ffffff;
 }
 
-.sonnet-thinking-toggle.active {
+.sonnet-thinking-toggle.active,
+.web-search-toggle.active {
   background: #5c6980;
   color: #ffffff;
 }
 
-.sonnet-thinking-toggle.active:hover {
+.sonnet-thinking-toggle.active:hover,
+.web-search-toggle.active:hover {
   color: #1e1e1e;
+}
+
+.web-search-toggle {
+  padding: 1px 3px;
+  height: 18px;
+  justify-content: center;
 }
 
 .linked-chat {

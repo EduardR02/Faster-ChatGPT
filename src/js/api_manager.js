@@ -7,6 +7,8 @@ export class ApiManager {
         this.lastContentWasRedacted = false;
         // Getter for UI/state-driven reasoning toggle, injected by caller (optional)
         this.getShouldThink = options.getShouldThink || (() => false);
+        this.getWebSearch = options.getWebSearch || null;
+        this.getOpenAIReasoningEffort = options.getOpenAIReasoningEffort || (() => this.settingsManager.getSetting('reasoning_effort') || 'medium');
     }
 
     getCurrentModel() {
@@ -198,7 +200,8 @@ export class ApiManager {
         const webSearchCompatibleModels = ['gpt-4.1', 'gpt-5']; // Add model substrings here
         const webSearchExcludedModels = ['gpt-4.1-nano', 'gpt-5-nano'];
         const hasWebSearch = webSearchCompatibleModels.some(m => model.includes(m)) && !webSearchExcludedModels.some(m => model.includes(m));
-        const enableWebSearch = this.settingsManager.getSetting('web_search') && hasWebSearch;
+        const enableWebSearchSetting = this.getWebSearch ? !!this.getWebSearch() : !!this.settingsManager.getSetting('web_search');
+        const enableWebSearch = enableWebSearchSetting && hasWebSearch;
         
         // Use regex to check for 'o' followed by a digit (e.g., o1, o3, o4)
         const isReasoner = /o\d/.test(model) || model.includes('gpt-5');    // looks like gpt-5 and o3 require "verification" for now, (gpt-5 for streaming), which is just fking 
@@ -219,7 +222,7 @@ export class ApiManager {
             input: formattedInput,
             ...(systemMessage && { instructions: systemMessage }),
             ...(enableWebSearch && { tools: [{ type: "web_search_preview" }] }),   // tools is only used if model requests it
-            ...(isReasoner && { reasoning: { effort: this.settingsManager.getSetting('reasoning_effort') || 'medium' } }),  // summary parameter also requires "verification"
+            ...(isReasoner && { reasoning: { effort: this.getOpenAIReasoningEffort() } }),  // summary parameter also requires "verification"
             max_output_tokens: maxOutputTokens,
             // Temperature is not directly settable for reasoning models in /v1/responses it seems, omit for them
             ...(!isReasoner && { temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.openai) }),
@@ -263,7 +266,9 @@ export class ApiManager {
         }
 
         const webSearchCompatibleModelSubstrings = ['claude-3-7-sonnet', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest', 'sonnet-4', 'opus-4'];
-        const enableWebSearch = this.settingsManager.getSetting('web_search') && webSearchCompatibleModelSubstrings.some(substring => model.includes(substring));
+        const hasWeb = webSearchCompatibleModelSubstrings.some(substring => model.includes(substring));
+        const enableWebSearchSetting = this.getWebSearch ? !!this.getWebSearch() : !!this.settingsManager.getSetting('web_search');
+        const enableWebSearch = enableWebSearchSetting && hasWeb;
         
         messages = this.formatMessagesForAnthropic(messages);
         const requestBody = {
@@ -363,6 +368,9 @@ export class ApiManager {
             this.settingsManager.getSetting('max_tokens'),
             MaxTokens.grok
         );
+
+        const enableWebSearchSetting = this.getWebSearch ? !!this.getWebSearch() : !!this.settingsManager.getSetting('web_search');
+        const enableWebSearch = enableWebSearchSetting && isGrok4;
         
         const requestBody = {
             model,
@@ -370,7 +378,8 @@ export class ApiManager {
             max_tokens: maxTokens,
             temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.grok),
             stream: streamResponse,
-            ...(streamResponse && {stream_options: {include_usage: true}})
+            ...(streamResponse && {stream_options: {include_usage: true}}),
+            ...(enableWebSearch && { search_parameters: { mode: "auto" } })     // auto is a good default, enables web + x search, returns citations, and doesnt force the model to search.
         };
         
         return ['https://api.x.ai/v1/chat/completions', {

@@ -366,7 +366,7 @@ export class HistoryStateManager extends ArenaStateManager {
 
 export class SidepanelStateManager extends ArenaStateManager {
     constructor(requestedPrompt) {
-        super(['loop_threshold', 'current_model', 'arena_models', 'stream_response', 'arena_mode', 'show_model_name', 'models']);
+        super(['loop_threshold', 'current_model', 'arena_models', 'stream_response', 'arena_mode', 'show_model_name', 'models', 'web_search', 'reasoning_effort']);
 
         // Additional state
         this.state = {
@@ -377,6 +377,8 @@ export class SidepanelStateManager extends ArenaStateManager {
             chatState: CHAT_STATE.NORMAL,
             shouldSave: true,
             shouldThink: false,
+            shouldWebSearch: undefined,
+            openaiReasoningEffort: undefined,
             isSidePanel: true,
             continuedChatOptions: {},
             chatResetOngoing: false,
@@ -592,6 +594,45 @@ export class SidepanelStateManager extends ArenaStateManager {
 
     toggleShouldThink() {
         this.state.shouldThink = !this.state.shouldThink;
+    }
+
+    // --- Per-chat Web Search (initialized from settings once) ---
+    ensureWebSearchInitialized() {
+        if (this.state.shouldWebSearch === undefined) {
+            this.state.shouldWebSearch = !!this.getSetting('web_search');
+        }
+    }
+
+    getShouldWebSearch() {
+        this.ensureWebSearchInitialized();
+        return !!this.state.shouldWebSearch;
+    }
+
+    setShouldWebSearch(value) {
+        this.state.shouldWebSearch = !!value;
+    }
+
+    toggleShouldWebSearch() {
+        this.ensureWebSearchInitialized();
+        this.state.shouldWebSearch = !this.state.shouldWebSearch;
+    }
+
+    // --- OpenAI per-chat reasoning effort (low/medium/high) ---
+    getOpenAIReasoningEffort() {
+        return this.state.openaiReasoningEffort || this.getSetting('reasoning_effort') || 'medium';
+    }
+
+    setOpenAIReasoningEffort(value) {
+        if (!['low', 'medium', 'high'].includes(value)) return;
+        this.state.openaiReasoningEffort = value;
+    }
+
+    cycleOpenAIReasoningEffort() {
+        const order = ['low', 'medium', 'high'];
+        const current = this.getOpenAIReasoningEffort();
+        const next = order[(order.indexOf(current) + 1) % order.length];
+        this.state.openaiReasoningEffort = next;
+        return next;
     }
 
     get continuedChatOptions() {
