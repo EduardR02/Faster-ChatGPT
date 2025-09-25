@@ -359,6 +359,166 @@ export class SidepanelChatUI extends ChatUI {
         update_textfield_height(this.textarea);
     }
 
+    // Thinking/reasoning toggle for Sonnet/Grok models
+    initSonnetThinking() {
+        const sonnetThinkButton = document.getElementById('sonnet-thinking-toggle');
+        if (!sonnetThinkButton) return;
+
+        sonnetThinkButton.style.display = 'none';
+
+        sonnetThinkButton.addEventListener('click', () => {
+            this.stateManager.toggleShouldThink();
+            sonnetThinkButton.classList.toggle('active', this.stateManager.getShouldThink());
+        });
+
+        const updateSonnetThinkingButton = () => {
+            const model = this.stateManager.getSetting('current_model');
+            const isSonnet = ['3-7-sonnet', 'sonnet-4', 'opus-4'].some(sub => model.includes(sub));
+            const isGrok4 = model.includes('grok-4');
+            const canThink = isSonnet || isGrok4;
+
+            if (canThink) {
+                sonnetThinkButton.style.display = 'flex';
+                sonnetThinkButton.classList.toggle('active', this.stateManager.getShouldThink());
+            } else {
+                sonnetThinkButton.style.display = 'none';
+                this.stateManager.setShouldThink(false);
+            }
+            update_textfield_height(this.textarea);
+        };
+
+        this.stateManager.runOnReady(updateSonnetThinkingButton);
+        this.stateManager.subscribeToSetting('current_model', updateSonnetThinkingButton);
+    }
+
+    // Model picker popup next to the textarea controls
+    initModelPicker() {
+        const controlsContainer = document.querySelector('.textarea-bottom-left-controls');
+        const pickerBtn = document.getElementById('model-picker-toggle');
+        if (!pickerBtn || !controlsContainer) return;
+
+        const containerStyle = window.getComputedStyle(controlsContainer);
+        if (containerStyle.position === 'static') {
+            controlsContainer.style.position = 'relative';
+        }
+
+		const getModelArr = () => {
+			const modelsObj = this.stateManager.getSetting('models') || {};
+			const arr = [];
+			for (const provider in modelsObj) {
+				for (const apiName in modelsObj[provider]) {
+					arr.push({ apiName, display: modelsObj[provider][apiName] });
+				}
+			}
+			return arr;
+		};
+
+		const getDisplayName = (apiName) => {
+			const modelsObj = this.stateManager.getSetting('models') || {};
+			for (const provider in modelsObj) {
+				if (apiName in modelsObj[provider]) return modelsObj[provider][apiName];
+			}
+			return apiName;
+		};
+
+		const getFirstApiName = () => {
+			const arr = getModelArr();
+			return arr.length ? arr[0].apiName : null;
+		};
+
+        const popup = document.createElement('div');
+        popup.id = 'model-picker-popup';
+        popup.className = 'model-picker-popup';
+		const ul = document.createElement('ul');
+		const rebuildList = () => {
+			ul.innerHTML = '';
+			getModelArr().forEach(m => {
+				const li = document.createElement('li');
+				li.textContent = m.display;
+				li.addEventListener('click', (e) => {
+					e.stopPropagation();
+					this.stateManager.updateSettingsLocal({ current_model: m.apiName });
+					popup.style.display = 'none';
+				});
+				ul.appendChild(li);
+			});
+		};
+		rebuildList();
+        popup.appendChild(ul);
+        controlsContainer.appendChild(popup);
+        popup.style.display = 'none';
+
+		const updateButtonText = (key) => {
+			if (!key) {
+				pickerBtn.textContent = `Select model \u25BE`;
+				return;
+			}
+			const currentDisp = getDisplayName(key);
+			pickerBtn.textContent = `${currentDisp} \u25BE`;
+		};
+        this.stateManager.runOnReady(() => updateButtonText(this.stateManager.getSetting('current_model')));
+        this.stateManager.subscribeToSetting('current_model', updateButtonText);
+		this.stateManager.subscribeToSetting('models', async () => {
+			rebuildList();
+			const models = getModelArr();
+			const currentLocal = this.stateManager.getSetting('current_model');
+			const localValid = models.some(m => m.apiName === currentLocal);
+			if (!localValid) {
+				try {
+					const stored = await this.stateManager.loadFromStorage(['current_model']);
+					const persisted = stored.current_model;
+					if (persisted && models.some(m => m.apiName === persisted)) {
+						this.stateManager.updateSettingsLocal({ current_model: persisted });
+						return;
+					}
+				} catch (_) {}
+				const fallback = getFirstApiName();
+				this.stateManager.updateSettingsLocal({ current_model: fallback });
+			}
+		});
+
+        pickerBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isOpen = popup.style.display === 'flex';
+            if (isOpen) {
+                popup.style.display = 'none';
+            } else {
+                const buttonTopRelContainer = pickerBtn.offsetTop;
+                const buttonHeight = pickerBtn.offsetHeight;
+
+                popup.style.visibility = 'hidden';
+                popup.style.display = 'flex';
+                const popupHeight = popup.offsetHeight;
+                popup.style.display = 'none';
+                popup.style.visibility = 'visible';
+
+                const buttonRectViewport = pickerBtn.getBoundingClientRect();
+                const spaceBelowViewport = window.innerHeight - buttonRectViewport.bottom;
+                const spaceAboveViewport = buttonRectViewport.top;
+
+                let popupTopStyle = 'auto';
+                let popupBottomStyle = 'auto';
+
+                if (spaceBelowViewport >= popupHeight || spaceBelowViewport >= spaceAboveViewport) {
+                    popupTopStyle = `${buttonTopRelContainer + buttonHeight + 5}px`;
+                } else {
+                    popupBottomStyle = `${controlsContainer.offsetHeight - buttonTopRelContainer + 5}px`;
+                }
+
+                popup.style.top = popupTopStyle;
+                popup.style.bottom = popupBottomStyle;
+                popup.style.left = `${pickerBtn.offsetLeft}px`;
+                popup.style.display = 'flex';
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            if (popup.style.display === 'flex' && !popup.contains(e.target) && !pickerBtn.contains(e.target)) {
+                popup.style.display = 'none';
+            }
+        });
+    }
+
     setTextareaText(text) {
         this.textarea.value = text;
         this.updateTextareaHeight();

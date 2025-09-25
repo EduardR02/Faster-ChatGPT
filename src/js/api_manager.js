@@ -2,10 +2,11 @@ import { SettingsManager } from './state_manager.js';
 
 
 export class ApiManager {
-    constructor() {
+    constructor(options = {}) {
         this.settingsManager = new SettingsManager(['api_keys', 'max_tokens', 'temperature', 'models', 'current_model', 'web_search', 'reasoning_effort']);
         this.lastContentWasRedacted = false;
-        this.shouldThink = false;
+        // Getter for UI/state-driven reasoning toggle, injected by caller (optional)
+        this.getShouldThink = options.getShouldThink || (() => false);
     }
 
     getCurrentModel() {
@@ -239,7 +240,7 @@ export class ApiManager {
 
     createAnthropicRequest(model, messages, streamResponse, streamWriter, apiKey) {
         const canThink = ['3-7-sonnet', 'sonnet-4', 'opus-4'].some(sub => model.includes(sub));
-        const isThinking = canThink && this.shouldThink;
+        const isThinking = canThink && this.getShouldThink();
         const maxTokens = Math.min(
             this.settingsManager.getSetting('max_tokens'),
             model.includes('opus') ? MaxTokens.anthropic :

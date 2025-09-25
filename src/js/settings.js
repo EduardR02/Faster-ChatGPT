@@ -318,6 +318,9 @@ class SettingsUI {
         if (row.children.length === 0) {
             row.parentElement.remove();
         }
+
+        // Ensure the selection reflects updated current_model immediately
+        this.updateModelCheckboxes();
     }
 
     save() {

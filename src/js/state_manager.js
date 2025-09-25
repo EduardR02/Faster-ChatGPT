@@ -233,6 +233,12 @@ export class SettingsStateManager extends SettingsManager {
             }
         }
 
+        // If the user had a pending (unsaved) selection for current_model that was just removed,
+        // clear it so UI falls back to the persisted current_model (or the update above if persisted was removed).
+        if (this.pendingChanges.current_model === apiName) {
+            delete this.pendingChanges.current_model;
+        }
+
         if (Object.keys(updates).length > 0) {
             this.updateSettingsPersistent(updates);
         }
@@ -370,6 +376,7 @@ export class SidepanelStateManager extends ArenaStateManager {
             thinkingStates: { default: THINKING_STATE.INACTIVE },
             chatState: CHAT_STATE.NORMAL,
             shouldSave: true,
+            shouldThink: false,
             isSidePanel: true,
             continuedChatOptions: {},
             chatResetOngoing: false,
@@ -572,6 +579,19 @@ export class SidepanelStateManager extends ArenaStateManager {
 
     get thinkingMode() {
         return this.state.activeThinkingMode;
+    }
+
+    // Provider-level reasoning toggle (e.g., Anthropic Sonnet/Grok)
+    getShouldThink() {
+        return !!this.state.shouldThink;
+    }
+
+    setShouldThink(value) {
+        this.state.shouldThink = !!value;
+    }
+
+    toggleShouldThink() {
+        this.state.shouldThink = !this.state.shouldThink;
     }
 
     get continuedChatOptions() {

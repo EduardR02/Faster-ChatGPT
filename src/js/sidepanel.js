@@ -8,7 +8,9 @@ import { SidepanelController } from './sidepanel_controller.js';
 class SidepanelApp {
     constructor() {
         this.stateManager = new SidepanelStateManager('chat_prompt');
-        this.apiManager = new ApiManager();
+        this.apiManager = new ApiManager({
+            getShouldThink: () => this.stateManager.getShouldThink()
+        });
         this.chatStorage = new ChatStorage();
 
         this.chatUI = new SidepanelChatUI({
@@ -34,8 +36,8 @@ class SidepanelApp {
         this.initTextareaImageHandling();
         this.setupMessageListeners();
         this.stateManager.subscribeToChatReset("chat", () => {this.handleNewChat()});
-        this.initSonnetThinking();
-        this.stateManager.runOnReady(() => {this.initModelPicker()});
+        this.chatUI.initSonnetThinking();
+        this.stateManager.runOnReady(() => { this.chatUI.initModelPicker() });
     }
 
     initInputListener() {
@@ -404,159 +406,6 @@ class SidepanelApp {
         }
     }
 
-    initSonnetThinking() {
-        const sonnetThinkButton = document.getElementById('sonnet-thinking-toggle');
-        if (!sonnetThinkButton) return;
-
-        sonnetThinkButton.style.display = 'none'; // Start hidden
-
-        sonnetThinkButton.addEventListener('click', () => {
-            this.apiManager.shouldThink = !this.apiManager.shouldThink;
-            sonnetThinkButton.classList.toggle('active', this.apiManager.shouldThink);
-        });
-
-        const updateSonnetThinkingButton = () => {
-            let model = this.stateManager.getSetting('current_model');
-            const isSonnet = ['3-7-sonnet', 'sonnet-4', 'opus-4'].some(sub => model.includes(sub));
-            const isGrok4 = model.includes('grok-4');
-            const canThink = isSonnet || isGrok4;
-            
-            if (canThink) {
-                sonnetThinkButton.style.display = 'flex'; // Use flex to show
-                sonnetThinkButton.classList.toggle('active', this.apiManager.shouldThink);
-            } else {
-                sonnetThinkButton.style.display = 'none'; // Hide
-                this.apiManager.shouldThink = false; // Reset flag when not applicable
-            }
-            // Trigger height update when visibility changes
-            update_textfield_height(document.getElementById('textInput'));
-        };
-
-        this.stateManager.runOnReady(updateSonnetThinkingButton);
-        this.stateManager.subscribeToSetting('current_model', updateSonnetThinkingButton);
-    }
-
-    initModelPicker() {
-        // Container div for the popup, now positioning context
-        const controlsContainer = document.querySelector('.textarea-bottom-left-controls');
-        const pickerBtn = document.getElementById('model-picker-toggle');
-        // Popup will be created and appended later
-
-        if (!pickerBtn || !controlsContainer) return;
-
-        // --- Ensure container is positioned for relative absolute positioning ---
-        // This makes controlsContainer the reference for the popup's position.
-        const containerStyle = window.getComputedStyle(controlsContainer);
-        if (containerStyle.position === 'static') {
-            controlsContainer.style.position = 'relative';
-        }
-
-
-        // --- Build Model List ---
-        const modelsObj = this.stateManager.getSetting('models') || {};
-        const modelArr = [];
-        for (const provider in modelsObj) {
-            for (const apiName in modelsObj[provider]) {
-                modelArr.push({ apiName, display: modelsObj[provider][apiName] });
-            }
-        }
-
-        // --- Create Popup DOM ---
-        const popup = document.createElement('div');
-        popup.id = 'model-picker-popup';
-        // Ensure CSS for .model-picker-popup includes 'position: absolute;'
-        popup.className = 'model-picker-popup';
-        const ul = document.createElement('ul');
-        modelArr.forEach(m => {
-            const li = document.createElement('li');
-            li.textContent = m.display;
-            li.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.stateManager.updateSettingsLocal({ current_model: m.apiName });
-                popup.style.display = 'none'; // Hide on selection
-            });
-            ul.appendChild(li);
-        });
-        popup.appendChild(ul);
-        // --- Append popup to the CONTROLS CONTAINER ---
-        // This anchors the popup's position relative to the controls near the button.
-        controlsContainer.appendChild(popup);
-        popup.style.display = 'none'; // Start hidden
-
-
-        // --- Button Text Update --- (No changes needed here)
-        const updateButtonText = (key) => {
-             const currentDisp = modelArr.find(x => x.apiName === key)?.display || key;
-             // Ensure the down arrow symbol is consistently applied
-             pickerBtn.textContent = `${currentDisp} \u25BE`; // Using unicode for down arrow
-        }
-        this.stateManager.runOnReady(() => {
-             updateButtonText(this.stateManager.getSetting('current_model'));
-        });
-         this.stateManager.subscribeToSetting('current_model', updateButtonText);
-
-
-        // --- Toggle Popup Visibility & Position (Revised Logic) ---
-        pickerBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const isOpen = popup.style.display === 'flex';
-
-            if (isOpen) {
-                popup.style.display = 'none';
-            } else {
-                // --- Calculate necessary dimensions ---
-                // Use offset properties for positioning relative to the container
-                const buttonTopRelContainer = pickerBtn.offsetTop;
-                const buttonHeight = pickerBtn.offsetHeight;
-
-                // Temporarily display off-screen to measure its height accurately
-                popup.style.visibility = 'hidden';
-                popup.style.display = 'flex'; // Use 'flex' as per original code/CSS
-                const popupHeight = popup.offsetHeight;
-                popup.style.display = 'none'; // Hide again before positioning
-                popup.style.visibility = 'visible';
-
-                // --- Determine direction based on viewport space ---
-                // Use viewport rect just to decide up/down direction
-                const buttonRectViewport = pickerBtn.getBoundingClientRect();
-                const spaceBelowViewport = window.innerHeight - buttonRectViewport.bottom;
-                const spaceAboveViewport = buttonRectViewport.top;
-
-                let popupTopStyle = 'auto';
-                let popupBottomStyle = 'auto';
-
-                // Prefer positioning below the button
-                if (spaceBelowViewport >= popupHeight || spaceBelowViewport >= spaceAboveViewport) {
-                    // Set top relative to container: button's top + button's height + gap
-                    popupTopStyle = `${buttonTopRelContainer + buttonHeight + 5}px`;
-                }
-                // Position above the button
-                else {
-                    // Set bottom relative to container: container height - button's top + gap
-                    // This positions the popup's bottom edge 5px above the button's top edge.
-                    popupBottomStyle = `${controlsContainer.offsetHeight - buttonTopRelContainer + 5}px`;
-                }
-
-                // --- Apply styles ---
-                popup.style.top = popupTopStyle;
-                popup.style.bottom = popupBottomStyle;
-                // Align left edge of popup with left edge of button (relative to container)
-                popup.style.left = `${pickerBtn.offsetLeft}px`;
-                // Ensure width constraints if needed (e.g., via CSS max-width or min-width)
-                // popup.style.minWidth = `${pickerBtn.offsetWidth}px`; // Optional: Match button width
-
-                popup.style.display = 'flex'; // Show the popup
-            }
-        });
-
-        // --- Close Popup on Outside Click --- (No changes needed here)
-        document.addEventListener('click', (e) => {
-            // Check if the click is outside the popup AND outside the toggle button
-            if (popup.style.display === 'flex' && !popup.contains(e.target) && !pickerBtn.contains(e.target)) {
-                popup.style.display = 'none';
-            }
-        });
-    }
 }
 
 
