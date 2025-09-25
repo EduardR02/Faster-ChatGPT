@@ -196,6 +196,31 @@ export class ApiManager {
         return base64String.split('base64,')[1];
     }
 
+    extractBaseDomain(url) {
+        try {
+            const hostname = new URL(url).hostname.toLowerCase();
+            const noWww = hostname.startsWith('www.') ? hostname.slice(4) : hostname;
+            const parts = noWww.split('.');
+            if (parts.length <= 2) return noWww;
+            const last = parts[parts.length - 1];
+            const secondLast = parts[parts.length - 2];
+            const sldSet = new Set(['co', 'com', 'org', 'net', 'gov', 'ac', 'edu']);
+            if (last.length === 2 && sldSet.has(secondLast)) {
+                return parts.slice(-3).join('.');
+            }
+            return parts.slice(-2).join('.');
+        } catch (_) {
+            return url;
+        }
+    }
+
+    buildCitationsTail(citations) {
+        if (!Array.isArray(citations) || citations.length === 0) return '';
+        const unique = [...new Set(citations)];
+        const list = unique.slice(0, 10).map(u => `[${this.extractBaseDomain(u)}](${u})`).join(' · ');
+        return `\n\n${list}\n`;
+    }
+
     createOpenAIRequest(model, messages, streamResponse, streamWriter, apiKey) {
         const webSearchCompatibleModels = ['gpt-4.1', 'gpt-5']; // Add model substrings here
         const webSearchExcludedModels = ['gpt-4.1-nano', 'gpt-5-nano'];
@@ -504,6 +529,11 @@ export class ApiManager {
         tokenCounter.update(data.usage.prompt_tokens, data.usage.completion_tokens);
         const message = data.choices[0].message;
         const thoughts = message.reasoning_content ? [message.reasoning_content] : [];
+        const citations = Array.isArray(data.citations) ? data.citations : [];
+        if (citations.length) {
+            const sourcesText = this.buildCitationsTail(citations);
+            return this.returnMessage([message.content + sourcesText], thoughts);
+        }
         return this.returnMessage([message.content], thoughts);
     }
 
@@ -666,6 +696,13 @@ export class ApiManager {
             const totalCompletionTokens = baseCompletionTokens + reasoningTokens;
             
             tokenCounter.update(parsed.usage.prompt_tokens, totalCompletionTokens);
+
+            // Append citations at end if provided by Grok
+            const citations = Array.isArray(parsed.citations) ? parsed.citations : [];
+            if (citations.length) {
+                const sourcesText = this.buildCitationsTail(citations);
+                streamWriter.processContent(sourcesText);
+            }
             return;
         }
         

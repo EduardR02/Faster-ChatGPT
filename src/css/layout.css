@@ -756,20 +756,34 @@ a:link {
   text-decoration: none;
 }
 
+/* Base link (no left/right padding that visually offsets text) */
 a {
-  color: #fdaaaa;
-  text-decoration: none;
   position: relative;
-  padding: 1px 5px;
-  border-radius: 9999px;
+  text-decoration: none;
   transform-origin: center;
-  transition: color 0.2s, background-color 0.2s, font-size 0.2s;
+  transition: font-size 0.2s ease, color 0.2s ease;
 }
 
-a:hover {
-  color: #fdaaaa;
-  background-color: rgba(255, 255, 255, 0.2);  /* subtle highlight */
-  font-size: 1.03em;  /* nice hover effect */
+/* Pill background that doesn’t affect layout */
+a::before {
+  content: "";
+  position: absolute;
+  inset: -1px -5px;            /* tune to taste; mimics your old 1px 5px padding */
+  border-radius: 9999px;
+  background: rgba(255,255,255,0.2);
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;         /* keep clicks on the link */
+}
+
+a:hover::before,
+a:focus-visible::before {
+  opacity: 1;
+}
+
+a:hover,
+a:focus-visible {
+  font-size: 1.03em;
 }
 
 a:visited {
