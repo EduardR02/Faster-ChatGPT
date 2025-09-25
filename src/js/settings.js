@@ -329,7 +329,7 @@ class SettingsUI {
 
     validateSettings() {
         const currentMode = this.getCurrentMode();
-        if (currentMode === 'arena_mode') {
+        if (currentMode === 'arena') {
             const selectedCount = document.querySelectorAll('input[name="model_select"]:checked').length;
             if (selectedCount < 2) {
                 document.getElementById('models-label').classList.add('settings-error');

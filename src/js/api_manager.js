@@ -520,7 +520,12 @@ export class ApiManager {
 
     processStreamData(data, model, tokenCounter, streamWriter) {
         const provider = this.getProviderForModel(model);
-        const parsed = JSON.parse(data);
+        let parsed;
+        try {
+            parsed = JSON.parse(data);
+        } catch (_) {
+            return;     // ignore invalid json
+        }
 
         switch (provider) {
             case 'openai':

@@ -7,7 +7,7 @@ init();
 function init() {
     add_listener();
     chrome.storage.onChanged.addListener(function(changes, namespace) {
-        if (changes.mode  && namespace === "sync") {
+        if (changes.mode  && namespace === "local") {
             add_listener();
         }
     });
