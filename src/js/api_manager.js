@@ -954,19 +954,30 @@ export class ApiManager {
     }
 
     async getLocalModelConfig() {
-        const portsToTry = [this.localServerPort || 8000, this.localServerPort === 8080 ? 8000 : 8080];
+        const portsToTry = [this.localServerPort || 8080, this.localServerPort === 8080 ? 8000 : 8080];
 
         const fetchModel = async (port) => {
-            const response = await fetch(`http://localhost:${port}/v1/models`);
-            if (!response.ok) throw new Error(`Port ${port} not available`);
-            const data = await response.json();
-            const firstModel = data.data?.[0] || {};
-            const raw = typeof firstModel === 'string' ? firstModel : (firstModel.id || firstModel.name || 'local-model');
-            return {
-                raw,
-                display: this.parseModelName(raw),
-                port
-            };
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 2000);
+            
+            try {
+                const response = await fetch(`http://localhost:${port}/v1/models`, {
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) throw new Error(`Port ${port} not available`);
+                const data = await response.json();
+                const firstModel = data.data?.[0] || {};
+                const raw = typeof firstModel === 'string' ? firstModel : (firstModel.id || firstModel.name || 'local-model');
+                return {
+                    raw,
+                    display: this.parseModelName(raw),
+                    port
+                };
+            } finally {
+                clearTimeout(timeoutId);
+            }
         };
 
         for (const port of portsToTry) {
