@@ -49,8 +49,16 @@ export class SidepanelController {
             api_provider
         );
 
-        // Start fetching model name immediately for llamacpp (in parallel with API call)
-        const actualModelNamePromise = this.startLlamaModelNameFetch(api_provider, model);
+        // For local models, fetch the actual model name from the server before making API call
+        let actualModelId = model;
+        let displayModelName = model;
+        const options = {};
+        if (api_provider === 'llamacpp') {
+            const modelInfo = await this.apiManager.getLocalModelConfig();
+            actualModelId = modelInfo.raw;
+            displayModelName = modelInfo.display;
+            options.localModelOverride = modelInfo;
+        }
 
         // Disable streaming for image models (images are generated all at once)
         const isImageModel = this.apiManager.isImageModel(model);
@@ -60,11 +68,12 @@ export class SidepanelController {
         
         try {
             responseResult = await this.apiManager.callApi(
-                model,
+                actualModelId,
                 messages,
                 tokenCounter,
                 streamResponse ? streamWriter : null,
-                abortController
+                abortController,
+                options
             );
 
             if (!streamResponse) {
@@ -96,41 +105,21 @@ export class SidepanelController {
         }
 
         if (success) {
-            // Wait for the actual model name (should be fast since it started early)
-            const actualModelName = await actualModelNamePromise;
-
-            // Update arena display and storage names while keeping logical keys intact
-            await this.applyResolvedLlamaName(api_provider, model, actualModelName);
+            // Update UI with the actual model display name for local models
+            if (api_provider === 'llamacpp') {
+                this.chatUI.updateLastMessageModelName(displayModelName);
+                if (this.stateManager.isArenaModeActive) {
+                    const modelKey = this.stateManager.getArenaModelKey(model);
+                    await this.chatCore.setArenaModelName(modelKey, displayModelName);
+                    this.chatUI.setArenaModelDisplayName(model, displayModelName);
+                }
+            }
 
             // For normal mode, save with display name; for arena keep logical id for routing
-            const saveModel = this.stateManager.isArenaModeActive ? model : actualModelName;
+            const saveModel = this.stateManager.isArenaModeActive ? model : displayModelName;
             await this.saveResponseMessage(streamWriter.parts, saveModel, isRegen);
             // Thinking loop routing must use logical model id
             this.handleThinkingMode(model, isRegen);
-        }
-    }
-
-    // Start fetching the local llama.cpp display name; updates normal-mode UI when it resolves.
-    startLlamaModelNameFetch(apiProvider, model) {
-        if (apiProvider !== 'llamacpp') return Promise.resolve(model);
-        return this.apiManager.fetchLlamaCppModelName().then(name => {
-            this.chatUI.updateLastMessageModelName(name);
-            return name;
-        }).catch(error => {
-            console.log('Failed to fetch llamacpp model name:', error);
-            return model; // fallback to logical id as placeholder
-        });
-    }
-
-    // Apply resolved llama.cpp display name in arena (UI + storage), keeping logical model ids for routing.
-    async applyResolvedLlamaName(apiProvider, logicalModelId, displayName) {
-        if (!this.stateManager.isArenaModeActive || apiProvider !== 'llamacpp') return;
-        try {
-            const modelKey = this.stateManager.getArenaModelKey(logicalModelId);
-            await this.chatCore.setArenaModelName(modelKey, displayName);
-            this.chatUI.setArenaModelDisplayName(logicalModelId, displayName);
-        } catch (_) {
-            // Arena state might have been cleared mid-flight; ignore.
         }
     }
 

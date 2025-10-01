@@ -5,6 +5,7 @@ export class ApiManager {
     constructor(options = {}) {
         this.settingsManager = new SettingsManager(['api_keys', 'max_tokens', 'temperature', 'models', 'current_model', 'web_search', 'reasoning_effort']);
         this.lastContentWasRedacted = false;
+        this.localServerPort = 8080;
         // Getter for UI/state-driven reasoning toggle, injected by caller (optional)
         this.getShouldThink = options.getShouldThink || (() => false);
         this.getWebSearch = options.getWebSearch || null;
@@ -20,22 +21,25 @@ export class ApiManager {
         return model.includes('image') || model.includes('imagen');
     }
 
-    async callApi(model, messages, tokenCounter, streamWriter = null, abortController = null) {
+    async callApi(model, messages, tokenCounter, streamWriter = null, abortController = null, options = {}) {
         const provider = this.getProviderForModel(model);
         const apiKeys = this.settingsManager.getSetting('api_keys') || {};
-        
+
         if (provider !== 'llamacpp' && !apiKeys[provider]?.trim()) {
             throw new Error(`${provider} API key is empty, switch to another model or enter a key in the settings.`);
         }
 
-        // Check if this is an image generation request
+        if (provider === 'llamacpp' && !options.localModelOverride) {
+            options.localModelOverride = await this.getLocalModelConfig();
+        }
+
         if (this.isImageModel(model)) {
             return this.callImageGenerationApi(model, messages, tokenCounter, streamWriter, abortController);
         }
 
         const streamResponse = streamWriter !== null;
         messages = this.processFiles(messages);
-        const [apiLink, requestOptions] = this.createApiRequest(model, messages, streamResponse, streamWriter);
+        const [apiLink, requestOptions] = this.createApiRequest(model, messages, streamResponse, streamWriter, options.localModelOverride);
         
         if (!apiLink || !requestOptions) {
             throw new Error("Invalid API request configuration.");
@@ -213,7 +217,7 @@ export class ApiManager {
         });
     }
 
-    createApiRequest(model, messages, streamResponse, streamWriter) {
+    createApiRequest(model, messages, streamResponse, streamWriter, localModelOverride = null) {
         const provider = this.getProviderForModel(model);
         const apiKeys = this.settingsManager.getSetting('api_keys');
         
@@ -229,7 +233,7 @@ export class ApiManager {
             case 'grok':
                 return this.createGrokRequest(model, messages, streamResponse, streamWriter, apiKeys.grok);
             case 'llamacpp':
-                return this.createLlamaCppRequest(model, messages, streamResponse, streamWriter);
+                return this.createLlamaCppRequest(model, messages, streamResponse, streamWriter, localModelOverride);
             default:
                 throw new Error(`Unsupported model provider: ${provider}`);
         }
@@ -601,15 +605,18 @@ export class ApiManager {
         }];
     }
 
-    createLlamaCppRequest(model, messages, streamResponse, streamWriter) {
+    createLlamaCppRequest(model, messages, streamResponse, streamWriter, override = null) {
+        const configuration = override || { raw: model, port: this.localServerPort || 8000 };
+        const { raw: modelId, port } = configuration;
+
         const body = {
-            model: "local",
+            model: modelId,
             messages: this.formatMessagesForGrok(messages),
             stream: streamResponse,
             temperature: this.settingsManager.getSetting('temperature')
         };
 
-        return ['http://localhost:8080/v1/chat/completions', {
+        return [`http://localhost:${port}/v1/chat/completions`, {
             method: 'POST',
             credentials: 'omit',
             headers: { 'Content-Type': 'application/json' },
@@ -911,56 +918,77 @@ export class ApiManager {
 
     handleLlamaCppStreamData(parsed, tokenCounter, streamWriter) {
         // Handle final chunk with usage info but empty choices
-        if (parsed.usage && parsed.choices.length === 0) {
+        if (parsed.usage && (!parsed.choices || parsed.choices.length === 0)) {
             tokenCounter.update(parsed.usage.prompt_tokens || 0, parsed.usage.completion_tokens || 0);
             if (parsed.timings) {
                 console.log(`Llama.cpp performance - Speed: ${parsed.timings.predicted_per_second?.toFixed(1)} tokens/sec`);
             }
             
             // Notify that we can now fetch the model name
-            if (streamWriter && streamWriter.onComplete) {
+            if (streamWriter?.onComplete) {
                 streamWriter.onComplete();
             }
             return;
         }
         
-        // Handle content chunks
-        if (parsed.choices?.[0]?.delta) {
-            const reasoningContent = parsed.choices[0].delta.reasoning_content;
-            const content = parsed.choices[0].delta.content;
-            
-            // Auto-detect reasoning model and enable thinking UI
-            if (reasoningContent && !streamWriter.isThinkingModel) {
-                console.log('Detected reasoning model - enabling thinking mode');
-                streamWriter.setThinkingModel();
-            }
-            
-            if (reasoningContent) {
-                streamWriter.processContent(reasoningContent, true);
-            }
-            if (content) {
-                streamWriter.processContent(content);
-            }
+        const firstChoice = parsed.choices?.[0];
+
+        if (!firstChoice) return;
+
+        const delta = firstChoice.delta;
+        const message = firstChoice.message;
+
+        const reasoningContent = delta?.reasoning_content || message?.reasoning_content;
+        const content = delta?.content || message?.content;
+
+        if (reasoningContent && !streamWriter.isThinkingModel) {
+            streamWriter.setThinkingModel();
+        }
+
+        if (reasoningContent) {
+            streamWriter.processContent(reasoningContent, true);
+        }
+        if (content) {
+            streamWriter.processContent(content);
         }
     }
 
-    async fetchLlamaCppModelName() {
-        try {
-            const response = await fetch('http://localhost:8080/v1/models');
-            if (response.ok) {
-                const data = await response.json();
-                const rawName = data.data?.[0]?.id || 'Local Model';
-                return this.parseModelName(rawName);
+    async getLocalModelConfig() {
+        const portsToTry = [this.localServerPort || 8000, this.localServerPort === 8080 ? 8000 : 8080];
+
+        const fetchModel = async (port) => {
+            const response = await fetch(`http://localhost:${port}/v1/models`);
+            if (!response.ok) throw new Error(`Port ${port} not available`);
+            const data = await response.json();
+            const firstModel = data.data?.[0] || {};
+            const raw = typeof firstModel === 'string' ? firstModel : (firstModel.id || firstModel.name || 'local-model');
+            return {
+                raw,
+                display: this.parseModelName(raw),
+                port
+            };
+        };
+
+        for (const port of portsToTry) {
+            try {
+                const info = await fetchModel(port);
+                this.localServerPort = info.port;
+                return info;
+            } catch (_) {
+                // Move to the next port
             }
-        } catch (error) {
-            console.log('Could not fetch llama.cpp model name');
         }
-        return 'Local Model';
+
+        return {
+            raw: 'local-model',
+            display: 'Local Model',
+            port: this.localServerPort || 8000
+        };
     }
 
     parseModelName(rawPath) {
         if (!rawPath || rawPath === 'local-model') return 'Local Model';
-        
+
         const filename = rawPath.split(/[/\\]/).pop();
         return filename
             .replace(/\.(gguf|ggml|bin|safetensors)$/i, '')
