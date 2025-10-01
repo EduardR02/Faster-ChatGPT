@@ -50,7 +50,7 @@ class ChatUI {
             files.forEach(file => wrapper.appendChild(this.createFileDisplay(file)));
         }
         if (parts.length === 0) wrapper.appendChild(this.createContentDiv(role, ''));
-        else parts.forEach(part => wrapper.appendChild(this.produceNextContentDiv(role, part.type === 'thought', part.content)));
+        else parts.forEach(part => wrapper.appendChild(this.produceNextContentDiv(role, part.type === 'thought', part.content, part.type)));
 
         return wrapper;
     }
@@ -276,7 +276,7 @@ class ChatUI {
     appendToExistingMessage(parts) {
         if (parts?.length === 0) return;
         const wrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
-        parts.forEach(part => wrapper.appendChild(this.produceNextContentDiv('user', part.type === 'thought', part.content)));
+        parts.forEach(part => wrapper.appendChild(this.produceNextContentDiv('user', part.type === 'thought', part.content, part.type)));
         this.pendingMediaDiv = null;
     }
 
@@ -301,7 +301,12 @@ class ChatUI {
         return button;
     }
 
-    produceNextContentDiv(role, isThought, content = '') {
+    produceNextContentDiv(role, isThought, content = '', type = 'text') {
+        // Handle image content differently
+        if (type === 'image') {
+            return this.createImageContent(content, role);
+        }
+        
         const div = this.createContentDiv(role, content);
         if (isThought) div.classList.add('thoughts');
         return div;

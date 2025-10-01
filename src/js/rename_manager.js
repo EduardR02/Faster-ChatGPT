@@ -53,7 +53,7 @@ class RenameManagerBase {
     prepareMessages(systemMsg, userMsg) {
         const systemMessage = {
             role: "system",
-            content: RENAME_PROMPT
+            parts: [{ type: 'text', content: RENAME_PROMPT }]
         };
 
         const extracted = this.extractSelectionAndUrl(systemMsg);
@@ -68,7 +68,7 @@ class RenameManagerBase {
 
             return [systemMessage, {
                 role: "user",
-                content: combinedContent,
+                parts: [{ type: 'text', content: combinedContent }],
                 ...(userMsg.files?.length > 0 && { files: userMsg.files })
             }];
         }
@@ -76,7 +76,7 @@ class RenameManagerBase {
         const combinedContent = `User prompt: ${userMsgContent}`;
         return [systemMessage, {
             role: "user",
-            content: combinedContent,
+            parts: [{ type: 'text', content: combinedContent }],
             ...(userMsg.files?.length > 0 && { files: userMsg.files })
         }];
     }

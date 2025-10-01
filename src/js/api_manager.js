@@ -15,12 +15,22 @@ export class ApiManager {
         return this.settingsManager.getSetting('current_model');
     }
 
+    isImageModel(model) {
+        // Check if model is an image generation model
+        return model.includes('image') || model.includes('imagen');
+    }
+
     async callApi(model, messages, tokenCounter, streamWriter = null, abortController = null) {
         const provider = this.getProviderForModel(model);
         const apiKeys = this.settingsManager.getSetting('api_keys') || {};
         
         if (provider !== 'llamacpp' && !apiKeys[provider]?.trim()) {
             throw new Error(`${provider} API key is empty, switch to another model or enter a key in the settings.`);
+        }
+
+        // Check if this is an image generation request
+        if (this.isImageModel(model)) {
+            return this.callImageGenerationApi(model, messages, tokenCounter, streamWriter, abortController);
         }
 
         const streamResponse = streamWriter !== null;
@@ -60,15 +70,147 @@ export class ApiManager {
         }
     }
 
+    async callImageGenerationApi(model, messages, tokenCounter, streamWriter = null, abortController = null) {
+        const provider = this.getProviderForModel(model);
+        const apiKeys = this.settingsManager.getSetting('api_keys') || {};
+        
+        // Route to the appropriate image generation API
+        // Pass the full messages array for multi-turn conversations
+        const [apiLink, requestOptions] = this.createImageApiRequest(provider, model, messages, apiKeys[provider]);
+        
+        if (!abortController) abortController = new AbortController();
+        requestOptions.signal = abortController.signal;
+
+        const timeoutDuration = 30000; // 30 seconds for image generation
+        const timeoutId = setTimeout(() => {
+            abortController.abort();
+        }, timeoutDuration);
+
+        try {
+            const response = await fetch(apiLink, requestOptions);
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Image generation failed with status ${response.status}: ${errorText}`);
+            }
+
+            const data = await response.json();
+            return this.handleImageApiResponse(provider, data, tokenCounter, streamWriter);
+        } catch (error) {
+            clearTimeout(timeoutId);
+            if (error.name === 'AbortError') {
+                throw new Error(`Image generation was aborted after ${timeoutDuration / 1000} seconds.`);
+            }
+            throw new Error(`Image generation error: ${error.message}`);
+        }
+    }
+
+    createImageApiRequest(provider, model, messages, apiKey) {
+        // Router for image generation APIs - each provider has different request formats
+        // Add new providers here following the same pattern
+        switch (provider) {
+            case 'gemini':
+                return this.createGeminiImageRequest(model, messages, apiKey);
+            // Future image providers can be added here:
+            // case 'openai':
+            //     return this.createOpenAIImageRequest(model, messages, apiKey);  // DALL-E 3 format
+            // case 'anthropic':
+            //     return this.createAnthropicImageRequest(model, messages, apiKey);
+            default:
+                throw new Error(`Image generation not supported for provider: ${provider}`);
+        }
+    }
+
+    handleImageApiResponse(provider, data, tokenCounter, streamWriter) {
+        switch (provider) {
+            case 'gemini':
+                return this.handleGeminiImageResponse(data, tokenCounter, streamWriter);
+            // Future image providers can be added here:
+            // case 'openai':
+            //     return this.handleOpenAIImageResponse(data, tokenCounter, streamWriter);
+            // case 'anthropic':
+            //     return this.handleAnthropicImageResponse(data, tokenCounter, streamWriter);
+            default:
+                throw new Error(`Image generation not supported for provider: ${provider}`);
+        }
+    }
+
+    createGeminiImageRequest(model, messages, apiKey) {
+        // Nano Banana uses standard Gemini API format - can output both text and images
+        const apiVersion = 'v1beta';
+        const apiLink = `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:generateContent?key=${apiKey}`;
+        
+        // Use the same message formatting as regular Gemini (already handles images)
+        const formattedMessages = this.formatMessagesForGemini(messages);
+        
+        const requestOptions = {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                contents: formattedMessages.slice(1),  // Skip system message
+                systemInstruction: formattedMessages[0],  // System prompt
+                safetySettings: this.getGeminiSafetySettings(),
+                generationConfig: {
+                    temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.gemini),
+                    maxOutputTokens: Math.min(this.settingsManager.getSetting('max_tokens'), this.getGeminiMaxTokens(model))
+                }
+            })
+        };
+        
+        return [apiLink, requestOptions];
+    }
+
+    handleGeminiImageResponse(data, tokenCounter, streamWriter) {
+        // Nano Banana can output both text and images - handle all parts
+        const candidate = data.candidates?.[0];
+        if (!candidate) {
+            throw new Error("No content was generated");
+        }
+
+        // Update token counter if usage info is available
+        if (data.usageMetadata) {
+            tokenCounter.update(
+                data.usageMetadata.promptTokenCount || 0,
+                data.usageMetadata.candidatesTokenCount || 0
+            );
+        }
+
+        // Process all parts (text and/or images)
+        const parts = candidate.content?.parts || [];
+        const messageParts = [];
+
+        for (const part of parts) {
+            if (part.text) {
+                messageParts.push({ type: 'text', content: part.text });
+            } else if (part.inlineData?.data) {
+                const mimeType = part.inlineData.mimeType || 'image/png';
+                const imageDataUri = `data:${mimeType};base64,${part.inlineData.data}`;
+                messageParts.push({ type: 'image', content: imageDataUri });
+            }
+        }
+
+        if (messageParts.length === 0) {
+            throw new Error("No content in response");
+        }
+
+        return this.returnMessage(messageParts);
+    }
+
     processFiles(messages) {
-        return messages.map(({ files, ...rest }) => ({
-            ...rest,
-            content: files?.length > 0
-                ? `${rest.content}\n\nfiles:\n${files.map(f => 
+        return messages.map(({ files, ...rest }) => {
+            if (!files?.length) return rest;
+            
+            // Append files to the last text part
+            const parts = [...rest.parts];
+            const lastTextPart = parts.findLast(p => p.type === 'text' || p.type === 'thought');
+            if (lastTextPart) {
+                lastTextPart.content += `\n\nfiles:\n${files.map(f => 
                     `${f.name}:\n<|file_start|>${f.content}<|file_end|>`
-                ).join("\n")}`
-                : rest.content
-        }));
+                ).join("\n")}`;
+            }
+            return { ...rest, parts };
+        });
     }
 
     createApiRequest(model, messages, streamResponse, streamWriter) {
@@ -101,38 +243,50 @@ export class ApiManager {
         return "llamacpp";  // fallback to llamacpp if unknown model, this is intended as local model names are not stored in the settings
     }
 
+    getGeminiMaxTokens(model) {
+        // Determine max tokens based on specific Gemini model version
+        if (model.includes('2.5')) {
+            if (model.includes('image')) {
+                return MaxTokens.gemini_2_5_image;  // 32,768 for Nano Banana
+            }
+            return MaxTokens.gemini_2_5;  // 65,536 for Gemini 2.5 Flash
+        }
+        return MaxTokens.gemini;  // 8,192 for older Gemini models (2.0 and below)
+    }
+
     formatMessagesForOpenAI(messages, addImages) {
         // Note: System message is handled separately as 'instructions' in the /v1/responses API
         return messages.filter(msg => msg.role !== RoleEnum.system).map(msg => {
             const content = [];
-            if (msg.content) {
-                // Use 'output_text' for assistant messages, 'input_text' otherwise (for user messages)
+            
+            const textContent = this.extractTextContent(msg);
+            if (textContent) {
                 const textType = msg.role === RoleEnum.assistant ? 'output_text' : 'input_text';
-                content.push({ type: textType, text: msg.content });
+                content.push({ type: textType, text: textContent });
             }
-            if (addImages && msg.role === RoleEnum.user && msg.images) {
+            if (addImages && msg.images) {
                 msg.images.forEach(img => {
-                    // Assuming base64 data URI format "data:[<mediatype>];base64,<data>"
                     content.push({ type: 'input_image', image_url: img });
                 });
             }
-            // Map internal roles to OpenAI /v1/responses roles if needed, though 'user' and 'assistant' match
             return { role: msg.role, content: content };
         });
     }
 
     formatMessagesForAnthropic(messages) {
         const new_messages = messages.map(msg => {
-            if (msg.role === RoleEnum.user && msg.images) {
+            const textContent = this.extractTextContent(msg);
+            
+            if (msg.images) {
                 const imgDict = msg.images.map(img => ({
                     type: 'image',
                     source: { type: 'base64', media_type: this.getBase64MediaType(img), data: this.simpleBase64Splitter(img) }
                 }));
-                return { role: msg.role, content: [{ type: 'text', text: msg.content }, ...imgDict] };
+                return { role: msg.role, content: [{ type: 'text', text: textContent }, ...imgDict] };
             }
             return {
                 role: msg.role,
-                content: [{ type: 'text', text: msg.content }]
+                content: [{ type: 'text', text: textContent }]
             };
         });
 
@@ -142,22 +296,53 @@ export class ApiManager {
         return new_messages;
     }
 
+    // Helper to extract text content from parts array
+    extractTextContent(msg) {
+        return msg.parts
+            .filter(part => part.type === 'text' || part.type === 'thought')
+            .map(part => part.content)
+            .join('\n');
+    }
+
     formatMessagesForGemini(messages) {
         return messages.map(msg => {
             const parts = [];
-            if (msg.content) {
-                parts.push({ text: msg.content });
-            }
-            if (msg.role === RoleEnum.user && msg.images) {
+            
+            // Process all parts (text, thought, image)
+            msg.parts.forEach(part => {
+                if (part.type === 'text' || part.type === 'thought') {
+                    if (part.content) parts.push({ text: part.content });
+                } else if (part.type === 'image') {
+                    if (part.content) {
+                        parts.push({
+                            inline_data: {
+                                mime_type: this.getBase64MediaType(part.content),
+                                data: this.simpleBase64Splitter(part.content)
+                            }
+                        });
+                    }
+                }
+            });
+            
+            // User-uploaded images (separate field)
+            if (msg.images) {
                 msg.images.forEach(img => {
-                    parts.push({
-                        inline_data: {
-                            mime_type: this.getBase64MediaType(img),
-                            data: this.simpleBase64Splitter(img)
-                        }
-                    });
+                    if (img) {
+                        parts.push({
+                            inline_data: {
+                                mime_type: this.getBase64MediaType(img),
+                                data: this.simpleBase64Splitter(img)
+                            }
+                        });
+                    }
                 });
             }
+            
+            // Safety check: ensure at least one part exists
+            if (parts.length === 0) {
+                parts.push({ text: '' });
+            }
+            
             return {
                 role: msg.role === RoleEnum.assistant ? "model" : "user",
                 parts: parts
@@ -166,16 +351,17 @@ export class ApiManager {
     }
 
     formatMessagesForDeepseek(messages) {
-        // because no images supported yet
-        return messages.map(msg => ({ role: msg.role, content: msg.content }));
+        return messages.map(msg => ({ role: msg.role, content: this.extractTextContent(msg) }));
     }
 
     formatMessagesForGrok(messages) {
         // Grok uses standard OpenAI format and supports vision - always include images
         return messages.map(msg => {
-            if (msg.role === RoleEnum.user && msg.images) {
+            const textContent = this.extractTextContent(msg);
+            
+            if (msg.images) {
                 const content = [];
-                content.push({ type: 'text', text: msg.content });
+                content.push({ type: 'text', text: textContent });
                 msg.images.forEach(img => {
                     content.push({
                         type: 'image_url',
@@ -184,7 +370,7 @@ export class ApiManager {
                 });
                 return { role: msg.role, content: content };
             }
-            return { role: msg.role, content: msg.content };
+            return { role: msg.role, content: textContent };
         });
     }
 
@@ -232,7 +418,7 @@ export class ApiManager {
         const isReasoner = /o\d/.test(model) || model.includes('gpt-5');    // looks like gpt-5 and o3 require "verification" for now, (gpt-5 for streaming), which is just fking 
         const noImage = model.includes('o1-mini') || model.includes('o1-preview') || model.includes('o3-mini');
 
-        const systemMessage = messages.find(msg => msg.role === RoleEnum.system)?.content;
+        const systemMessage = messages.find(msg => msg.role === RoleEnum.system)?.parts?.[0]?.content;
         const formattedInput = this.formatMessagesForOpenAI(messages, !noImage);
 
         if (isReasoner && streamWriter) streamWriter.addThinkingCounter();
@@ -352,7 +538,7 @@ export class ApiManager {
         
         const maxTokens = Math.min(
             this.settingsManager.getSetting('max_tokens'),
-            isThinking ? MaxTokens.gemini_thinking : MaxTokens.gemini
+            isThinking ? MaxTokens.gemini_thinking : this.getGeminiMaxTokens(model)
         );
         
         messages = this.formatMessagesForGemini(messages);
@@ -553,7 +739,13 @@ export class ApiManager {
             if (thought) message.push({ type: 'thought', content: thought });
         });
         parts.forEach(part => {
-            if (part) message.push({ type: 'text', content: part });
+            // Handle both string parts and object parts (for images)
+            if (typeof part === 'string') {
+                if (part) message.push({ type: 'text', content: part });
+            } else if (part && typeof part === 'object') {
+                // Part is already an object with type and content
+                message.push(part);
+            }
         });
         return message;
     }
@@ -791,7 +983,9 @@ const MaxTokens = {
     openai_thinking: 100000,
     anthropic: 32000,   // sonnet-4 is 64k, opus-4 is 32k, older models like original sonnet 3.5 are 8k or less
     anthropic_thinking: 64000,
-    gemini: 8192,
+    gemini: 8192,       // Old Gemini models (2.0 and below)
+    gemini_2_5: 65536,  // New Gemini 2.5 Flash (normal)
+    gemini_2_5_image: 32768,  // Gemini 2.5 Flash Image (Nano Banana)
     gemini_thinking: 65536,
     deepseek: 8000,
     anthropic_old: 8192,

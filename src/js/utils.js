@@ -239,6 +239,7 @@ export function set_defaults() {
         gemini: {
             "gemini-exp-1206": "Gemini Exp 1206",
             "gemini-2.0-flash-exp": "Gemini Flash 2.0",
+            "gemini-2.5-flash-image-preview": "Nano Banana (Image)"
         },
         deepseek: {
             "deepseek-chat": "DeepSeek V3",
@@ -495,9 +496,23 @@ export class StreamWriterSimple {
     }
 
     finalizePart() {
-        this.parts.at(-1).content = this.parts.at(-1).content.join('');
-        this.contentDiv.innerHTML = formatContent(this.parts.at(-1).content);
-        highlightCodeBlocks(this.contentDiv);
+        const lastPart = this.parts.at(-1);
+        lastPart.content = lastPart.content.join('');
+        
+        // Handle image content differently - create an img element instead of treating as text
+        if (lastPart.type === 'image') {
+            // Change the div class from message-content to image-content for proper styling
+            this.contentDiv.classList.remove('message-content');
+            this.contentDiv.classList.add('image-content');
+            
+            const img = document.createElement('img');
+            img.src = lastPart.content;
+            this.contentDiv.innerHTML = '';
+            this.contentDiv.appendChild(img);
+        } else {
+            this.contentDiv.innerHTML = formatContent(lastPart.content);
+            highlightCodeBlocks(this.contentDiv);
+        }
     }
 
     addFooter(footer) {

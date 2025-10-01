@@ -266,18 +266,25 @@ export class SidepanelChatCore extends ChatCore {
     }
 
     getMessagesForAPI(model = null) {
-        // for now like this, will have to change if multiple thoughts or messages possible in a single response
+        // Normalize all messages to a consistent structure: { role, parts: [{type, content}], images?: [] }
         const messages = this.currentChat.messages.map(msg => {
             if (msg.role === 'user' || msg.role === 'system') {
-                const { contents, ...message } = msg;
-                return { ...message, content: contents.at(-1).at(-1).content };
+                const { contents, images, ...rest } = msg;
+                const normalized = { 
+                    ...rest, 
+                    parts: [{ type: 'text', content: contents.at(-1).at(-1).content }]
+                };
+                if (images) normalized.images = images;
+                return normalized;
             }
             if (msg.responses) {
                 if (!msg.continued_with || msg.continued_with === "none") return undefined;
-                return { role: msg.role, content: msg.responses[msg.continued_with].messages.at(-1).at(-1).content};
+                return { role: msg.role, parts: msg.responses[msg.continued_with].messages.at(-1) };
             }
-            return { role: msg.role, content: msg.contents.at(-1).at(-1).content };
+            // Assistant messages
+            return { role: msg.role, parts: msg.contents.at(-1) };
         }).filter(msg => msg !== undefined);
+        
         if (messages.at(-1).role === 'assistant') {
             messages.pop();
         }
@@ -388,7 +395,7 @@ class ThinkingChat {
         }
         return {
             role: 'assistant',
-            content: messages.at(-1).at(-1).content
+            parts: messages.at(-1)
         };
     }
 
@@ -403,14 +410,14 @@ class ThinkingChat {
         } else if (this.stateManager.isSolving(model)) {
             userPrompt = "Using the detailed thoughts given to you, please solve now.";
         }
-        if (userPrompt) messages.push({ role: 'user', content: userPrompt });
+        if (userPrompt) messages.push({ role: 'user', parts: [{ type: 'text', content: userPrompt }] });
         return this.togglePrompt(messages, model);
     }
 
     togglePrompt(messages, model) {
         if (messages.length === 0) return messages;
 
-        let prompt = messages[0].content;
+        let prompt = messages[0].parts?.[0]?.content || "";
         if (messages[0].role !== 'system') prompt = "";
 
         // Add appropriate prompt based on state
@@ -421,9 +428,9 @@ class ThinkingChat {
         }
 
         if (messages[0].role === 'system') {
-            messages[0].content = prompt;
+            messages[0].parts[0].content = prompt;
         } else {
-            messages.unshift({ role: 'system', content: prompt });
+            messages.unshift({ role: 'system', parts: [{ type: 'text', content: prompt }] });
         }
         return messages;
     }

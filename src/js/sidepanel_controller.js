@@ -52,7 +52,9 @@ export class SidepanelController {
         // Start fetching model name immediately for llamacpp (in parallel with API call)
         const actualModelNamePromise = this.startLlamaModelNameFetch(api_provider, model);
 
-        const streamResponse = this.stateManager.getSetting('stream_response');
+        // Disable streaming for image models (images are generated all at once)
+        const isImageModel = this.apiManager.isImageModel(model);
+        const streamResponse = !isImageModel && this.stateManager.getSetting('stream_response');
         let success = false;
         let responseResult;
         
@@ -66,9 +68,18 @@ export class SidepanelController {
             );
 
             if (!streamResponse) {
-                responseResult.forEach(msg =>
-                    streamWriter.processContent(msg.content, msg.type === 'thought')
-                );
+                responseResult.forEach(msg => {
+                    if (msg.type === 'image') {
+                        // For images, create a new part (don't overwrite current text/thought)
+                        if (streamWriter.parts.at(-1).content.length > 0) {
+                            streamWriter.nextPart();
+                        }
+                        streamWriter.parts.at(-1).content = [msg.content];
+                        streamWriter.parts.at(-1).type = 'image';
+                    } else {
+                        streamWriter.processContent(msg.content, msg.type === 'thought');
+                    }
+                });
             }
             success = true;
         } catch (error) {

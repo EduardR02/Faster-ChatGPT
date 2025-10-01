@@ -714,8 +714,8 @@ export class ChatStorage {
         messageId: autoincrement,
         timestamp: number,
         role: 'user' | 'assistant' | 'system',
-        contents: [ { type: string, content: string, model?: string }[] ]  // Latest is current, previous are regenerations
-        images?: string[] // Optional, user only
+        contents: [ { type: 'text'|'thought'|'image', content: string, model?: string }[] ]  // Latest is current, previous are regenerations. 'image' type for AI-generated images (content is data URI)
+        images?: string[] // Optional, user-uploaded images only (stored as data URIs)
         files?: {filename: string, content: string}[]   // Optional, user only (array of objects in case duplicate filenames)
     },
     
