@@ -11,26 +11,68 @@
 <body>
   <div class="history-container">
     <div class="chat-history-sidebar">
-      <div class="history-title">Chat History</div>
-      <div class="history-list"><!-- Chat history items will be dynamically added here --></div>
-      <div class="history-auto-rename-wrapper">
-        <button class="unset-button history-auto-rename" id="auto-rename">auto-rename unmodified</button>
-        <div class="import-export-wrapper">
-          <button class="unset-button history-auto-rename" id="export">export</button>
-          <button class="unset-button history-auto-rename" id="import">import</button>
+      <div class="history-sidebar-header">
+        <div class="history-tabs">
+          <button class="history-tab active" data-tab="chats">Chats</button>
+          <button class="history-tab" data-tab="media">Media</button>
+        </div>
+        <div class="history-sidebar-search">
+          <div class="search-wrapper">
+            <input type="text" class="search-input" id="history-search" placeholder="Search chats...">
+            <button class="search-clear" id="search-clear" style="display: none;">×</button>
+          </div>
+        </div>
+      </div>
+      <div class="history-tab-content" id="chats-tab">
+        <div class="history-list"><!-- Chat history items will be dynamically added here --></div>
+        <div class="history-auto-rename-wrapper">
+          <button class="unset-button history-auto-rename" id="auto-rename">auto-rename unmodified</button>
+          <div class="import-export-wrapper">
+            <button class="unset-button history-auto-rename" id="export">export</button>
+            <button class="unset-button history-auto-rename" id="import">import</button>
+          </div>
+        </div>
+      </div>
+      <div class="history-tab-content media-sidebar" id="media-tab" style="display: none;">
+        <div class="media-sidebar-message">
+          Click an image to open the related chat.
         </div>
       </div>
     </div>
     <div class="sidebar-separator"></div>
     <div class="history-chat-container">
-      <div class="title-wrapper" id="title-wrapper">
-        <div class="conversation-title" id="history-chat-header">conversation</div>
+      <div class="history-chat-view" id="chat-view">
+        <div class="title-wrapper" id="title-wrapper">
+          <div class="conversation-title" id="history-chat-header">conversation</div>
+        </div>
+        <div class="conversation-wrapper" id="conversation-wrapper">
+          <!-- Actual chat will be dynamically added here-->
+        </div>
+        <div class="title-wrapper">
+          <div class="conversation-title" id="history-chat-footer"></div>
+        </div>
       </div>
-      <div class="conversation-wrapper" id="conversation-wrapper">
-        <!-- Actual chat will be dynamically added here-->
-      </div>
-      <div class="title-wrapper">
-        <div class="conversation-title" id="history-chat-footer"></div>
+      <div class="media-view" id="media-view" style="display: none;">
+        <div class="media-controls">
+          <div class="media-filter-buttons">
+            <button class="media-filter-btn pill-button is-active" data-filter="all">All</button>
+            <button class="media-filter-btn pill-button" data-filter="user">User</button>
+            <button class="media-filter-btn pill-button" data-filter="assistant">AI</button>
+          </div>
+          <button class="media-sort-toggle pill-button" id="media-sort-toggle" data-order="desc">Newest first</button>
+        </div>
+        <div class="media-panel" id="media-panel" data-state="loading">
+          <div class="media-status">
+            <div class="media-status-icon" aria-hidden="true"></div>
+            <div class="media-status-copy">
+              <div class="media-status-title">Loading media…</div>
+              <div class="media-status-subtitle"></div>
+            </div>
+          </div>
+          <div class="media-grid" id="media-grid">
+            <!-- Media items will be dynamically added here -->
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -45,6 +87,7 @@
     <div class="popup-item" data-action="delete">Delete</div>
   </div>
 
+  <script src="/vendor/minisearch/minisearch.min.js"></script>
   <script type="module" src="../js/history.js"></script>
   <script src="/vendor/highlightjs/highlight.min.js"></script>
 </body>

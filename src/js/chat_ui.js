@@ -216,9 +216,35 @@ class ChatUI {
         const content = createElementWithClass('div', `image-content ${role}-content`);
 
         const img = document.createElement('img');
-        img.src = imageBase64;
-        content.appendChild(img);
-    
+
+        // Validate that we have a proper image data URI or URL
+        const isValidImage = imageBase64 && (
+            imageBase64.startsWith('data:image/') ||
+            imageBase64.startsWith('http://') ||
+            imageBase64.startsWith('https://')
+        );
+
+        if (!isValidImage) {
+            // Show error message instead of broken image
+            const errorDiv = createElementWithClass('div', 'image-error');
+            errorDiv.textContent = 'Invalid image data';
+            errorDiv.style.cssText = 'padding: 1em; color: #e06c75; background: #282c34; border: 1px solid #e06c75; border-radius: 4px; text-align: center;';
+            content.appendChild(errorDiv);
+        } else {
+            img.src = imageBase64;
+
+            // Handle image load errors
+            img.onerror = () => {
+                img.style.display = 'none';
+                const errorDiv = createElementWithClass('div', 'image-error');
+                errorDiv.textContent = 'Failed to load image';
+                errorDiv.style.cssText = 'padding: 1em; color: #e06c75; background: #282c34; border: 1px solid #e06c75; border-radius: 4px; text-align: center;';
+                content.appendChild(errorDiv);
+            };
+
+            content.appendChild(img);
+        }
+
         if (onRemove) {
             const removeButton = this.createRemoveFileButton(() => {
                 content.remove();

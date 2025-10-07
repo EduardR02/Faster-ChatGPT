@@ -1,7 +1,7 @@
 export class ChatStorage {
     constructor() {
         this.dbName = 'llm-chats';
-        this.dbVersion = 3;
+        this.dbVersion = 4;  // Combined media + search index migration
     }
 
     async getDB() {
@@ -9,43 +9,49 @@ export class ChatStorage {
             const request = indexedDB.open(this.dbName, this.dbVersion);
             request.onerror = () => reject(request.error);
             request.onsuccess = () => resolve(request.result);
-            request.onupgradeneeded = (event) => this.onUpgrade(event);
+            request.onupgradeneeded = (event) => {
+                const db = event.target.result;
+                const oldVersion = event.oldVersion || 0;
+
+                // Version 1: Initial setup (chatMeta, messages)
+                if (oldVersion < 1) {
+                    if (!db.objectStoreNames.contains('chatMeta')) {
+                        const chatMetaStore = db.createObjectStore('chatMeta', {
+                            keyPath: 'chatId',
+                            autoIncrement: true,
+                        });
+                        chatMetaStore.createIndex('timestamp', 'timestamp');
+                    }
+                    if (!db.objectStoreNames.contains('messages')) {
+                        const messageStore = db.createObjectStore('messages', {
+                            keyPath: ['chatId', 'messageId']
+                        });
+                        messageStore.createIndex('chatId', 'chatId');
+                    }
+                }
+
+                // Version 2: Timestamp index (already in v1 above)
+
+                // Version 3: Message structure migration
+                if (oldVersion < 3) {
+                    this.migrateToVersion3(event);
+                }
+
+                // Version 4: Media + search index
+                if (oldVersion < 4) {
+                    if (!db.objectStoreNames.contains('mediaIndex')) {
+                        const mediaStore = db.createObjectStore('mediaIndex', { keyPath: 'id', autoIncrement: true });
+                        mediaStore.createIndex('chatId', 'chatId');
+                        mediaStore.createIndex('timestamp', 'timestamp');
+                    }
+
+                    if (!db.objectStoreNames.contains('searchIndex')) {
+                        const searchStore = db.createObjectStore('searchIndex', { keyPath: 'id' });
+                        searchStore.createIndex('id', 'id', { unique: true });
+                    }
+                }
+            };
         });
-    }
-
-    onUpgrade(event) {
-        const db = event.target.result;
-        const oldVersion = event.oldVersion;
-
-        // Version 0 → 1 (initial setup)
-        if (oldVersion < 1) {
-            if (!db.objectStoreNames.contains('messages')) {
-                const messageStore = db.createObjectStore('messages', {
-                    keyPath: ['chatId', 'messageId']
-                });
-                messageStore.createIndex('chatId', 'chatId');
-            }
-            
-            if (!db.objectStoreNames.contains('chatMeta')) {
-                db.createObjectStore('chatMeta', {
-                    keyPath: 'chatId',
-                    autoIncrement: true
-                });
-            }
-        }
-
-        // Version 1 → 2 (timestamp index)
-        if (oldVersion < 2) {
-            const metaStore = event.currentTarget.transaction.objectStore('chatMeta');
-            if (!metaStore.indexNames.contains('timestamp')) {
-                metaStore.createIndex('timestamp', 'timestamp');
-            }
-        }
-
-        // Version 2 → 3 (message structure migration)
-        if (oldVersion < 3) {
-            this.migrateToVersion3(event);
-        }
     }
 
     // FIXED: Proper migration using upgrade transaction
@@ -192,9 +198,10 @@ export class ChatStorage {
 
     async createChatWithMessages(title, messages, bonus_options = {}) {
         const db = await this.getDB();
-        const tx = db.transaction(['chatMeta', 'messages'], 'readwrite');
+        const tx = db.transaction(['chatMeta', 'messages', 'mediaIndex'], 'readwrite');
         const metaStore = tx.objectStore('chatMeta');
         const messageStore = tx.objectStore('messages');
+        const mediaStore = tx.objectStore('mediaIndex');
 
         return new Promise((resolve, reject) => {
             const chatMeta = {
@@ -218,6 +225,11 @@ export class ChatStorage {
                 );
 
                 Promise.all(messagePromises)
+                    .then(() => {
+                        // Track images in media index
+                        const mediaPromises = this.indexImagesFromMessages(chatId, messages, mediaStore);
+                        return Promise.all(mediaPromises);
+                    })
                     .then(() => {
                         // Send message after successful creation
                         chrome.runtime.sendMessage({
@@ -243,11 +255,12 @@ export class ChatStorage {
     async addMessages(chatId, messages, startMessageIdIncrementAt) {
         const timestamp = Date.now();
         const db = await this.getDB();
-        
+
         const results = await new Promise((resolve, reject) => {
-            const tx = db.transaction(['messages'], 'readwrite');
+            const tx = db.transaction(['messages', 'mediaIndex'], 'readwrite');
             const store = tx.objectStore('messages');
-    
+            const mediaStore = tx.objectStore('mediaIndex');
+
             Promise.all(messages.map((message, index) =>
                 new Promise((resolve, reject) => {
                     const request = store.add({
@@ -259,47 +272,62 @@ export class ChatStorage {
                     request.onsuccess = () => resolve(request.result);
                     request.onerror = () => reject(request.error);
                 })
-            )).then(resolve).catch(reject);
+            )).then(() => {
+                // Track images in media index
+                const mediaPromises = this.indexImagesFromMessages(chatId, messages, mediaStore, startMessageIdIncrementAt);
+                return Promise.all(mediaPromises);
+            }).then(() => {
+                resolve();
+            }).catch(reject);
         });
-    
+
         await this.updateChatOption(chatId, { timestamp });
-    
+
         chrome.runtime.sendMessage({
             type: 'appended_messages_to_saved_chat',
             chatId: chatId,
             addedCount: messages.length,
             startIndex: startMessageIdIncrementAt
         });
-    
+
         return results;
     }
 
     async updateMessage(chatId, messageId, message) {
         const timestamp = Date.now();
         const db = await this.getDB();
-    
+
         const result = await new Promise((resolve, reject) => {
-            const tx = db.transaction(['messages'], 'readwrite');
+            const tx = db.transaction(['messages', 'mediaIndex'], 'readwrite');
             const store = tx.objectStore('messages');
-    
+            const mediaStore = tx.objectStore('mediaIndex');
+
             const request = store.put({
                 chatId,
                 messageId: messageId,
                 timestamp,
                 ...message
             });
-            request.onsuccess = () => resolve(request.result);
+            request.onsuccess = () => {
+                // Track images in media index
+                const mediaPromises = this.indexImagesFromMessages(chatId, [message], mediaStore, messageId);
+                Promise.all(mediaPromises).then(() => {
+                    resolve(request.result);
+                }).catch(() => {
+                    resolve(request.result); // Don't fail on media index errors
+                });
+            };
             request.onerror = () => reject(request.error);
         });
-    
+
         await this.updateChatOption(chatId, { timestamp });
-    
+
         chrome.runtime.sendMessage({
             type: 'message_updated',
             chatId: chatId,
             messageId: messageId
         });
-    
+
         return result;
     }
 
@@ -476,15 +504,30 @@ export class ChatStorage {
 
     async deleteChat(chatId) {
         const db = await this.getDB();
-        const tx = db.transaction(['messages', 'chatMeta'], 'readwrite');
+        const tx = db.transaction(['messages', 'chatMeta', 'mediaIndex'], 'readwrite');
 
         const messageStore = tx.objectStore('messages');
         const metaStore = tx.objectStore('chatMeta');
+        const mediaStore = tx.objectStore('mediaIndex');
 
-        const index = messageStore.index('chatId');
+        const messageIndex = messageStore.index('chatId');
+        const mediaIndex = mediaStore.index('chatId');
+
         await Promise.all([
             new Promise((resolve) => {
-                const request = index.openCursor(IDBKeyRange.only(chatId));
+                const request = messageIndex.openCursor(IDBKeyRange.only(chatId));
+                request.onsuccess = (event) => {
+                    const cursor = event.target.result;
+                    if (cursor) {
+                        cursor.delete();
+                        cursor.continue();
+                    } else {
+                        resolve();
+                    }
+                };
+            }),
+            new Promise((resolve) => {
+                const request = mediaIndex.openCursor(IDBKeyRange.only(chatId));
                 request.onsuccess = (event) => {
                     const cursor = event.target.result;
                     if (cursor) {
@@ -499,31 +542,56 @@ export class ChatStorage {
         ]);
     }
 
+    // FIXED: getChatCount uses 'chatMeta'
+    async getChatCount() {
+        const db = await this.getDB();
+        const tx = db.transaction('chatMeta', 'readonly');
+        const metaStore = tx.objectStore('chatMeta');
+        const countReq = metaStore.count();
+        const count = await new Promise((resolve, reject) => {
+            countReq.onsuccess = () => {
+                const count = countReq.result;
+                resolve(count);
+            };
+            countReq.onerror = reject;
+        });
+        return count;
+    }
+
+    // FIXED: getChatMetadata uses 'chatMeta'
     async getChatMetadata(limit = 20, offset = 0) {
         const db = await this.getDB();
         const tx = db.transaction('chatMeta', 'readonly');
-        const store = tx.objectStore('chatMeta');
-        const index = store.index('timestamp');
-    
-        return new Promise((resolve) => {
-            const metadata = [];
-            let skipped = 0;
-            
-            const request = index.openCursor(null, 'prev');  // 'prev' gives us descending order
-    
+        const metaStore = tx.objectStore('chatMeta');
+        const index = metaStore.index('timestamp');
+        const request = index.openCursor(null, 'prev'); // Descending for newest first
+
+        const metadata = [];
+        let skipped = 0;
+        let fetched = 0;
+
+        return new Promise((resolve, reject) => {
+            request.onerror = reject;
             request.onsuccess = (event) => {
                 const cursor = event.target.result;
-                if (!cursor || metadata.length >= limit) {
-                    resolve(metadata);
-                    return;
-                }
-    
-                if (skipped < offset) {
-                    skipped++;
+                if (cursor && (limit === Infinity || fetched < limit)) {
+                    if (offset > 0 && skipped < offset) {
+                        skipped++;
+                        cursor.continue();
+                        return;
+                    }
+                    const chatMeta = cursor.value;
+                    metadata.push({
+                        chatId: chatMeta.chatId,
+                        title: chatMeta.title,
+                        timestamp: chatMeta.timestamp,
+                        continued_from_chat_id: chatMeta.continued_from_chat_id
+                    });
+                    fetched++;
+                    cursor.continue();
                 } else {
-                    metadata.push(cursor.value);
+                    resolve(metadata); // Already newest-first
                 }
-                cursor.continue();
             };
         });
     }
@@ -601,51 +669,96 @@ export class ChatStorage {
             
             // Fingerprint check outside transaction to avoid version contention
             const existingChats = await this.getChatMetadata(Infinity);
-            const existingFingerprints = new Set(
-                existingChats.map(c => `${c.title}::${c.timestamp}`)
+            const existingIdsByFingerprint = new Map(
+                existingChats.map(c => [`${c.title}::${c.timestamp}`, c.chatId])
             );
-            const chatQueue = Object.values(archive.chats)
-                .filter(chat => !existingFingerprints.has(`${chat.title}::${chat.timestamp}`))
-                .map(chat => needsMigration ? this.migrateImportedChat(chat) : chat);
-    
+
+            const idRemap = new Map();
+            const chatQueue = [];
+
+            Object.values(archive.chats).forEach(rawChat => {
+                const chat = needsMigration ? this.migrateImportedChat(rawChat) : rawChat;
+                const fingerprint = `${chat.title}::${chat.timestamp}`;
+                const existingId = existingIdsByFingerprint.get(fingerprint);
+
+                if (existingId !== undefined) {
+                    if (chat.chatId !== undefined && chat.chatId !== null) {
+                        idRemap.set(chat.chatId, existingId);
+                    }
+                    return; // skip duplicates
+                }
+
+                chatQueue.push(chat);
+            });
+
             const tx = db.transaction(['chatMeta', 'messages'], 'readwrite');
             const metaStore = tx.objectStore('chatMeta');
             const messageStore = tx.objectStore('messages');
-    
+
             let importedCount = 0;
-            // Batch processing with controlled parallelism
+            const pendingLinkUpdates = [];
+
             while (chatQueue.length) {
                 const batch = chatQueue.splice(0, 20);
-                
+
                 await Promise.all(batch.map(async (chatData) => {
-                    // Atomic per-chat sequence
-                    const { messages, chatId, ...chatMeta } = chatData;
-                    
-                    const newChatId = await new Promise(resolve => {
-                        const req = metaStore.add(chatMeta);
-                        req.onsuccess = () => resolve(req.result);
-                        req.onerror = () => resolve(null);
+                    const { messages, chatId: originalId, continued_from_chat_id, ...chatMeta } = chatData;
+                    const metaRecord = {
+                        ...chatMeta,
+                        continued_from_chat_id,
+                    };
+
+                    const newChatId = await new Promise((resolve) => {
+                        const request = metaStore.add(metaRecord);
+                        request.onsuccess = () => resolve(request.result);
+                        request.onerror = () => resolve(null);
                     });
-    
+
                     if (!newChatId) return;
-    
-                    // Parallel message insertion WITHIN chat context
-                    await Promise.all(messages.map(msg => 
-                        new Promise((resolve, reject) => {
+
+                    if (originalId !== undefined && originalId !== null) {
+                        idRemap.set(originalId, newChatId);
+                    }
+                    idRemap.set(newChatId, newChatId);
+                    pendingLinkUpdates.push({ targetId: newChatId, originalParentId: continued_from_chat_id });
+
+                    await Promise.all(messages.map(msg =>
+                        new Promise((resolve) => {
                             messageStore.add({ ...msg, chatId: newChatId }).onsuccess = resolve;
                         })
                     ));
-    
+
                     importedCount++;
                 }));
             }
-    
-            // Transaction finalization
+
+            await Promise.all(pendingLinkUpdates.map(({ targetId, originalParentId }) => {
+                if (originalParentId === undefined || originalParentId === null) return Promise.resolve();
+                const resolvedParentId = idRemap.get(originalParentId);
+                if (resolvedParentId === undefined || resolvedParentId === originalParentId) return Promise.resolve();
+
+                return new Promise((resolve) => {
+                    const getReq = metaStore.get(targetId);
+                    getReq.onsuccess = () => {
+                        const record = getReq.result;
+                        if (!record) {
+                            resolve();
+                            return;
+                        }
+                        record.continued_from_chat_id = resolvedParentId;
+                        const putReq = metaStore.put(record);
+                        putReq.onsuccess = () => resolve();
+                        putReq.onerror = () => resolve();
+                    };
+                    getReq.onerror = () => resolve();
+                });
+            }));
+
             await new Promise((resolve, reject) => {
                 tx.oncomplete = resolve;
                 tx.onerror = () => reject(tx.error);
             });
-    
+
             return { success: true, count: importedCount };
         } catch (error) {
             return { success: false, error: error.message };
@@ -698,6 +811,242 @@ export class ChatStorage {
                 },
             }
         };
+    }
+
+    // Helper to index images from messages into mediaIndex store
+    // Returns array of promises for all add operations
+    indexImagesFromMessages(chatId, messages, mediaStore, messageIdOffset = 0) {
+        const promises = [];
+        const fallbackTimestamp = Date.now();
+
+        messages.forEach((message, index) => {
+            const messageId = messageIdOffset + index;
+            const baseTimestamp = typeof message?.timestamp === 'number' ? message.timestamp : (fallbackTimestamp + index);
+
+            if (message.images && message.images.length > 0) {
+                message.images.forEach((imageData, imgIndex) => {
+                    promises.push(new Promise((resolve, reject) => {
+                        const req = mediaStore.add({
+                            chatId,
+                            messageId,
+                            imageIndex: imgIndex,
+                            source: 'user',
+                            timestamp: baseTimestamp
+                        });
+                        req.onsuccess = () => resolve();
+                        req.onerror = () => resolve(); // Don't fail the whole transaction on media index errors
+                    }));
+                });
+            }
+
+            if (message.role === 'assistant' && message.contents && Array.isArray(message.contents)) {
+                message.contents.forEach((contentGroup, contentIndex) => {
+                    if (!contentGroup || !Array.isArray(contentGroup)) return;
+                    contentGroup.forEach((part, partIndex) => {
+                        if (!part || part.type !== 'image') return;
+                        promises.push(new Promise((resolve, reject) => {
+                            const req = mediaStore.add({
+                                chatId,
+                                messageId,
+                                contentIndex,
+                                partIndex,
+                                source: 'assistant',
+                                timestamp: baseTimestamp
+                            });
+                            req.onsuccess = () => resolve();
+                            req.onerror = () => resolve();
+                        }));
+                    });
+                });
+            }
+
+            if (message.responses) {
+                ['model_a', 'model_b'].forEach(modelKey => {
+                    const modelResponse = message.responses[modelKey];
+                    if (!modelResponse || !modelResponse.messages || !Array.isArray(modelResponse.messages)) return;
+
+                    modelResponse.messages.forEach((msgGroup, msgIndex) => {
+                        if (!msgGroup || !Array.isArray(msgGroup)) return;
+                        msgGroup.forEach((part, partIndex) => {
+                            if (!part || part.type !== 'image') return;
+                            promises.push(new Promise((resolve, reject) => {
+                                const req = mediaStore.add({
+                                    chatId,
+                                    messageId,
+                                    modelKey,
+                                    messageIndex: msgIndex,
+                                    partIndex,
+                                    source: 'assistant',
+                                    timestamp: baseTimestamp
+                                });
+                                req.onsuccess = () => resolve();
+                                req.onerror = () => resolve();
+                            }));
+                        });
+                    });
+                });
+            }
+        });
+
+        return promises;
+    }
+
+    // Get all media entries
+    async getAllMedia(limit = 100, offset = 0) {
+        try {
+            const db = await this.getDB();
+
+            // Check if mediaIndex store exists
+            if (!db.objectStoreNames.contains('mediaIndex')) {
+                console.warn('mediaIndex store does not exist yet, returning empty array');
+                return [];
+            }
+
+            const tx = db.transaction('mediaIndex', 'readonly');
+            const store = tx.objectStore('mediaIndex');
+            const index = store.index('timestamp');
+
+            return new Promise((resolve, reject) => {
+                const media = [];
+                let skipped = 0;
+
+                const request = index.openCursor(null, 'prev'); // Descending by timestamp
+
+                request.onsuccess = (event) => {
+                    const cursor = event.target.result;
+                    if (!cursor || media.length >= limit) {
+                        resolve(media);
+                        return;
+                    }
+
+                    if (skipped < offset) {
+                        skipped++;
+                    } else {
+                        media.push(cursor.value);
+                    }
+                    cursor.continue();
+                };
+
+                request.onerror = () => {
+                    console.error('Error reading media index:', request.error);
+                    resolve([]); // Return empty array on error
+                };
+            });
+        } catch (error) {
+            console.error('Error in getAllMedia:', error);
+            return [];
+        }
+    }
+
+    // Get image data from a media index entry
+    async getImageFromMediaEntry(entry) {
+        const message = await this.getMessage(entry.chatId, entry.messageId);
+        if (!message) return null;
+
+        if (entry.source === 'user' && message.images) {
+            return message.images[entry.imageIndex];
+        }
+
+        if (entry.source === 'assistant') {
+            if (message.contents && entry.contentIndex !== undefined) {
+                const contentGroup = message.contents[entry.contentIndex];
+                const part = contentGroup?.[entry.partIndex];
+                return part?.type === 'image' ? part.content : null;
+            }
+
+            if (message.responses && entry.modelKey) {
+                const modelResponse = message.responses[entry.modelKey];
+                const msgGroup = modelResponse?.messages?.[entry.messageIndex];
+                const part = msgGroup?.[entry.partIndex];
+                return part?.type === 'image' ? part.content : null;
+            }
+        }
+
+        return null;
+    }
+
+    // Delete a media entry by ID
+    async deleteMediaEntry(entryId) {
+        const db = await this.getDB();
+        const tx = db.transaction('mediaIndex', 'readwrite');
+        const store = tx.objectStore('mediaIndex');
+
+        return new Promise((resolve, reject) => {
+            const request = store.delete(entryId);
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    // Persist search index, document count, and serialized documents snapshot
+    async setSearchIndex(jsonString, count, docs = []) {
+        if (typeof jsonString !== 'string') {
+            jsonString = JSON.stringify(jsonString || {});
+        }
+
+        const serialisedDocs = Array.isArray(docs) ? JSON.stringify(docs) : JSON.stringify([]);
+
+        const db = await this.getDB();
+        const tx = db.transaction('searchIndex', 'readwrite');
+        const store = tx.objectStore('searchIndex');
+
+        store.put({ id: 'search', json: jsonString });
+        store.put({ id: 'count', value: count });
+        store.put({ id: 'docs', json: serialisedDocs });
+
+        return new Promise((resolve, reject) => {
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    }
+
+    async getSearchJson() {
+        const db = await this.getDB();
+        const tx = db.transaction('searchIndex', 'readonly');
+        const store = tx.objectStore('searchIndex');
+        const req = store.get('search');
+
+        return new Promise((resolve, reject) => {
+            req.onsuccess = () => resolve(req.result?.json || null);
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    async getSearchCount() {
+        const db = await this.getDB();
+        const tx = db.transaction('searchIndex', 'readonly');
+        const store = tx.objectStore('searchIndex');
+        const req = store.get('count');
+
+        return new Promise((resolve, reject) => {
+            req.onsuccess = () => resolve(req.result?.value || 0);
+            req.onerror = () => reject(req.error);
+        });
+    }
+
+    async getSearchDocs() {
+        const db = await this.getDB();
+        const tx = db.transaction('searchIndex', 'readonly');
+        const store = tx.objectStore('searchIndex');
+        const req = store.get('docs');
+
+        return new Promise((resolve, reject) => {
+            req.onsuccess = () => {
+                const raw = req.result?.json;
+                if (!raw) {
+                    resolve(null);
+                    return;
+                }
+
+                try {
+                    resolve(JSON.parse(raw));
+                } catch (error) {
+                    console.warn('Failed to parse stored search documents snapshot:', error);
+                    resolve(null);
+                }
+            };
+            req.onerror = () => reject(req.error);
+        });
     }
 }
 
