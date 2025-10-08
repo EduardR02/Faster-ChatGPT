@@ -1,6 +1,6 @@
 {
 	"name": "Sidekick LLM",
-	"version": "1.14.0",
+	"version": "1.17.0",
 	"manifest_version": 3,
 	"content_scripts": [
 		{
@@ -20,6 +20,20 @@
 		"storage",
 		"sidePanel"
 	],
+	"commands": {
+		"new-chat": {
+			"suggested_key": {
+				"default": "Ctrl+Shift+L"
+			},
+			"description": "Start new chat"
+		},
+		"open-history": {
+			"suggested_key": {
+				"default": "Ctrl+Shift+H"
+			},
+			"description": "Open history"
+		}
+	},
 	"web_accessible_resources": [{
 		"resources": ["src/html/history.html"],
 		"matches": ["<all_urls>"]

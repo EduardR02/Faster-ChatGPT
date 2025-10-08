@@ -30,6 +30,14 @@ const waitForIdle = (timeout = 0) => new Promise(resolve => {
     runWhenIdle(() => resolve(), timeout);
 });
 
+const nextFrame = () => new Promise(resolve => {
+    if (hasWindow && typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(() => resolve());
+    } else {
+        setTimeout(resolve, 16);
+    }
+});
+
 class PopupMenu {
     constructor(renameManager, chatStorage) {
         this.renameManager = renameManager;
@@ -442,6 +450,12 @@ class MediaTab {
         this.hasAttemptedInitialLoad = false;
         this.invalidMediaIds = new Set();
         this.pendingRefresh = false;
+        this.mediaLoadContext = null;
+        this.messageCache = new Map();
+        this.renderToken = null;
+        this.renderScheduled = false;
+        this.mediaItemElements = new Map();
+        this.entryMessageKeys = new Map();
         this.init();
     }
 
@@ -495,6 +509,11 @@ class MediaTab {
             this.pendingRefresh = false;
             if (this.isLoading && !force) return;
             this.isLoading = true;
+            if (this.mediaLoadContext) {
+                this.mediaLoadContext.aborted = true;
+            }
+            const loadContext = { aborted: false };
+            this.mediaLoadContext = loadContext;
 
             const panel = document.getElementById('media-panel');
             const grid = document.getElementById('media-grid');
@@ -512,6 +531,7 @@ class MediaTab {
 
                 this.invalidMediaIds = new Set();
                 this.mediaEntries = entries;
+                this.syncMediaCache(entries);
 
                 if (entries.length === 0) {
                     this.setMediaState(panel, MEDIA_STATE.empty);
@@ -519,13 +539,16 @@ class MediaTab {
                 }
 
                 this.setMediaState(panel, MEDIA_STATE.ready);
-                await this.renderMedia();
+                await this.renderMedia(loadContext);
                 console.log(`Media grid loaded ${entries.length} entries in ${formatDuration(loadStart)}`);
             } catch (error) {
                 this.setMediaState(panel, MEDIA_STATE.error);
                 console.error('Error loading media:', error);
             } finally {
                 this.isLoading = false;
+                if (this.mediaLoadContext === loadContext) {
+                    this.mediaLoadContext = null;
+                }
             }
         };
 
@@ -667,10 +690,10 @@ class MediaTab {
         document.querySelectorAll('.media-filter-btn').forEach(b => b.classList.remove('is-active', 'active'));
         const target = document.querySelector(`[data-filter="${filter}"]`);
         if (target) target.classList.add('is-active');
-        void this.renderMedia();
+        this.scheduleMediaRender();
     }
 
-    async renderMedia() {
+    async renderMedia(loadContext = this.mediaLoadContext) {
         const panel = document.getElementById('media-panel');
         const grid = document.getElementById('media-grid');
         if (!panel || !grid) return;
@@ -686,7 +709,7 @@ class MediaTab {
             return (b.timestamp ?? 0) - (a.timestamp ?? 0);
         });
 
-        grid.innerHTML = '';
+        grid.replaceChildren();
 
         if (sortedEntries.length === 0) {
             this.setMediaState(panel, MEDIA_STATE.empty);
@@ -694,25 +717,171 @@ class MediaTab {
         }
 
         this.setMediaState(panel, MEDIA_STATE.ready);
-        await Promise.all(sortedEntries.map(entry => this.renderMediaItem(entry, grid)));
+        await this.renderMediaInBatches(sortedEntries, grid, loadContext);
 
         if (!grid.children.length) {
             this.setMediaState(panel, MEDIA_STATE.empty);
         }
     }
 
-    async renderMediaItem(entry, grid) {
-        const imageData = await this.chatStorage.getImageFromMediaEntry(entry);
+    scheduleMediaRender(immediate = false) {
+        const token = Symbol('media-render');
+        this.renderToken = token;
+
+        const run = async () => {
+            if (this.renderToken !== token) return;
+            this.renderScheduled = false;
+            await this.renderMedia();
+        };
+
+        if (immediate) {
+            void run();
+            return;
+        }
+
+        if (this.renderScheduled) {
+            return;
+        }
+
+        this.renderScheduled = true;
+        runWhenIdle(() => { void run(); }, 48);
+    }
+
+    async renderMediaInBatches(entries, grid, loadContext = null, batchSize = 24) {
+        const messageCache = this.messageCache;
+
+        for (let i = 0; i < entries.length; i += batchSize) {
+            if (loadContext?.aborted) return;
+
+            const batch = entries.slice(i, i + batchSize);
+            await this.ensureMessagesLoaded(batch, messageCache, loadContext);
+            if (loadContext?.aborted) return;
+
+            const elements = await Promise.all(batch.map(entry => this.buildMediaItem(entry, messageCache, loadContext)));
+
+            const fragment = document.createDocumentFragment();
+            elements.forEach(el => {
+                if (el) fragment.appendChild(el);
+            });
+
+            if (fragment.childNodes.length) {
+                grid.appendChild(fragment);
+            }
+
+            if (loadContext?.aborted) return;
+            await nextFrame();
+        }
+    }
+
+    async buildMediaItem(entry, messageCache, loadContext = null) {
+        const messageKey = this.getEntryMessageKey(entry);
+        this.entryMessageKeys.set(entry.id, messageKey);
+
+        const cachedElement = this.mediaItemElements.get(entry.id);
+        if (cachedElement) {
+            return cachedElement;
+        }
+
+        let message = messageCache.get(messageKey);
+
+        if (message === undefined) {
+            try {
+                message = await this.chatStorage.getMessage(entry.chatId, entry.messageId);
+            } catch (error) {
+                console.warn('Failed to load message for media entry', entry.id, error);
+                message = null;
+            }
+
+            if (loadContext?.aborted) return null;
+            messageCache.set(messageKey, message ?? null);
+        }
+
+        const imageData = this.extractImageData(entry, message);
 
         if (!this.isValidImage(imageData)) {
             await this.handleInvalidMedia(entry.id);
-            return;
+            return null;
         }
 
         const mediaElement = this.createMediaElement(entry, imageData);
         if (mediaElement) {
-            grid.appendChild(mediaElement);
+            this.mediaItemElements.set(entry.id, mediaElement);
         }
+        return mediaElement;
+    }
+
+    async ensureMessagesLoaded(entries, messageCache, loadContext = null) {
+        const pendingKeys = new Set();
+        const loaders = [];
+
+        for (const entry of entries) {
+            const key = this.getEntryMessageKey(entry);
+            if (messageCache.has(key) || pendingKeys.has(key)) continue;
+            pendingKeys.add(key);
+
+            loaders.push((async () => {
+                try {
+                    const message = await this.chatStorage.getMessage(entry.chatId, entry.messageId);
+                    if (loadContext?.aborted) return;
+                    messageCache.set(key, message ?? null);
+                } catch (error) {
+                    console.warn('Failed to prefetch message for media entry', entry.id, error);
+                    if (!messageCache.has(key)) {
+                        messageCache.set(key, null);
+                    }
+                }
+            })());
+        }
+
+        if (loaders.length) {
+            await Promise.all(loaders);
+        }
+    }
+
+    getEntryMessageKey(entry) {
+        return `${entry.chatId}:${entry.messageId}`;
+    }
+
+    syncMediaCache(entries) {
+        const activeIds = new Set(entries.map(entry => entry.id));
+
+        for (const [id, element] of this.mediaItemElements.entries()) {
+            if (!activeIds.has(id)) {
+                this.mediaItemElements.delete(id);
+            }
+        }
+
+        for (const [id, key] of this.entryMessageKeys.entries()) {
+            if (!activeIds.has(id)) {
+                this.entryMessageKeys.delete(id);
+                this.messageCache.delete(key);
+            }
+        }
+    }
+
+    extractImageData(entry, message) {
+        if (!message) return null;
+
+        if (entry.source === 'user' && Array.isArray(message.images)) {
+            return message.images[entry.imageIndex];
+        }
+
+        if (entry.source === 'assistant') {
+            if (Array.isArray(message.contents) && entry.contentIndex !== undefined) {
+                const contentGroup = message.contents[entry.contentIndex];
+                const part = contentGroup?.[entry.partIndex];
+                return part?.type === 'image' ? part.content : null;
+            }
+
+            if (message.responses && entry.modelKey) {
+                const modelResponse = message.responses[entry.modelKey];
+                const msgGroup = modelResponse?.messages?.[entry.messageIndex];
+                const part = msgGroup?.[entry.partIndex];
+                return part?.type === 'image' ? part.content : null;
+            }
+        }
+
+        return null;
     }
 
     createMediaElement(entry, imageData) {
@@ -782,7 +951,7 @@ class MediaTab {
         button.dataset.order = this.currentSort;
         button.textContent = this.currentSort === 'desc' ? 'Newest first' : 'Oldest first';
         button.classList.toggle('is-active', this.currentSort === 'asc');
-        void this.renderMedia();
+        this.scheduleMediaRender();
     }
 
     async handleInvalidMedia(entryId, item = null) {
@@ -805,13 +974,22 @@ class MediaTab {
     }
 }
 
+const FUZZY_MATCHER = (term) => {
+    if (!term) return null;
+    if (term.length > 10) return 0.25;
+    if (term.length > 6) return 0.18;
+    if (term.length > 3) return 0.12;
+    return null;
+};
+
 const MINI_SEARCH_OPTIONS = Object.freeze({
     fields: ['title', 'content'],
-    storeFields: ['id', 'title'],
+    storeFields: ['id', 'title', 'timestamp'],
     searchOptions: {
-        boost: { title: 2 },
-        fuzzy: 0.2,
-        prefix: true
+        boost: { title: 2.25 },
+        fuzzy: FUZZY_MATCHER,
+        prefix: false,
+        combineWith: 'AND'
     }
 });
 
@@ -820,6 +998,10 @@ class ChatSearch {
         this.chatUI = chatUI;
         this.miniSearch = null;
         this.allChats = [];
+        this.docIndex = new Map();
+        this.lastQuery = '';
+        this.lastNormalizedQuery = '';
+        this.lastMatchingIds = null;
         this.indexDirty = false;
         this.indexStale = false;
         this.persistDelayMs = 750;
@@ -827,6 +1009,10 @@ class ChatSearch {
         this.persistInFlight = null;
         this.handleVisibilityChange = this.handleVisibilityChange.bind(this);
         this.beforeUnloadHandler = () => { void this.flushPersist(true); };
+        this.searchResultsLimit = 40;
+        this.searchDisplayOffset = 0;
+        this.currentDisplayItems = [];
+        this.handleResultsScroll = this.handleResultsScroll.bind(this);
         document.addEventListener('visibilitychange', this.handleVisibilityChange);
         window.addEventListener('pagehide', this.beforeUnloadHandler, { once: false });
         this.init();
@@ -890,6 +1076,10 @@ class ChatSearch {
                 if (storedDocs) {
                     this.miniSearch = this.loadMiniSearch(jsonStr);
                     this.allChats = storedDocs;
+                    this.docIndex.clear();
+                    for (const doc of this.allChats) {
+                        this.docIndex.set(doc.id, doc);
+                    }
                     successfullyLoadedFromCache = true;
                 }
             } catch (error) {
@@ -927,16 +1117,64 @@ class ChatSearch {
         return idString.match(/^\d+$/) ? Number(idString) : rawId;
     }
 
+    normaliseForSearch(input) {
+        if (!input) return '';
+
+        return input
+            .toLowerCase()
+            .normalize('NFKD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-z0-9]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    decorateDocument(doc) {
+        if (!doc) return doc;
+        doc.searchTitle = this.normaliseForSearch(doc.title || '');
+        doc.searchContent = this.normaliseForSearch(doc.content || '');
+        return doc;
+    }
+
+    ensureDocumentSearchText(doc) {
+        if (!doc) return '';
+        if (!doc.searchTitle || !doc.searchContent) {
+            this.decorateDocument(doc);
+        }
+        return doc;
+    }
+
+    documentContainsQuery(doc, normalisedQuery) {
+        if (!doc || !normalisedQuery) return false;
+        const decorated = this.ensureDocumentSearchText(doc);
+        return (
+            (decorated.searchTitle && decorated.searchTitle.includes(normalisedQuery)) ||
+            (decorated.searchContent && decorated.searchContent.includes(normalisedQuery))
+        );
+    }
+
+    resetQueryCache() {
+        this.lastQuery = '';
+        this.lastNormalizedQuery = '';
+        this.lastMatchingIds = null;
+    }
+
     rehydrateDocuments(indexData, storedDocsSnapshot) {
         const docsFromIndex = indexData?.documentStore?.docs;
 
         if (Array.isArray(storedDocsSnapshot) && storedDocsSnapshot.length) {
-            return storedDocsSnapshot.map(doc => ({
-                id: this.normaliseId(doc.id),
-                title: doc.title ?? '',
-                content: doc.content ?? '',
-                timestamp: doc.timestamp ?? null
-            }));
+            return storedDocsSnapshot.map(doc => {
+                const id = this.normaliseId(doc.id);
+                const content = doc.content ?? '';
+                const hydrated = this.decorateDocument({
+                    id,
+                    title: doc.title ?? '',
+                    content,
+                    timestamp: doc.timestamp ?? null
+                });
+                this.docIndex.set(id, hydrated);
+                return hydrated;
+            });
         }
 
         if (!docsFromIndex) {
@@ -946,12 +1184,16 @@ class ChatSearch {
 
         return Object.keys(docsFromIndex).map(key => {
             const docPayload = docsFromIndex[key];
-            return {
-                id: this.normaliseId(docPayload?.id ?? key),
+            const id = this.normaliseId(docPayload?.id ?? key);
+            const content = docPayload?.content ?? '';
+            const hydrated = this.decorateDocument({
+                id,
                 title: docPayload?.title ?? '',
-                content: docPayload?.content ?? '',
+                content,
                 timestamp: docPayload?.timestamp ?? null
-            };
+            });
+            this.docIndex.set(id, hydrated);
+            return hydrated;
         });
     }
 
@@ -960,6 +1202,10 @@ class ChatSearch {
         const metaList = metadata || await chatStorage.getChatMetadata(Infinity, 0);
 
         this.allChats = await this.buildDocumentsInBatches(metaList);
+        this.docIndex.clear();
+        for (const doc of this.allChats) {
+            this.docIndex.set(doc.id, doc);
+        }
 
         this.miniSearch = this.createMiniSearch();
 
@@ -993,30 +1239,35 @@ class ChatSearch {
         const doc = await this.buildDocument(chatMeta);
         this.miniSearch.add(doc);
         this.allChats.push(doc);
+        this.docIndex.set(doc.id, doc);
+        this.resetQueryCache();
         this.markIndexDirty();
         await waitForIdle(10);
     }
 
     async removeFromIndex(chatId) {
         if (!this.miniSearch) return;
-        const doc = this.allChats.find(d => d.id === chatId);
-        if (doc) {
-            this.miniSearch.remove(doc);
-        }
+        const doc = this.docIndex.get(chatId);
+        if (!doc) return;
+
+        this.miniSearch.remove(doc);
+        this.docIndex.delete(chatId);
         this.allChats = this.allChats.filter(d => d.id !== chatId);
+        this.resetQueryCache();
         this.markIndexDirty();
         await waitForIdle(10);
     }
 
     async updateInIndex(chatId, newTitle) {
         if (!this.miniSearch) return;
-        const doc = this.allChats.find(d => d.id === chatId);
-        if (doc) {
-            doc.title = newTitle;
-            this.miniSearch.replace(doc);
-            this.markIndexDirty();
-            await waitForIdle(10);
-        }
+        const doc = this.docIndex.get(chatId);
+        if (!doc) return;
+
+        doc.title = newTitle;
+        this.miniSearch.replace(doc);
+        this.resetQueryCache();
+        this.markIndexDirty();
+        await waitForIdle(10);
     }
 
     markIndexDirty() {
@@ -1069,7 +1320,7 @@ class ChatSearch {
 
     async syncIndexWithMetadata(metadata) {
         const metadataMap = new Map(metadata.map(meta => [this.normaliseId(meta.chatId), meta]));
-        const existingDocsMap = new Map(this.allChats.map(doc => [doc.id, doc]));
+        const existingDocsMap = new Map(this.docIndex);
 
         let removed = 0;
         let added = 0;
@@ -1080,7 +1331,7 @@ class ChatSearch {
         for (const [id, doc] of existingDocsMap.entries()) {
             if (!metadataMap.has(id)) {
                 this.miniSearch.remove(doc);
-                existingDocsMap.delete(id);
+                this.docIndex.delete(id);
                 removed++;
             }
 
@@ -1096,7 +1347,7 @@ class ChatSearch {
 
         for (const meta of metadata) {
             const id = this.normaliseId(meta.chatId);
-            const existing = existingDocsMap.get(id);
+            const existing = this.docIndex.get(id);
 
             if (!existing) {
                 additions.push(meta);
@@ -1124,7 +1375,7 @@ class ChatSearch {
             const newDocs = await Promise.all(additions.map(meta => this.buildDocument(meta)));
             newDocs.forEach(doc => {
                 this.miniSearch.add(doc);
-                existingDocsMap.set(doc.id, doc);
+                this.docIndex.set(doc.id, doc);
             });
             added = newDocs.length;
             await waitForIdle(25);
@@ -1133,7 +1384,7 @@ class ChatSearch {
         if (renameUpdates.length) {
             renameUpdates.forEach(meta => {
                 const id = this.normaliseId(meta.chatId);
-                const existing = existingDocsMap.get(id);
+                const existing = this.docIndex.get(id);
                 if (!existing) return;
                 existing.title = meta.title;
                 existing.timestamp = meta.timestamp;
@@ -1147,18 +1398,22 @@ class ChatSearch {
             const updatedDocs = await Promise.all(contentUpdates.map(meta => this.buildDocument(meta)));
             updatedDocs.forEach(doc => {
                 this.miniSearch.replace(doc);
-                existingDocsMap.set(doc.id, doc);
+                this.docIndex.set(doc.id, doc);
             });
             updated += updatedDocs.length;
             await waitForIdle(25);
         }
 
         this.allChats = metadata
-            .map(meta => existingDocsMap.get(this.normaliseId(meta.chatId)))
+            .map(meta => this.docIndex.get(this.normaliseId(meta.chatId)))
             .filter(Boolean);
 
         const changed = Boolean(removed || added || updated);
         const summary = `${added} added, ${updated} updated, ${removed} removed`;
+
+        if (changed) {
+            this.resetQueryCache();
+        }
 
         return { changed, summary };
     }
@@ -1208,8 +1463,9 @@ class ChatSearch {
 
     handleSearch(query) {
         const clearBtn = document.getElementById('search-clear');
+        const trimmed = query.trim();
 
-        if (!query.trim()) {
+        if (!trimmed) {
             this.clearSearch();
             clearBtn.style.display = 'none';
             return;
@@ -1223,63 +1479,121 @@ class ChatSearch {
         }
 
         try {
-            const results = this.miniSearch.search(query).map(result => ({
-                ...result,
-                id: this.normaliseId(result.id)
-            }));
-            this.displayResults(results);
+            const hasTrailingSpace = /\s$/.test(query);
+            const normalisedQuery = this.normaliseForSearch(trimmed);
+            const cacheKey = `${trimmed}__${hasTrailingSpace ? '1' : '0'}`;
+
+            let finalIds;
+
+            if (this.lastQuery === cacheKey && this.lastMatchingIds) {
+                finalIds = new Set(this.lastMatchingIds);
+            } else {
+                const miniSearchResults = this.miniSearch.search(trimmed, {
+                    fuzzy: FUZZY_MATCHER,
+                    prefix: !hasTrailingSpace,
+                    combineWith: 'AND'
+                }).map(result => this.normaliseId(result.id));
+
+                const resultIdSet = new Set(miniSearchResults);
+
+                if (normalisedQuery) {
+                    for (const doc of this.allChats) {
+                        if (!this.documentContainsQuery(doc, normalisedQuery)) continue;
+                        resultIdSet.add(doc.id);
+                    }
+                }
+
+                finalIds = resultIdSet;
+                this.lastMatchingIds = new Set(resultIdSet);
+                this.lastQuery = cacheKey;
+                this.lastNormalizedQuery = normalisedQuery;
+            }
+
+            this.currentDisplayItems = this.buildSearchResults(Array.from(finalIds));
+            this.searchDisplayOffset = 0;
+            this.renderNextSearchBatch(true);
+
+            this.chatUI.setSearchHighlight({
+                rawQuery: trimmed,
+                resultIds: Array.from(finalIds),
+                normalizedQuery: normalisedQuery
+            });
         } catch (error) {
             console.error('Search error:', error);
         }
     }
 
-    displayResults(results) {
-        const historyList = document.querySelector('.history-list');
-        const allItems = historyList.querySelectorAll('.history-sidebar-item');
-        const allDividers = historyList.querySelectorAll('.history-divider');
+    buildSearchResults(resultIds) {
+        return resultIds
+            .map(id => ({
+                id,
+                doc: this.docIndex.get(id)
+            }))
+            .filter(result => !!result.doc);
+    }
 
-        if (results.length === 0) {
-            allItems.forEach(item => item.classList.add('search-hidden'));
-            allDividers.forEach(divider => divider.classList.add('search-hidden'));
+    renderNextSearchBatch(reset = false) {
+        if (reset) {
+            this.chatUI.exitSearchMode();
+            this.chatUI.startSearchMode();
+            this.searchDisplayOffset = 0;
+            this.chatUI.updateSearchCounter(this.currentDisplayItems.length, 0);
+            this.attachSearchScrollListener();
+        }
 
-            if (!historyList.querySelector('.search-no-results')) {
-                const noResults = createElementWithClass('div', 'search-no-results', 'No results found');
-                historyList.appendChild(noResults);
-            }
+        const slice = this.currentDisplayItems.slice(
+            this.searchDisplayOffset,
+            this.searchDisplayOffset + this.searchResultsLimit
+        );
+
+        if (reset && slice.length === 0) {
+            this.chatUI.renderSearchResults([]);
+            this.chatUI.updateSearchCounter(0, 0);
+            this.detachSearchScrollListener();
             return;
         }
 
-        const noResultsMsg = historyList.querySelector('.search-no-results');
-        if (noResultsMsg) noResultsMsg.remove();
+        if (slice.length === 0) {
+            this.detachSearchScrollListener();
+            return;
+        }
 
-        const resultIds = new Set(results.map(r => r.id));
-        allItems.forEach(item => {
-            const chatId = parseInt(item.id, 10);
-            if (resultIds.has(chatId)) {
-                item.classList.remove('search-hidden');
-            } else {
-                item.classList.add('search-hidden');
-            }
+        this.searchDisplayOffset += slice.length;
+
+        this.chatUI.renderSearchResults(slice, {
+            totalCount: this.currentDisplayItems.length,
+            append: !reset,
+            showCounter: true
         });
 
-        allDividers.forEach(divider => {
-            let sibling = divider.nextElementSibling;
-            let hasVisibleItem = false;
+        if (this.searchDisplayOffset >= this.currentDisplayItems.length) {
+            this.detachSearchScrollListener();
+        }
+    }
 
-            while (sibling && !sibling.classList.contains('history-divider')) {
-                if (!sibling.classList.contains('search-hidden')) {
-                    hasVisibleItem = true;
-                    break;
-                }
-                sibling = sibling.nextElementSibling;
-            }
+    attachSearchScrollListener() {
+        const container = this.chatUI.getSearchContainer();
+        if (!container) return;
+        container.removeEventListener('scroll', this.handleResultsScroll);
+        container.addEventListener('scroll', this.handleResultsScroll);
+    }
 
-            if (hasVisibleItem) {
-                divider.classList.remove('search-hidden');
-            } else {
-                divider.classList.add('search-hidden');
-            }
-        });
+    detachSearchScrollListener() {
+        const container = this.chatUI.getSearchContainer();
+        if (!container) return;
+        container.removeEventListener('scroll', this.handleResultsScroll);
+    }
+
+    handleResultsScroll() {
+        const container = this.chatUI.getSearchContainer();
+        if (!container || this.currentDisplayItems.length === 0) return;
+
+        const { scrollTop, scrollHeight, clientHeight } = container;
+        const nearBottom = scrollHeight - (scrollTop + clientHeight) < 16;
+
+        if (nearBottom) {
+            this.renderNextSearchBatch();
+        }
     }
 
     clearSearch() {
@@ -1290,6 +1604,12 @@ class ChatSearch {
         const noResultsMsg = historyList.querySelector('.search-no-results');
         if (noResultsMsg) noResultsMsg.remove();
 
+        this.currentDisplayItems = [];
+        this.searchDisplayOffset = 0;
+        this.chatUI.renderSearchResults([]);
+        this.chatUI.exitSearchMode();
+        this.chatUI.setSearchHighlight(null);
+
         allItems.forEach(item => {
             item.classList.remove('search-hidden');
         });
@@ -1297,6 +1617,7 @@ class ChatSearch {
         allDividers.forEach(divider => divider.classList.remove('search-hidden'));
 
         document.getElementById('search-clear').style.display = 'none';
+        this.lastMatchingIds = null;
     }
 
     async reindex() {

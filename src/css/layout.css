@@ -1546,17 +1546,9 @@ p {
   content: 'No images found';
 }
 
-.media-panel[data-state="empty"] .media-status-subtitle::after {
-  content: 'Images from new chats will appear here.';
-}
-
 .media-panel[data-state="error"] .media-status-title {
   color: #e06c75;
   content: 'Error loading media';
-}
-
-.media-panel[data-state="error"] .media-status-subtitle::after {
-  content: 'Please try again later.';
 }
 
 .media-grid {
@@ -1673,6 +1665,22 @@ p {
     color: #abb2bf;
     padding: 1em;
     text-align: center;
+}
+
+.search-highlight {
+  background: rgba(152, 195, 121, 0.35);
+  color: inherit;
+  border-radius: 0.2rem;
+  padding: 0 0.1em;
+  transition: background 0.2s ease;
+}
+
+.search-highlight.is-first {
+  background: rgba(97, 175, 239, 0.45);
+}
+
+.search-highlight.fade-out {
+  background: transparent;
 }
 
 /* Image error styling (reusable for media and chats) */

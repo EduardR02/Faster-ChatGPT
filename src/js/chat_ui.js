@@ -993,6 +993,12 @@ export class HistoryChatUI extends ChatUI {
         this.loadChat = loadChat;
         this.getChatMeta = getChatMeta;
 
+        this.activeChatId = null;
+        this.searchHighlightConfig = null;
+        this.activeHighlights = [];
+        this.searchRenderedIds = new Set();
+        this.inSearchMode = false;
+
         this.initHistoryListHandling();
         this.initKeyboardNavigation();
     }
@@ -1135,6 +1141,7 @@ export class HistoryChatUI extends ChatUI {
     }
 
     async loadMore() {
+        if (this.inSearchMode) return;
         if (!this.stateManager.canLoadMore()) return;
         this.stateManager.isLoading = true;
 
@@ -1171,6 +1178,7 @@ export class HistoryChatUI extends ChatUI {
     }
 
     handleHistoryScroll() {
+        if (this.inSearchMode) return;
         const { scrollTop, scrollHeight, clientHeight } = this.historyList;
 
         if (scrollHeight - (scrollTop + clientHeight) < 10 && this.stateManager.canLoadMore()) {
@@ -1179,6 +1187,15 @@ export class HistoryChatUI extends ChatUI {
     }
 
     addHistoryItem(chat) {
+        const existing = this.getHistoryItem(`${chat.chatId}`);
+        if (existing) {
+            if (existing.dataset.searchTemp === 'true') {
+                existing.remove();
+            } else {
+                return existing;
+            }
+        }
+
         const currentCategory = this.getDateCategory(chat.timestamp);
 
         if (currentCategory !== this.stateManager.lastDateCategory) {
@@ -1189,6 +1206,221 @@ export class HistoryChatUI extends ChatUI {
 
         const item = this.createHistoryItem(chat);
         this.historyList.appendChild(item);
+        if (this.inSearchMode) {
+            item.dataset.searchMatch = 'false';
+        }
+        return item;
+    }
+
+    ensureSearchResults(results = []) {
+        const desiredIds = new Set(results.map(r => `${r.id}`));
+
+        results.forEach(({ doc, id }) => {
+            const idStr = `${id}`;
+            let item = this.getHistoryItem(idStr);
+            if (!item) {
+                if (!doc) return;
+                item = this.createSearchTempItem(doc);
+            }
+            if (item) {
+                item.classList.remove('search-hidden');
+            }
+        });
+
+        const tempItems = this.historyList.querySelectorAll('.history-sidebar-item[data-search-temp="true"]');
+        tempItems.forEach(item => {
+            if (!desiredIds.has(item.id)) {
+                item.remove();
+            }
+        });
+
+        this.searchRenderedIds = desiredIds;
+    }
+
+    createSearchTempItem(doc) {
+        const normalizedId = `${doc.id}`;
+        const item = createElementWithClass('button', 'unset-button history-sidebar-item');
+        item.id = normalizedId;
+        item.dataset.searchTemp = 'true';
+
+        const title = doc?.title || 'Untitled chat';
+        const textSpan = createElementWithClass('span', 'item-text', title);
+        const dotsSpan = createElementWithClass('div', 'action-dots', '\u{22EF}');
+
+        item.append(textSpan, dotsSpan);
+        item.onclick = () => this.buildChat(doc.id);
+        this.addPopupActions(item);
+
+        this.historyList.appendChild(item);
+        return item;
+    }
+
+    clearSearchResults() {
+        const tempItems = this.historyList.querySelectorAll('.history-sidebar-item[data-search-temp="true"]');
+        tempItems.forEach(item => item.remove());
+        const baseItems = this.historyList.querySelectorAll('.history-sidebar-item');
+        baseItems.forEach(item => {
+            delete item.dataset.searchMatch;
+        });
+        const dividers = this.historyList.querySelectorAll('.history-divider');
+        dividers.forEach(divider => delete divider.dataset.searchMatch);
+        const noResultsMsg = this.historyList.querySelector('.search-no-results');
+        if (noResultsMsg) noResultsMsg.remove();
+        const counter = this.historyList.querySelector('.search-counter');
+        if (counter) counter.remove();
+        this.searchRenderedIds.clear();
+    }
+
+    startSearchMode() {
+        if (!this.inSearchMode) {
+            this.inSearchMode = true;
+            this.historyList.classList.add('is-searching');
+        }
+
+        const baseItems = this.historyList.querySelectorAll('.history-sidebar-item');
+        baseItems.forEach(item => {
+            if (item.dataset.searchTemp === 'true') {
+                item.remove();
+                return;
+            }
+            item.dataset.searchMatch = 'false';
+            item.classList.add('search-hidden');
+        });
+
+        const dividers = this.historyList.querySelectorAll('.history-divider');
+        dividers.forEach(divider => {
+            divider.dataset.searchMatch = 'false';
+            divider.classList.add('search-hidden');
+        });
+    }
+
+    exitSearchMode() {
+        if (!this.inSearchMode) return;
+        this.inSearchMode = false;
+        this.historyList.classList.remove('is-searching');
+
+        const baseItems = this.historyList.querySelectorAll('.history-sidebar-item');
+        baseItems.forEach(item => {
+            if (item.dataset.searchTemp === 'true') {
+                item.remove();
+                return;
+            }
+            delete item.dataset.searchMatch;
+            item.classList.remove('search-hidden');
+        });
+
+        const dividers = this.historyList.querySelectorAll('.history-divider');
+        dividers.forEach(divider => {
+            delete divider.dataset.searchMatch;
+            divider.classList.remove('search-hidden');
+        });
+
+        this.clearSearchResults();
+    }
+
+    renderSearchResults(results = [], options = {}) {
+        const desiredIds = new Set(results.map(r => `${r.id}`));
+        const shouldAppend = options?.append === true;
+
+        if (!shouldAppend) {
+            this.clearSearchResults();
+        }
+
+        results.forEach(({ doc, id }) => {
+            const idStr = `${id}`;
+            let item = this.getHistoryItem(idStr);
+            if (!item) {
+                if (!doc) return;
+                item = this.createSearchTempItem(doc);
+            }
+            if (item) {
+                item.dataset.searchMatch = 'true';
+                item.classList.remove('search-hidden');
+                if (item.dataset.searchTemp !== 'true') {
+                    this.revealDividerForItem(item);
+                }
+            }
+        });
+
+        const tempItems = this.historyList.querySelectorAll('.history-sidebar-item[data-search-temp="true"]');
+        tempItems.forEach(item => {
+            if (!desiredIds.has(item.id) && !shouldAppend) {
+                item.remove();
+            }
+        });
+
+        if (!shouldAppend) {
+            this.searchRenderedIds = new Set(desiredIds);
+        } else {
+            results.forEach(({ id }) => this.searchRenderedIds.add(`${id}`));
+        }
+
+        const baseItems = this.historyList.querySelectorAll('.history-sidebar-item');
+        baseItems.forEach(item => {
+            if (item.dataset.searchTemp === 'true') {
+                item.classList.remove('search-hidden');
+                return;
+            }
+            const match = item.dataset.searchMatch === 'true';
+            item.classList.toggle('search-hidden', !match);
+        });
+
+        const dividers = this.historyList.querySelectorAll('.history-divider');
+        dividers.forEach(divider => {
+            const match = divider.dataset.searchMatch === 'true';
+            divider.classList.toggle('search-hidden', !match);
+        });
+
+        const noResultsMsg = this.historyList.querySelector('.search-no-results');
+        if (!results.length && !noResultsMsg) {
+            const noResults = createElementWithClass('div', 'search-no-results', 'No results found');
+            this.historyList.appendChild(noResults);
+        } else if (results.length && noResultsMsg) {
+            noResultsMsg.remove();
+        }
+
+        if (options?.showCounter) {
+            const totalCount = options.totalCount ?? 0;
+            const visible = this.searchRenderedIds.size;
+            this.updateSearchCounter(totalCount, visible);
+        }
+    }
+
+    updateSearchCounter(total = 0, visible = 0) {
+        const existingCounter = this.historyList.querySelector('.search-counter');
+        if (total <= 0) {
+            if (existingCounter) existingCounter.remove();
+            return;
+        }
+
+        const text = visible >= total ? `${visible} results` : `${visible} of ${total} results`;
+
+        if (existingCounter) {
+            existingCounter.textContent = text;
+            return;
+        }
+
+        const counter = createElementWithClass('div', 'search-counter', text);
+        this.historyList.prepend(counter);
+    }
+
+    getHistoryList() {
+        return this.historyList;
+    }
+
+    getSearchContainer() {
+        return this.historyList;
+    }
+
+    revealDividerForItem(item) {
+        let previous = item.previousElementSibling;
+        while (previous) {
+            if (previous.classList.contains('history-divider')) {
+                previous.dataset.searchMatch = 'true';
+                break;
+            }
+            previous = previous.previousElementSibling;
+        }
     }
 
     createHistoryItem(chat) {
@@ -1378,6 +1610,7 @@ export class HistoryChatUI extends ChatUI {
 
     async buildChat(chatId) {
         // Show models and enable continue buttons for history
+        this.activeChatId = chatId;
         const chatFull = await this.loadChat(chatId);
         super.buildChat(chatFull, {
             hideModels: false,
@@ -1388,12 +1621,160 @@ export class HistoryChatUI extends ChatUI {
         this.updateChatHeader(chatFull.title);
         this.addLinkedChat(chatFull.continued_from_chat_id);
         this.updateChatTimestamp(chatFull.timestamp);
+
+        this.applySearchHighlight({ forceScroll: true });
     }
 
     clearConversation() {
+        this.clearSearchHighlights();
         super.clearConversation();
         this.updateChatHeader('conversation');
         this.clearLinkedChatFromHeader();
         this.updateChatFooter('');
     }
+
+    setSearchHighlight(config) {
+        if (config && (!config.rawQuery || !config.rawQuery.length)) {
+            config = null;
+        }
+
+        this.searchHighlightConfig = config ? {
+            rawQuery: config.rawQuery,
+            normalizedQuery: config.normalizedQuery ?? null,
+            resultIds: Array.isArray(config.resultIds) ? config.resultIds : null
+        } : null;
+
+        this.applySearchHighlight();
+    }
+
+    applySearchHighlight({ forceScroll = false } = {}) {
+        this.clearSearchHighlights();
+
+        if (!this.searchHighlightConfig || !this.searchHighlightConfig.rawQuery || !this.conversationDiv) {
+            return;
+        }
+
+        if (this.activeChatId == null) return;
+
+        const { resultIds, rawQuery } = this.searchHighlightConfig;
+        if (Array.isArray(resultIds) && resultIds.length > 0 && !resultIds.includes(this.activeChatId)) {
+            return;
+        }
+
+        const highlightQuery = this.searchHighlightConfig.normalizedQuery || rawQuery;
+        const highlights = this.highlightMatchesInConversation(highlightQuery);
+        this.activeHighlights = highlights;
+
+        if (forceScroll && highlights.length) {
+            requestAnimationFrame(() => {
+                highlights[0].classList.add('is-first');
+                highlights[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+            });
+        }
+    }
+
+    clearSearchHighlights() {
+        if (!this.activeHighlights?.length) {
+            this.activeHighlights = [];
+            return;
+        }
+
+        const parentsToNormalize = new Set();
+
+        this.activeHighlights.forEach(span => {
+            if (!(span instanceof HTMLElement) || !span.parentNode) return;
+            span.classList.remove('is-first');
+            const parent = span.parentNode;
+            const fragment = document.createDocumentFragment();
+            while (span.firstChild) {
+                fragment.appendChild(span.firstChild);
+            }
+            parent.replaceChild(fragment, span);
+            parentsToNormalize.add(parent);
+        });
+
+        parentsToNormalize.forEach(parent => parent.normalize());
+        this.activeHighlights = [];
+    }
+
+    highlightMatchesInConversation(query) {
+        if (!query) return [];
+        const lowerQuery = query.toLowerCase();
+        const highlights = [];
+        const elements = this.conversationDiv?.querySelectorAll('.message-content');
+        if (!elements) return highlights;
+
+        elements.forEach(element => {
+            const text = element.textContent;
+            if (!text) return;
+            const lowerText = text.toLowerCase();
+            let index = lowerText.indexOf(lowerQuery);
+            if (index === -1) return;
+
+            const matchIndices = [];
+            while (index !== -1) {
+                matchIndices.push(index);
+                index = lowerText.indexOf(lowerQuery, index + query.length);
+            }
+
+            matchIndices.reverse().forEach(startIndex => {
+                const range = this.createRangeForSubstring(element, startIndex, query.length);
+                if (!range) return;
+                const span = document.createElement('span');
+                span.className = 'search-highlight';
+                try {
+                    range.surroundContents(span);
+                    highlights.push(span);
+                } catch (error) {
+                    // If surround fails (e.g., due to overlapping ranges), ignore this match
+                    console.warn('Highlight surround failed:', error);
+                }
+            });
+        });
+
+        return highlights.reverse();
+    }
+
+    createRangeForSubstring(container, start, length) {
+        if (!container) return null;
+        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+
+        let currentNode = walker.nextNode();
+        let remainingStart = start;
+
+        while (currentNode) {
+            const nodeLength = currentNode.textContent.length;
+            if (remainingStart < nodeLength) break;
+            remainingStart -= nodeLength;
+            currentNode = walker.nextNode();
+        }
+
+        if (!currentNode) return null;
+
+        const range = document.createRange();
+        range.setStart(currentNode, remainingStart);
+
+        let remainingLength = length;
+        let endNode = currentNode;
+        let endOffset = remainingStart;
+
+        while (endNode && remainingLength > 0) {
+            const available = endNode.textContent.length - endOffset;
+            if (remainingLength <= available) {
+                range.setEnd(endNode, endOffset + remainingLength);
+                return range;
+            }
+
+            remainingLength -= available;
+            endNode = walker.nextNode();
+            endOffset = 0;
+        }
+
+        return null;
+    }
+
+    // NOTE: startSearchMode/exitSearchMode plus related rendering helpers are
+    // defined earlier in this class. The duplicate legacy implementations that
+    // only toggled simple state have been removed to ensure the more complete
+    // versions (which manage dividers, pagination, and counters) remain active.
 }

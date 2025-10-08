@@ -2,56 +2,94 @@ export class ChatStorage {
     constructor() {
         this.dbName = 'llm-chats';
         this.dbVersion = 4;  // Combined media + search index migration
+        this.dbPromise = null;
     }
 
     async getDB() {
-        return new Promise((resolve, reject) => {
-            const request = indexedDB.open(this.dbName, this.dbVersion);
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => resolve(request.result);
-            request.onupgradeneeded = (event) => {
-                const db = event.target.result;
-                const oldVersion = event.oldVersion || 0;
+        if (!this.dbPromise) {
+            this.dbPromise = new Promise((resolve, reject) => {
+                const request = indexedDB.open(this.dbName, this.dbVersion);
 
-                // Version 1: Initial setup (chatMeta, messages)
-                if (oldVersion < 1) {
-                    if (!db.objectStoreNames.contains('chatMeta')) {
-                        const chatMetaStore = db.createObjectStore('chatMeta', {
-                            keyPath: 'chatId',
-                            autoIncrement: true,
-                        });
-                        chatMetaStore.createIndex('timestamp', 'timestamp');
+                request.onerror = () => {
+                    this.dbPromise = null;
+                    reject(request.error);
+                };
+
+                request.onupgradeneeded = (event) => {
+                    try {
+                        this.upgradeSchema(event);
+                    } catch (error) {
+                        console.error('Failed to upgrade chat storage schema', error);
+                        try {
+                            event.target.transaction?.abort();
+                        } catch (_) {
+                            // no-op
+                        }
+                        this.dbPromise = null;
+                        reject(error);
                     }
-                    if (!db.objectStoreNames.contains('messages')) {
-                        const messageStore = db.createObjectStore('messages', {
-                            keyPath: ['chatId', 'messageId']
-                        });
-                        messageStore.createIndex('chatId', 'chatId');
-                    }
-                }
+                };
 
-                // Version 2: Timestamp index (already in v1 above)
+                request.onsuccess = () => {
+                    const db = request.result;
 
-                // Version 3: Message structure migration
-                if (oldVersion < 3) {
-                    this.migrateToVersion3(event);
-                }
+                    db.onclose = () => {
+                        this.dbPromise = null;
+                    };
 
-                // Version 4: Media + search index
-                if (oldVersion < 4) {
-                    if (!db.objectStoreNames.contains('mediaIndex')) {
-                        const mediaStore = db.createObjectStore('mediaIndex', { keyPath: 'id', autoIncrement: true });
-                        mediaStore.createIndex('chatId', 'chatId');
-                        mediaStore.createIndex('timestamp', 'timestamp');
-                    }
+                    db.onversionchange = () => {
+                        db.close();
+                    };
 
-                    if (!db.objectStoreNames.contains('searchIndex')) {
-                        const searchStore = db.createObjectStore('searchIndex', { keyPath: 'id' });
-                        searchStore.createIndex('id', 'id', { unique: true });
-                    }
-                }
-            };
-        });
+                    resolve(db);
+                };
+            });
+        }
+
+        return this.dbPromise;
+    }
+
+    upgradeSchema(event) {
+        const db = event.target.result;
+        const oldVersion = event.oldVersion || 0;
+
+        // Version 1: Initial setup (chatMeta, messages)
+        if (oldVersion < 1) {
+            if (!db.objectStoreNames.contains('chatMeta')) {
+                const chatMetaStore = db.createObjectStore('chatMeta', {
+                    keyPath: 'chatId',
+                    autoIncrement: true,
+                });
+                chatMetaStore.createIndex('timestamp', 'timestamp');
+            }
+            if (!db.objectStoreNames.contains('messages')) {
+                const messageStore = db.createObjectStore('messages', {
+                    keyPath: ['chatId', 'messageId']
+                });
+                messageStore.createIndex('chatId', 'chatId');
+            }
+        }
+
+        // Version 2: Timestamp index (already in v1 above)
+
+        // Version 3: Message structure migration
+        if (oldVersion < 3) {
+            this.migrateToVersion3(event);
+        }
+
+        // Version 4: Media + search index
+        if (oldVersion < 4) {
+            if (!db.objectStoreNames.contains('mediaIndex')) {
+                const mediaStore = db.createObjectStore('mediaIndex', { keyPath: 'id', autoIncrement: true });
+                mediaStore.createIndex('chatId', 'chatId');
+                mediaStore.createIndex('timestamp', 'timestamp');
+            }
+
+            if (!db.objectStoreNames.contains('searchIndex')) {
+                const searchStore = db.createObjectStore('searchIndex', { keyPath: 'id' });
+                searchStore.createIndex('id', 'id', { unique: true });
+            }
+        }
     }
 
     // FIXED: Proper migration using upgrade transaction
