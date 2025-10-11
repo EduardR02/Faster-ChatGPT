@@ -1,14 +1,16 @@
 import { get_mode, is_on, set_defaults } from "./utils.js";
 
-// relative path also does not work here
-const sidepanel_path = "src/html/sidepanel.html";
+const SIDE_PANEL_PATH = chrome.runtime.getURL("src/html/sidepanel.html");
 let lastKnownWindowId = chrome.windows.WINDOW_ID_NONE;
+let sidepanelReady = false;
+let isOpeningSidepanel = false;
 const sidepanelReadyWaiters = new Set();
+const pendingSidepanelMessages = [];
+const SIDE_PANEL_MESSAGE_FLAG = "__bgSidepanelDispatch__";
 
 initializeWindowTracking();
 
-chrome.runtime.onInstalled.addListener(function(details) {
-    // set default
+chrome.runtime.onInstalled.addListener((details) => {
     if (details.reason === chrome.runtime.OnInstalledReason.INSTALL) {
         set_defaults().then(() => {
             chrome.runtime.openOptionsPage();
@@ -16,17 +18,17 @@ chrome.runtime.onInstalled.addListener(function(details) {
     }
 });
 
-// Keyboard shortcuts
 chrome.commands.onCommand.addListener(async (command, tab) => {
     try {
         switch (command) {
-            case 'new-chat':
-                await openSidePanelFor(tab);
+            case "new-chat": {
+                triggerSidepanelOpen(tab);
                 await waitForSidepanelReady();
-                chrome.runtime.sendMessage({ type: 'new_chat' });
+                chrome.runtime.sendMessage({ type: "new_chat" });
                 break;
-            case 'open-history':
-                chrome.tabs.create({ url: chrome.runtime.getURL('src/html/history.html') });
+            }
+            case "open-history":
+                chrome.tabs.create({ url: chrome.runtime.getURL("src/html/history.html") });
                 break;
         }
     } catch (error) {
@@ -34,79 +36,197 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
     }
 });
 
-
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg.type === 'sidepanel_ready') {
-        sidepanelReadyWaiters.forEach((listener) => listener());
+    switch (msg.type) {
+        case "sidepanel_ready":
+            handleSidepanelReady();
+            return;
+        case "open_side_panel":
+            handleSidepanelOpenRequest(sender?.tab, sendResponse);
+            return true;
+        case "close_side_panel":
+            handleSidepanelClosed();
+            return;
+        case "is_sidepanel_open":
+            isSidePanelOpen().then((isOpenCurr) => {
+                if (!isOpenCurr) {
+                    sidepanelReady = false;
+                }
+                sendResponse({ isOpen: isOpenCurr });
+            });
+            return true;
+        case "new_selection":
+        case "reconstruct_chat":
+        case "new_chat":
+            queueSidepanelDispatch(msg);
+            return true;
+        case "is_mode_on":
+            get_mode((current_mode) => {
+                sendResponse({ is_mode_on: is_on(current_mode) });
+            });
+            return true;
+        default:
+            break;
+    }
+});
+
+function handleSidepanelOpenRequest(tab, sendResponse) {
+    triggerSidepanelOpen(tab);
+
+    waitForSidepanelReady()
+        .then(() => sendResponse?.({ ok: true }))
+        .catch((error) => {
+            console.error("Failed to open side panel via message", error);
+            sendResponse?.({ ok: false, error: error?.message ?? "unknown error" });
+        });
+}
+
+function handleSidepanelReady() {
+    sidepanelReady = true;
+    isOpeningSidepanel = false;
+
+    if (sidepanelReadyWaiters.size) {
+        const waiters = Array.from(sidepanelReadyWaiters);
+        sidepanelReadyWaiters.clear();
+        waiters.forEach((waiter) => waiter.resolve());
+    }
+
+    flushPendingSidepanelMessages();
+}
+
+function handleSidepanelClosed() {
+    sidepanelReady = false;
+    isOpeningSidepanel = false;
+    pendingSidepanelMessages.length = 0;
+
+    chrome.sidePanel.setOptions({
+        path: SIDE_PANEL_PATH,
+        enabled: false,
+    });
+}
+
+function queueSidepanelDispatch(message) {
+    if (message?.[SIDE_PANEL_MESSAGE_FLAG]) {
         return;
     }
 
-    if (msg.type === 'open_side_panel') {
-        openSidePanelFor(sender?.tab)
-            .then(() => sendResponse({ ok: true }))
-            .catch((error) => {
-                console.error('Failed to open side panel via message', error);
-                sendResponse({ ok: false, error: error?.message ?? 'unknown error' });
-            });
-        return true;
+    if (sidepanelReady) {
+        deliverToSidepanel(message);
+        return;
     }
-    else if (msg.type === 'is_sidepanel_open') {
-        isSidePanelOpen().then(isOpenCurr => {sendResponse({ isOpen: isOpenCurr });});
-        return true; // Asynchronous response expected
-    }
-    else if (msg.type === 'close_side_panel') {
-        chrome.sidePanel.setOptions({
-            path: sidepanel_path,
-            enabled: false
-        });
-    }
-    else if (msg.type === 'is_mode_on') {
-        get_mode(function(current_mode) {
-            sendResponse({ is_mode_on: is_on(current_mode) });
-        });
-        return true; // Asynchronous response expected
-    }
-});
-function openSidePanelFor(tab) {
-    const windowId = pickWindowId(tab);
 
-    if (windowId !== null) {
-        chrome.sidePanel.setOptions({
-            path: sidepanel_path,
-            enabled: true
-        });
-        return chrome.sidePanel.open({ windowId });
+    pendingSidepanelMessages.push(message);
+
+    waitForSidepanelReady().catch((error) => {
+        console.error("Failed to wait for side panel readiness", error);
+        pendingSidepanelMessages.length = 0;
+    });
+}
+
+function triggerSidepanelOpen(tab) {
+    if (sidepanelReady || isOpeningSidepanel) {
+        return;
+    }
+
+    isOpeningSidepanel = true;
+    sidepanelReady = false;
+
+    const windowId = resolveWindowId(tab);
+
+    chrome.sidePanel.setOptions({
+        path: SIDE_PANEL_PATH,
+        enabled: true,
+    });
+
+    try {
+        const maybePromise = chrome.sidePanel.open({ windowId });
+        if (maybePromise && typeof maybePromise.catch === "function") {
+            maybePromise.catch(handleSidepanelOpenFailure);
+        }
+    } catch (error) {
+        handleSidepanelOpenFailure(error);
+    }
+}
+
+function handleSidepanelOpenFailure(error) {
+    console.error("chrome.sidePanel.open failed", error);
+    isOpeningSidepanel = false;
+    rejectAllWaiters(error);
+}
+
+function waitForSidepanelReady(timeout = 2000) {
+    if (sidepanelReady) {
+        return Promise.resolve();
     }
 
     return new Promise((resolve, reject) => {
-        chrome.windows.getLastFocused({ populate: false }, (window) => {
-            if (chrome.runtime.lastError) {
-                reject(chrome.runtime.lastError);
-                return;
-            }
+        const waiter = {
+            resolve: () => {
+                clearTimeout(waiter.timerId);
+                sidepanelReadyWaiters.delete(waiter);
+                resolve();
+            },
+            reject: (error) => {
+                clearTimeout(waiter.timerId);
+                sidepanelReadyWaiters.delete(waiter);
+                reject(error);
+            },
+        };
 
-            const resolvedId = pickWindowId(window);
-            const targetWindowId = resolvedId ?? chrome.windows.WINDOW_ID_CURRENT;
+        waiter.timerId = setTimeout(() => {
+            waiter.reject(new Error("Timed out waiting for side panel"));
+        }, timeout);
 
-            chrome.sidePanel.setOptions({
-                path: sidepanel_path,
-                enabled: true
-            });
+        sidepanelReadyWaiters.add(waiter);
+    });
+}
 
-            chrome.sidePanel.open({ windowId: targetWindowId })
-                .then(resolve)
-                .catch(reject);
+function flushPendingSidepanelMessages() {
+    if (!sidepanelReady || pendingSidepanelMessages.length === 0) {
+        return;
+    }
+
+    const messages = pendingSidepanelMessages.splice(0, pendingSidepanelMessages.length);
+    messages.forEach((message) => deliverToSidepanel(message));
+}
+
+function deliverToSidepanel(message) {
+    const payload = { ...message, [SIDE_PANEL_MESSAGE_FLAG]: true };
+    const result = chrome.runtime.sendMessage(payload);
+    if (result && typeof result.catch === "function") {
+        result.catch((error) => {
+            console.error("Failed to deliver message to sidepanel", error);
+        });
+    }
+}
+
+function rejectAllWaiters(error) {
+    if (!sidepanelReadyWaiters.size) {
+        return;
+    }
+
+    const waiters = Array.from(sidepanelReadyWaiters);
+    sidepanelReadyWaiters.clear();
+    waiters.forEach((waiter) => waiter.reject(error));
+}
+
+function isSidePanelOpen() {
+    return new Promise((resolve) => {
+        chrome.runtime.getContexts({ contextTypes: ["SIDE_PANEL"] }, (contexts) => {
+            resolve(contexts.length > 0);
         });
     });
 }
 
-
-function isSidePanelOpen() {
-    return new Promise(resolve => {
-        chrome.runtime.getContexts({ contextTypes: ["SIDE_PANEL"] }, contexts => {
-            resolve(contexts.length > 0);
-        });
-    });
+function resolveWindowId(source) {
+    const candidate = pickWindowId(source);
+    if (candidate !== null) {
+        return candidate;
+    }
+    if (lastKnownWindowId !== chrome.windows.WINDOW_ID_NONE) {
+        return lastKnownWindowId;
+    }
+    return chrome.windows.WINDOW_ID_CURRENT;
 }
 
 function pickWindowId(source) {
@@ -114,13 +234,13 @@ function pickWindowId(source) {
 
     const candidates = [];
 
-    if (typeof source === 'number') {
+    if (typeof source === "number") {
         candidates.push(source);
     } else {
-        if (typeof source.windowId === 'number') {
+        if (typeof source.windowId === "number") {
             candidates.push(source.windowId);
         }
-        if (typeof source.id === 'number') {
+        if (typeof source.id === "number") {
             candidates.push(source.id);
         }
     }
@@ -128,14 +248,13 @@ function pickWindowId(source) {
     candidates.push(lastKnownWindowId);
 
     for (const id of candidates) {
-        if (typeof id === 'number' && id !== chrome.windows.WINDOW_ID_NONE) {
+        if (typeof id === "number" && id !== chrome.windows.WINDOW_ID_NONE) {
             return id;
         }
     }
 
     return null;
 }
-
 
 function initializeWindowTracking() {
     chrome.windows.getLastFocused({ populate: false }, (window) => {
@@ -156,22 +275,5 @@ function initializeWindowTracking() {
         if (id !== null) {
             lastKnownWindowId = id;
         }
-    });
-}
-
-function waitForSidepanelReady() {
-    return new Promise((resolve, reject) => {
-        const timeoutId = setTimeout(() => {
-            sidepanelReadyWaiters.delete(listener);
-            reject(new Error('Timed out waiting for side panel'));
-        }, 2000);
-
-        const listener = () => {
-            clearTimeout(timeoutId);
-            sidepanelReadyWaiters.delete(listener);
-            resolve();
-        };
-
-        sidepanelReadyWaiters.add(listener);
     });
 }

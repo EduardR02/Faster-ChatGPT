@@ -1641,7 +1641,8 @@ export class HistoryChatUI extends ChatUI {
         this.searchHighlightConfig = config ? {
             rawQuery: config.rawQuery,
             normalizedQuery: config.normalizedQuery ?? null,
-            resultIds: Array.isArray(config.resultIds) ? config.resultIds : null
+            resultIds: Array.isArray(config.resultIds) ? config.resultIds : null,
+            highlightAllowed: config.highlightAllowed !== false
         } : null;
 
         this.applySearchHighlight();
@@ -1656,13 +1657,16 @@ export class HistoryChatUI extends ChatUI {
 
         if (this.activeChatId == null) return;
 
-        const { resultIds, rawQuery } = this.searchHighlightConfig;
+        const { resultIds, rawQuery, normalizedQuery, highlightAllowed } = this.searchHighlightConfig;
+        if (highlightAllowed === false && !forceScroll) {
+            return;
+        }
+
         if (Array.isArray(resultIds) && resultIds.length > 0 && !resultIds.includes(this.activeChatId)) {
             return;
         }
 
-        const highlightQuery = this.searchHighlightConfig.normalizedQuery || rawQuery;
-        const highlights = this.highlightMatchesInConversation(highlightQuery);
+        const highlights = this.highlightMatchesInConversation({ rawQuery, normalizedQuery });
         this.activeHighlights = highlights;
 
         if (forceScroll && highlights.length) {
@@ -1697,9 +1701,9 @@ export class HistoryChatUI extends ChatUI {
         this.activeHighlights = [];
     }
 
-    highlightMatchesInConversation(query) {
-        if (!query) return [];
-        const lowerQuery = query.toLowerCase();
+    highlightMatchesInConversation({ rawQuery, normalizedQuery }) {
+        const pattern = this.buildHighlightPattern(rawQuery, normalizedQuery);
+        if (!pattern) return [];
         const highlights = [];
         const elements = this.conversationDiv?.querySelectorAll('.message-content');
         if (!elements) return highlights;
@@ -1707,32 +1711,46 @@ export class HistoryChatUI extends ChatUI {
         elements.forEach(element => {
             const text = element.textContent;
             if (!text) return;
-            const lowerText = text.toLowerCase();
-            let index = lowerText.indexOf(lowerQuery);
-            if (index === -1) return;
-
-            const matchIndices = [];
-            while (index !== -1) {
-                matchIndices.push(index);
-                index = lowerText.indexOf(lowerQuery, index + query.length);
-            }
-
-            matchIndices.reverse().forEach(startIndex => {
-                const range = this.createRangeForSubstring(element, startIndex, query.length);
+            const regex = new RegExp(pattern, 'gi');
+            const matches = [...text.matchAll(regex)];
+            if (!matches.length) return;
+            const elementHighlights = [];
+            for (let i = matches.length - 1; i >= 0; i--) {
+                const match = matches[i];
+                const startIndex = match.index ?? 0;
+                const matchText = match[0] ?? '';
+                const range = this.createRangeForSubstring(element, startIndex, matchText.length);
                 if (!range) return;
                 const span = document.createElement('span');
                 span.className = 'search-highlight';
                 try {
                     range.surroundContents(span);
-                    highlights.push(span);
+                    elementHighlights.push(span);
                 } catch (error) {
                     // If surround fails (e.g., due to overlapping ranges), ignore this match
                     console.warn('Highlight surround failed:', error);
                 }
-            });
+            }
+
+            elementHighlights.reverse();
+            highlights.push(...elementHighlights);
         });
 
-        return highlights.reverse();
+        return highlights;
+    }
+
+    buildHighlightPattern(rawQuery, normalizedQuery) {
+        const source = (rawQuery && rawQuery.trim()) || (normalizedQuery && normalizedQuery.trim());
+        if (!source) return null;
+        const parts = source.split(/(\s+)/).filter(Boolean);
+        if (!parts.length) return null;
+        const escaped = parts.map(part => {
+            if (/^\s+$/.test(part)) {
+                return '\\s+';
+            }
+            return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }).join('');
+        return escaped;
     }
 
     createRangeForSubstring(container, start, length) {

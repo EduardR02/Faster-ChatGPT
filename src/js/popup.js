@@ -41,16 +41,18 @@ function open_side_panel() {
         chrome.runtime.sendMessage({ type: "is_sidepanel_open" }, response => resolve(!response.isOpen))
     );
 
-    Promise.all([isModeOn, isSidePanelClosed])
-        .then(([modeOn, panelClosed]) => {
-            if (modeOn && panelClosed) {
-				(async () => {
-					let response = await chrome.runtime.sendMessage({ type: "open_side_panel" });
-					response = await chrome.runtime.sendMessage({ type: "new_chat" });
-					window.close();
-				})();
-            }
-        });
+	Promise.all([isModeOn, isSidePanelClosed])
+		.then(([modeOn, panelClosed]) => {
+			if (!modeOn) {
+				return;
+			}
+
+			chrome.runtime.sendMessage({ type: "open_side_panel" });
+			chrome.runtime.sendMessage({ type: "new_chat" });
+			if (panelClosed) {
+				window.close();
+			}
+		});
 }
 
 

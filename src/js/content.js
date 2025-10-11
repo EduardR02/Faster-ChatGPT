@@ -44,14 +44,9 @@ function listener(event) {
             let current_url = window.location.href;
             let response = await chrome.runtime.sendMessage({ type: "is_sidepanel_open" });
             if (!response.isOpen) {
-                (async () => {
-					response = await chrome.runtime.sendMessage({ type: "open_side_panel" });
-					response = await chrome.runtime.sendMessage({ type: "new_selection", text: selection, url: current_url });
-				})();
+                chrome.runtime.sendMessage({ type: "open_side_panel" });
             }
-            else {
-                chrome.runtime.sendMessage({ type: "new_selection", text: selection, url: current_url });
-            }
+            chrome.runtime.sendMessage({ type: "new_selection", text: selection, url: current_url });
             previous_selection = selection;
         })();
     }

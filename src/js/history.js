@@ -178,15 +178,26 @@ class PopupMenu {
         }
     
         const chatId = parseInt(item.id, 10);
-    
+
         this.chatUI.handleItemDeletion(item);
-    
-        this.chatStorage.deleteChat(chatId);
+        chatMetaCache.delete(chatId);
+        chatMetaComplete.delete(chatId);
+
+        void this.chatStorage.deleteChat(chatId)
+            .then(() => {
+                if (chatSearch) {
+                    return chatSearch.removeFromIndex(chatId);
+                }
+                return undefined;
+            })
+            .catch(error => {
+                console.error('Failed to delete chat:', error);
+            });
         if (chatCore.getChatId() === chatId) {
             chatCore.reset();
             this.chatUI.clearConversation();
         }
-    
+
         this.hidePopup();
     }
 
@@ -210,15 +221,56 @@ const chatCore = new ChatCore(chatStorage);
 const renameManager = new HistoryRenameManager(chatStorage);
 const popupMenu = new PopupMenu(renameManager, chatStorage);
 const stateManager = new HistoryStateManager();
+const chatMetaCache = new Map();
+const chatMetaComplete = new Set();
+
+const cacheChatMeta = (meta, { complete = false } = {}) => {
+    if (!meta || meta.chatId == null) return meta;
+    const existing = chatMetaCache.get(meta.chatId);
+    if (existing) {
+        const merged = { ...existing, ...meta };
+        chatMetaCache.set(meta.chatId, merged);
+        if (complete || chatMetaComplete.has(meta.chatId)) {
+            chatMetaComplete.add(meta.chatId);
+        }
+        return merged;
+    }
+    chatMetaCache.set(meta.chatId, meta);
+    if (complete) {
+        chatMetaComplete.add(meta.chatId);
+    }
+    return meta;
+};
+
+const loadHistoryItems = async (...args) => {
+    const items = await chatStorage.getChatMetadata(...args);
+    items.forEach(item => cacheChatMeta(item));
+    return items;
+};
+
+const getCachedChatMeta = async (chatId) => {
+    if (chatMetaCache.has(chatId) && chatMetaComplete.has(chatId)) {
+        return chatMetaCache.get(chatId);
+    }
+    const meta = await chatStorage.getChatMetadataById(chatId);
+    if (meta) {
+        return cacheChatMeta(meta, { complete: true });
+    }
+    if (chatMetaCache.has(chatId)) {
+        return chatMetaCache.get(chatId);
+    }
+    return null;
+};
+
 const chatUI = new HistoryChatUI({
     stateManager,
     popupMenu,
     continueFunc: (index, secondaryIndex, modelChoice = null) => 
         sendChatToSidepanel({ chatId: chatCore.getChatId(), index, secondaryIndex, modelChoice }),
-    loadHistoryItems: chatStorage.getChatMetadata.bind(chatStorage),
+    loadHistoryItems: loadHistoryItems,
     addPopupActions: popupMenu.addHistoryItem.bind(popupMenu),
     loadChat: async (chatId) => { return await chatCore.loadChat(chatId); },
-    getChatMeta: async (chatId) => {return await chatStorage.getChatMetadataById(chatId);},
+    getChatMeta: getCachedChatMeta,
 });
 popupMenu.chatUI = chatUI;
 
@@ -227,10 +279,17 @@ function initMessageListeners() {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         switch (message.type) {
             case 'new_chat_saved':
-                handleNewChatSaved(message.chat);
+                handleNewChatSaved(message.chat, message.searchDoc);
                 break;
             case 'appended_messages_to_saved_chat':
-                handleAppendedMessages(message.chatId, message.addedCount, message.startIndex);
+                handleAppendedMessages(
+                    message.chatId,
+                    message.addedCount,
+                    message.startIndex,
+                    undefined,
+                    message.searchDelta,
+                    message.timestamp
+                );
                 break;
             case 'message_updated':
                 handleMessageUpdate(message.chatId, message.messageId);
@@ -242,8 +301,20 @@ function initMessageListeners() {
     });
 }
 
-async function handleAppendedMessages(chatId, addedCount, startIndex, message = null) {
-    handleHistoryItemOnNewMessage(chatId);
+async function handleAppendedMessages(chatId, addedCount, startIndex, message = null, searchDelta = null, timestamp = null) {
+    await handleHistoryItemOnNewMessage(chatId, timestamp != null ? { timestamp } : {});
+
+    if (searchDelta && searchDelta.trim()) {
+        const update = {
+            chatId,
+            delta: searchDelta,
+            timestamp
+        };
+        if (chatSearch) {
+            chatSearch.enqueueAppend(update);
+        }
+    }
+
     if (chatCore.getChatId() !== chatId) return;
     
     const newMessages = message ? [message] : await chatStorage.getMessages(chatId, startIndex, addedCount);
@@ -253,10 +324,23 @@ async function handleAppendedMessages(chatId, addedCount, startIndex, message = 
     chatCore.addMultipleFromHistory(newMessages);
 }
 
-async function handleHistoryItemOnNewMessage(chatId) {
+async function handleHistoryItemOnNewMessage(chatId, overrides = {}) {
     // due to updated timestamp, history item order (and dividers) may need to be updated
     if (!chatId) return;
-    const chatMeta = await chatStorage.getChatMetadataById(chatId);
+    let chatMeta = chatMetaCache.get(chatId);
+    let fetched = false;
+    if (chatMeta) {
+        chatMeta = { ...chatMeta, ...overrides };
+    } else {
+        const fetchedMeta = await chatStorage.getChatMetadataById(chatId);
+        if (!fetchedMeta) return;
+        fetched = true;
+        chatMeta = overrides && Object.keys(overrides).length
+            ? { ...fetchedMeta, ...overrides }
+            : fetchedMeta;
+    }
+    const wasComplete = chatMetaComplete.has(chatId);
+    cacheChatMeta(chatMeta, { complete: fetched || wasComplete });
     const historyItem = chatUI.getHistoryItem(chatId);
     if (historyItem) {
         chatUI.handleItemDeletion(historyItem);
@@ -264,11 +348,16 @@ async function handleHistoryItemOnNewMessage(chatId) {
     chatUI.handleNewChatSaved(chatMeta);
 }
 
-function handleNewChatSaved(chatMeta) {
+function handleNewChatSaved(chatMeta, searchDoc = null) {
+    cacheChatMeta(chatMeta, { complete: true });
     chatUI.handleNewChatSaved(chatMeta);
     // if no chat is open, open the new chat (might remove if annoying)
     if (chatCore.getChatId() === null) {
         chatUI.buildChat(chatMeta.chatId);
+    }
+
+    if (searchDoc && chatSearch) {
+        chatSearch.enqueueNewDocument(searchDoc);
     }
 }
 
@@ -280,18 +369,32 @@ async function handleMessageUpdate(chatId, messageId) {
     
     const isUpdate = messageId < chatCore.getLength();
     if (!isUpdate) {
-        handleAppendedMessages(chatId, 1, chatCore.getLength(), updatedMessage);
+        const delta = ChatStorage.extractTextFromMessages([updatedMessage]);
+        handleAppendedMessages(chatId, 1, chatCore.getLength(), updatedMessage, delta, updatedMessage.timestamp ?? null);
         return;
     }
     
-    handleHistoryItemOnNewMessage(chatId);
+    await handleHistoryItemOnNewMessage(chatId, { timestamp: updatedMessage.timestamp ?? Date.now() });
     if (updatedMessage.responses) chatUI.updateArenaMessage(updatedMessage, messageId);
     else chatUI.appendSingleRegeneratedMessage(updatedMessage, messageId);
     chatCore.replaceLastFromHistory(updatedMessage);
 }
 
 function handleChatRenamed(chatId, title) {
+    const cached = chatMetaCache.get(chatId);
+    if (cached) {
+        cacheChatMeta({ ...cached, title }, { complete: chatMetaComplete.has(chatId) });
+    } else {
+        void getCachedChatMeta(chatId).then(meta => {
+            if (meta) {
+                cacheChatMeta({ ...meta, title }, { complete: true });
+            }
+        });
+    }
     chatUI.handleChatRenamed(chatId, title);
+    if (chatSearch) {
+        void chatSearch.updateInIndex(chatId, title);
+    }
     if (chatCore.getChatId() === chatId) {
         chatCore.miscUpdate( { title } );
         chatUI.updateChatHeader(title);
@@ -304,17 +407,9 @@ function sendChatToSidepanel(options) {
         type: "reconstruct_chat",
         options,
     };
-    chrome.runtime.sendMessage({ type: "is_sidepanel_open" })
-        .then(response => {
-            if (!response.isOpen) {
-                return chrome.runtime.sendMessage({ type: "open_side_panel" })
-                    .then(() => {
-                        return chrome.runtime.sendMessage(message);
-                    });
-            } else {
-                return chrome.runtime.sendMessage(message);
-            }
-        });
+    chrome.runtime.sendMessage({ type: "open_side_panel" }).finally(() => {
+        chrome.runtime.sendMessage(message);
+    });
 }
 
 
@@ -394,10 +489,11 @@ async function initiateChatBackupImport(element) {
                 const importResult = await chatStorage.importChats(e.target.result);
                 element.textContent = importResult.success ? `${importResult.count} added` : 'failed :(';
                 if (!importResult.success) console.error("Import error:", importResult.error);
+                chatMetaCache.clear();
+                chatMetaComplete.clear();
                 chatUI.reloadHistoryList();
                 if (importResult.success && chatSearch) {
-                    chatSearch.markIndexStale();
-                    await chatSearch.forceRebuild().catch(err => console.error('Search rebuild failed:', err));
+                    await chatSearch.rebuildIndex().catch(err => console.error('Search rebuild failed:', err));
                 }
             } catch (error) {
                 element.textContent = "failed :(";
@@ -974,20 +1070,24 @@ class MediaTab {
     }
 }
 
-const FUZZY_MATCHER = (term) => {
-    if (!term) return null;
-    if (term.length > 10) return 0.25;
-    if (term.length > 6) return 0.18;
-    if (term.length > 3) return 0.12;
-    return null;
+const tokenizeForMiniSearch = (text) => {
+    if (!text) return [];
+    return text
+        .toLowerCase()
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[\u0000-\u001f]+/g, ' ')
+        .split(/\s+/)
+        .map(token => token.replace(/^[^a-z0-9_\-"'=\/:.#]+|[^a-z0-9_\-"'=\/:.#]+$/g, ''))
+        .filter(Boolean);
 };
 
 const MINI_SEARCH_OPTIONS = Object.freeze({
     fields: ['title', 'content'],
-    storeFields: ['id', 'title', 'timestamp'],
+    storeFields: ['id'],
+    tokenize: tokenizeForMiniSearch,
     searchOptions: {
         boost: { title: 2.25 },
-        fuzzy: FUZZY_MATCHER,
         prefix: false,
         combineWith: 'AND'
     }
@@ -1002,19 +1102,13 @@ class ChatSearch {
         this.lastQuery = '';
         this.lastNormalizedQuery = '';
         this.lastMatchingIds = null;
-        this.indexDirty = false;
-        this.indexStale = false;
-        this.persistDelayMs = 750;
-        this.persistTimeout = null;
-        this.persistInFlight = null;
-        this.handleVisibilityChange = this.handleVisibilityChange.bind(this);
-        this.beforeUnloadHandler = () => { void this.flushPersist(true); };
+        this.initialised = false;
+        this.pendingDocs = [];
+        this.pendingAppends = [];
         this.searchResultsLimit = 40;
         this.searchDisplayOffset = 0;
         this.currentDisplayItems = [];
         this.handleResultsScroll = this.handleResultsScroll.bind(this);
-        document.addEventListener('visibilitychange', this.handleVisibilityChange);
-        window.addEventListener('pagehide', this.beforeUnloadHandler, { once: false });
         this.init();
     }
 
@@ -1040,67 +1134,84 @@ class ChatSearch {
     async initSearch() {
         if (typeof window.MiniSearch === 'undefined') {
             console.warn('MiniSearch library not loaded, search will be disabled');
-            return;
+        this.initialised = true;
+        await this.processPendingOperations();
+        return;
         }
-
-        const initStart = now();
-
+        
         await waitForIdle(0);
+        const initStart = now();
+        const fetchStart = initStart;        
 
-        const [metadata, jsonStr, storedDocsSnapshot, storedCount] = await Promise.all([
-            chatStorage.getChatMetadata(Infinity, 0),
+        const [jsonStr, docsSnapshot, storedMetadata] = await Promise.all([
             chatStorage.getSearchJson(),
             chatStorage.getSearchDocs(),
-            chatStorage.getSearchCount()
+            chatStorage.getSearchMetadata()
         ]);
-
+        const fetchDuration = formatDuration(fetchStart);
+        await nextFrame();
         await waitForIdle(0);
 
-        const currentCount = metadata.length;
-
-        if (currentCount === 0) {
-            this.miniSearch = this.createMiniSearch();
-            this.allChats = [];
-            await this.persistIndex(true);
-            console.log(`Search initialised for empty chat history in ${formatDuration(initStart)}`);
-            return;
-        }
-
+        const snapshotCount = docsSnapshot.length;
         let successfullyLoadedFromCache = false;
+        let hydrateDuration = '0ms';
 
-        if (jsonStr) {
-            try {
-                const data = JSON.parse(jsonStr);
-                const storedDocs = this.rehydrateDocuments(data, storedDocsSnapshot);
+        this.docIndex.clear();
+        this.allChats = [];
 
-                if (storedDocs) {
-                    this.miniSearch = this.loadMiniSearch(jsonStr);
-                    this.allChats = storedDocs;
-                    this.docIndex.clear();
-                    for (const doc of this.allChats) {
-                        this.docIndex.set(doc.id, doc);
-                    }
-                    successfullyLoadedFromCache = true;
-                }
-            } catch (error) {
-                console.error('Invalid stored index, clearing and rebuilding:', error);
+        const hydrateStart = now();
+        let indexMetadata = [];
+        try {
+            const hydratedDocs = snapshotCount ? this.rehydrateDocuments(docsSnapshot) : [];
+
+            if (jsonStr && Array.isArray(hydratedDocs) && hydratedDocs.length) {
+                this.allChats = this.sortDocsByTimestamp(hydratedDocs);
+                this.miniSearch = this.loadMiniSearch(jsonStr);
+                indexMetadata = Array.isArray(storedMetadata) && storedMetadata.length ? storedMetadata : [];
+                successfullyLoadedFromCache = true;
             }
+
+            if (!successfullyLoadedFromCache && Array.isArray(hydratedDocs) && hydratedDocs.length) {
+                this.allChats = this.sortDocsByTimestamp(hydratedDocs);
+                this.miniSearch = this.createMiniSearch();
+                this.miniSearch.addAll(this.allChats);
+                successfullyLoadedFromCache = true;
+            }
+        } catch (error) {
+            console.error('Invalid stored index, clearing and rebuilding:', error);
+            this.docIndex.clear();
+            this.allChats = [];
+            this.miniSearch = null;
+            indexMetadata = [];
         }
 
-        if (!successfullyLoadedFromCache || this.indexStale) {
-            await this.rebuildIndex(metadata, initStart);
-            this.indexStale = false;
-            return;
-        }
+        hydrateDuration = formatDuration(hydrateStart);
 
-        const { changed, summary } = await this.syncIndexWithMetadata(metadata);
-        const shouldPersist = changed || storedCount !== currentCount;
+        try {
+            if (!successfullyLoadedFromCache || !this.miniSearch) {
+                const rebuildStart = now();
+                await this.rebuildIndex(null, initStart);
+                const rebuildDuration = formatDuration(rebuildStart);
+                this.indexStale = false;
+                console.log(`Search index rebuilt (load=${fetchDuration}, hydrate=${hydrateDuration}, rebuild=${rebuildDuration})`);
+                return;
+            }
 
-        if (shouldPersist) {
-            await this.persistIndex();
-            console.log(`Search index synchronised (${summary}) in ${formatDuration(initStart)}`);
-        } else {
-            console.log(`Search loaded from storage with ${currentCount} chats (no changes) in ${formatDuration(initStart)}`);
+            const syncStart = now();
+            const { changed, summary } = await this.syncIndexWithDocs(indexMetadata);
+            const syncDuration = formatDuration(syncStart);
+
+            if (changed) {
+                const persistStart = now();
+                await this.persistIndex();
+                const persistDuration = formatDuration(persistStart);
+                console.log(`Search index synchronised (${summary}) load=${fetchDuration}, hydrate=${hydrateDuration}, sync=${syncDuration}, persist=${persistDuration}`);
+            } else {
+                console.log(`Search loaded from storage with ${snapshotCount} chats (no changes) load=${fetchDuration}, hydrate=${hydrateDuration}, sync=${syncDuration}`);
+            }
+        } finally {
+            this.initialised = true;
+            await this.processPendingOperations();
         }
     }
 
@@ -1112,33 +1223,220 @@ class ChatSearch {
         return window.MiniSearch.loadJSON(json, MINI_SEARCH_OPTIONS);
     }
 
+    buildIndexMetadataFromDocs(docs) {
+        return docs.map(doc => ({
+            id: doc.id,
+            title: doc.title,
+            timestamp: doc.timestamp ?? null
+        }));
+    }
+
+    enqueueNewDocument(doc) {
+        if (!doc) return;
+        if (this.initialised && this.miniSearch) {
+            void (async () => {
+                try {
+                    await this.insertDocument(doc);
+                    if (this.pendingAppends.length) {
+                        await this.processPendingAppends();
+                    }
+                } catch (error) {
+                    console.error('Failed to insert search document:', error);
+                }
+            })();
+        } else {
+            const normalisedId = this.normaliseId(doc.id);
+            const exists = this.pendingDocs.some(existing => this.normaliseId(existing.id) === normalisedId);
+            if (!exists) this.pendingDocs.push(doc);
+        }
+    }
+
+    enqueueAppend(update) {
+        if (!update || !update.delta || !update.delta.trim()) return;
+        const payload = {
+            chatId: this.normaliseId(update.chatId),
+            delta: update.delta.trim(),
+            timestamp: update.timestamp ?? null
+        };
+        if (typeof payload.timestamp !== 'number') {
+            payload.timestamp = null;
+        }
+        if (this.initialised && this.miniSearch) {
+            void (async () => {
+                try {
+                    await this.applyAppendDelta(payload);
+                } catch (error) {
+                    console.error('Failed to apply search delta:', error);
+                }
+            })();
+        } else {
+            const exists = this.pendingAppends.some(item =>
+                item.chatId === payload.chatId &&
+                item.delta === payload.delta &&
+                item.timestamp === payload.timestamp
+            );
+            if (!exists) this.pendingAppends.push(payload);
+        }
+    }
+
+    async processPendingOperations() {
+        if (!this.miniSearch) return;
+        const processedDocs = await this.processPendingDocs();
+        const processedAppends = await this.processPendingAppends();
+        if (processedDocs && this.pendingAppends.length) {
+            await this.processPendingAppends();
+        } else if (!processedDocs && !processedAppends && this.pendingAppends.length > 0) {
+            // If append updates are waiting for corresponding docs, leave them queued.
+        }
+    }
+
+    async processPendingDocs() {
+        if (!this.pendingDocs.length || !this.miniSearch) return false;
+        let processed = false;
+        while (this.pendingDocs.length) {
+            const doc = this.pendingDocs.shift();
+            if (!doc) continue;
+            processed = (await this.insertDocument(doc)) || processed;
+        }
+        return processed;
+    }
+
+    async processPendingAppends() {
+        if (!this.pendingAppends.length || !this.miniSearch) return false;
+        let applied = false;
+        const remaining = [];
+        while (this.pendingAppends.length) {
+            const update = this.pendingAppends.shift();
+            if (!update) continue;
+            const doc = this.docIndex.get(update.chatId);
+            if (!doc) {
+                remaining.push(update);
+                continue;
+            }
+            await this.applyAppendDelta(update);
+            applied = true;
+        }
+        this.pendingAppends = remaining;
+        return applied;
+    }
+
+    async insertDocument(rawDoc) {
+        if (!rawDoc) return;
+
+        const id = this.normaliseId(rawDoc.id);
+        const prepared = this.decorateDocument({
+            id,
+            title: rawDoc.title ?? '',
+            content: rawDoc.content ?? '',
+            timestamp: (typeof rawDoc.timestamp === 'number')
+                ? rawDoc.timestamp
+                : (Number(rawDoc.timestamp) || null)
+        });
+
+        const existing = this.docIndex.get(id);
+        if (existing) {
+            if (this.isDocumentIndexed(id)) {
+                try {
+                    if (typeof this.miniSearch.discard === 'function') {
+                        this.miniSearch.discard(id);
+                    } else {
+                        this.miniSearch.remove(existing);
+                    }
+                } catch (error) {
+                    console.warn('Search removal failed during insert, scheduling rebuild:', error);
+                    this.indexStale = true;
+                }
+            }
+            this.removeFromAllChats(id);
+        }
+
+        this.ensureDocumentIndexed(prepared);
+        this.docIndex.set(id, prepared);
+        this.insertIntoAllChats(prepared);
+        this.resetQueryCache();
+    }
+
+    async applyAppendDelta(update) {
+        if (!update || !update.delta) return;
+        const doc = this.docIndex.get(update.chatId);
+        if (!doc) {
+            const exists = this.pendingAppends.some(item =>
+                item.chatId === update.chatId &&
+                item.delta === update.delta &&
+                item.timestamp === update.timestamp
+            );
+            if (!exists) this.pendingAppends.push(update);
+            return;
+        }
+
+        const trimmed = update.delta.trim();
+        if (!trimmed) return;
+
+        if (update.timestamp != null) {
+            doc.timestamp = update.timestamp;
+        }
+
+        if (typeof doc.searchTitle !== 'string') {
+            doc.searchTitle = this.normaliseForSearch(doc.title || '');
+        }
+
+        const normalisedDelta = this.normaliseForSearch(trimmed);
+        if (normalisedDelta) {
+            const base = typeof doc.content === 'string' ? doc.content : '';
+            doc.content = base ? `${base} ${normalisedDelta}`.trim() : normalisedDelta;
+            doc._normalized = true;
+        } else if (typeof doc.content !== 'string') {
+            doc.content = this.normaliseForSearch('');
+            doc._normalized = true;
+        }
+
+        this.replaceDocumentInIndex(doc);
+        if (update.timestamp != null) {
+            this.insertIntoAllChats(doc);
+        }
+        this.resetQueryCache();
+    }
+
     normaliseId(rawId) {
         const idString = `${rawId}`;
         return idString.match(/^\d+$/) ? Number(idString) : rawId;
     }
 
-    normaliseForSearch(input) {
+    normaliseForSearch(input, { collapseWhitespace = true } = {}) {
         if (!input) return '';
 
-        return input
+        const normalized = input
             .toLowerCase()
             .normalize('NFKD')
             .replace(/[\u0300-\u036f]/g, '')
-            .replace(/[^a-z0-9]+/g, ' ')
+            .replace(/[\u0000-\u001f]+/g, ' ');
+
+        if (!collapseWhitespace) {
+            return normalized.trim();
+        }
+
+        return normalized
             .replace(/\s+/g, ' ')
             .trim();
     }
 
     decorateDocument(doc) {
         if (!doc) return doc;
+
         doc.searchTitle = this.normaliseForSearch(doc.title || '');
-        doc.searchContent = this.normaliseForSearch(doc.content || '');
+
+        if (doc._normalized !== true) {
+            doc.content = this.normaliseForSearch(doc.content || '');
+            doc._normalized = true;
+        }
+
         return doc;
     }
 
     ensureDocumentSearchText(doc) {
         if (!doc) return '';
-        if (!doc.searchTitle || !doc.searchContent) {
+        if (typeof doc.searchTitle !== 'string' ||
+            typeof doc.content !== 'string') {
             this.decorateDocument(doc);
         }
         return doc;
@@ -1149,7 +1447,7 @@ class ChatSearch {
         const decorated = this.ensureDocumentSearchText(doc);
         return (
             (decorated.searchTitle && decorated.searchTitle.includes(normalisedQuery)) ||
-            (decorated.searchContent && decorated.searchContent.includes(normalisedQuery))
+            (decorated.content && decorated.content.includes(normalisedQuery))
         );
     }
 
@@ -1159,39 +1457,139 @@ class ChatSearch {
         this.lastMatchingIds = null;
     }
 
-    rehydrateDocuments(indexData, storedDocsSnapshot) {
-        const docsFromIndex = indexData?.documentStore?.docs;
+    getTimestampValue(doc) {
+        const value = Number(doc?.timestamp ?? 0);
+        return Number.isFinite(value) ? value : 0;
+    }
 
-        if (Array.isArray(storedDocsSnapshot) && storedDocsSnapshot.length) {
-            return storedDocsSnapshot.map(doc => {
-                const id = this.normaliseId(doc.id);
-                const content = doc.content ?? '';
-                const hydrated = this.decorateDocument({
-                    id,
-                    title: doc.title ?? '',
-                    content,
-                    timestamp: doc.timestamp ?? null
-                });
-                this.docIndex.set(id, hydrated);
-                return hydrated;
-            });
+    findAllChatsIndex(id) {
+        if (!Array.isArray(this.allChats)) return -1;
+        return this.allChats.findIndex(doc => doc?.id === id);
+    }
+
+    removeFromAllChats(id) {
+        const index = this.findAllChatsIndex(id);
+        if (index === -1) return false;
+        this.allChats.splice(index, 1);
+        return true;
+    }
+
+    findInsertPositionByTimestamp(doc) {
+        if (!Array.isArray(this.allChats) || this.allChats.length === 0) return 0;
+        const target = this.getTimestampValue(doc);
+        let low = 0;
+        let high = this.allChats.length;
+
+        while (low < high) {
+            const mid = Math.floor((low + high) / 2);
+            const midValue = this.getTimestampValue(this.allChats[mid]);
+            if (midValue > target) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
         }
 
-        if (!docsFromIndex) {
-            console.warn('Stored search index missing document payload, rebuilding');
+        return low;
+    }
+
+    insertIntoAllChats(doc) {
+        if (!Array.isArray(this.allChats)) {
+            this.allChats = doc ? [doc] : [];
+            return;
+        }
+
+        if (!doc) return;
+
+        const existingIndex = this.findAllChatsIndex(doc.id);
+        if (existingIndex !== -1) {
+            this.allChats.splice(existingIndex, 1);
+        }
+
+        const position = this.findInsertPositionByTimestamp(doc);
+        this.allChats.splice(position, 0, doc);
+    }
+
+    sortDocsByTimestamp(docs = []) {
+        docs.sort((a, b) => this.getTimestampValue(b) - this.getTimestampValue(a));
+        return docs;
+    }
+
+    isDocumentIndexed(id) {
+        if (!this.miniSearch) return false;
+        const targetId = this.normaliseId(id);
+
+        if (typeof this.miniSearch.has === 'function') {
+            try {
+                return this.miniSearch.has(targetId);
+            } catch (error) {
+                // ignore and fall back to internal map
+            }
+        }
+
+        const docIds = this.miniSearch._documentIds;
+        if (docIds instanceof Map) {
+            return docIds.has(targetId);
+        }
+
+        if (docIds && typeof docIds === 'object') {
+            return Boolean(docIds[targetId]);
+        }
+
+        return false;
+    }
+
+    ensureDocumentIndexed(doc) {
+        if (!this.miniSearch || !doc || doc.id == null) return false;
+        const prepared = this.ensureDocumentSearchText(doc);
+        const id = this.normaliseId(prepared.id);
+        if (this.isDocumentIndexed(id)) return false;
+
+        try {
+            this.miniSearch.add(prepared);
+            return true;
+        } catch (error) {
+            console.warn('Search add failed, scheduling rebuild:', error);
+            this.indexStale = true;
+            return false;
+        }
+    }
+
+    replaceDocumentInIndex(doc) {
+        if (!this.miniSearch || !doc || doc.id == null) return false;
+        const prepared = this.ensureDocumentSearchText(doc);
+        const id = this.normaliseId(prepared.id);
+
+        if (!this.isDocumentIndexed(id)) {
+            return this.ensureDocumentIndexed(prepared);
+        }
+
+        try {
+            this.miniSearch.replace(prepared);
+            return true;
+        } catch (error) {
+            console.warn('Search replace failed, re-indexing:', error);
+            this.indexStale = true;
+            return this.ensureDocumentIndexed(prepared);
+        }
+    }
+
+    rehydrateDocuments(storedDocsSnapshot) {
+        if (!Array.isArray(storedDocsSnapshot) || storedDocsSnapshot.length === 0) {
+            console.warn('Stored search documents missing, rebuilding index');
             return null;
         }
 
-        return Object.keys(docsFromIndex).map(key => {
-            const docPayload = docsFromIndex[key];
-            const id = this.normaliseId(docPayload?.id ?? key);
-            const content = docPayload?.content ?? '';
-            const hydrated = this.decorateDocument({
+        return storedDocsSnapshot.map(raw => {
+            const id = this.normaliseId(raw.id);
+            const hydrated = {
                 id,
-                title: docPayload?.title ?? '',
-                content,
-                timestamp: docPayload?.timestamp ?? null
-            });
+                title: raw.title ?? '',
+                timestamp: raw.timestamp ?? null,
+                content: typeof raw.content === 'string' ? raw.content : '',
+                searchTitle: typeof raw.searchTitle === 'string' ? raw.searchTitle : '',
+                _normalized: true
+            };
             this.docIndex.set(id, hydrated);
             return hydrated;
         });
@@ -1201,61 +1599,61 @@ class ChatSearch {
         const buildStart = startOverride ?? now();
         const metaList = metadata || await chatStorage.getChatMetadata(Infinity, 0);
 
-        this.allChats = await this.buildDocumentsInBatches(metaList);
+        const documents = await Promise.all(metaList.map(async meta => {
+            const chat = await chatStorage.loadChat(meta.chatId);
+            const document = {
+                id: this.normaliseId(meta.chatId),
+                title: meta.title ?? '',
+                content: ChatStorage.extractTextFromMessages(chat?.messages),
+                timestamp: meta.timestamp ?? null
+            };
+            return this.decorateDocument(document);
+        }));
+
+        this.allChats = this.sortDocsByTimestamp(documents);
         this.docIndex.clear();
-        for (const doc of this.allChats) {
-            this.docIndex.set(doc.id, doc);
-        }
+        this.allChats.forEach(doc => this.docIndex.set(doc.id, doc));
 
         this.miniSearch = this.createMiniSearch();
-
         this.miniSearch.addAll(this.allChats);
 
+        await chatStorage.putSearchDocs(this.allChats);
         await this.persistIndex();
 
         console.log(`Search built with ${this.allChats.length} chats in ${formatDuration(buildStart)}`);
     }
 
-    async buildDocumentsInBatches(metaList, batchSize = 12) {
-        const documents = [];
-
-        for (let i = 0; i < metaList.length; i += batchSize) {
-            const batch = metaList.slice(i, i + batchSize);
-            const docs = await Promise.all(batch.map(meta => this.buildDocument(meta)));
-            documents.push(...docs);
-
-            await waitForIdle(50);
-        }
-
-        return documents;
-    }
-
-    async forceRebuild() {
-        await this.rebuildIndex();
-    }
-
-    async addToIndex(chatMeta) {
-        if (!this.miniSearch) return;
-        const doc = await this.buildDocument(chatMeta);
-        this.miniSearch.add(doc);
-        this.allChats.push(doc);
-        this.docIndex.set(doc.id, doc);
-        this.resetQueryCache();
-        this.markIndexDirty();
-        await waitForIdle(10);
-    }
-
     async removeFromIndex(chatId) {
         if (!this.miniSearch) return;
-        const doc = this.docIndex.get(chatId);
+        const normalisedId = this.normaliseId(chatId);
+        this.pendingDocs = this.pendingDocs.filter(doc => this.normaliseId(doc?.id) !== normalisedId);
+        this.pendingAppends = this.pendingAppends.filter(update => update?.chatId !== normalisedId);
+        const doc = this.docIndex.get(normalisedId);
         if (!doc) return;
 
-        this.miniSearch.remove(doc);
-        this.docIndex.delete(chatId);
-        this.allChats = this.allChats.filter(d => d.id !== chatId);
+        const isIndexed = this.isDocumentIndexed(normalisedId);
+        let removed = false;
+        if (isIndexed) {
+            try {
+                if (typeof this.miniSearch.discard === 'function') {
+                    this.miniSearch.discard(normalisedId);
+                } else {
+                    this.miniSearch.remove(doc);
+                }
+                removed = true;
+            } catch (error) {
+                console.warn('Search index removal failed; marking index stale:', error);
+            }
+        }
+
+        this.docIndex.delete(normalisedId);
+        this.allChats = this.allChats.filter(d => d.id !== normalisedId);
         this.resetQueryCache();
-        this.markIndexDirty();
-        await waitForIdle(10);
+        await chatStorage.deleteSearchDoc(normalisedId);
+
+        if (!removed) {
+            this.indexStale = true;
+        }
     }
 
     async updateInIndex(chatId, newTitle) {
@@ -1264,201 +1662,67 @@ class ChatSearch {
         if (!doc) return;
 
         doc.title = newTitle;
-        this.miniSearch.replace(doc);
+        this.decorateDocument(doc);
+        this.replaceDocumentInIndex(doc);
+        this.allChats = this.sortDocsByTimestamp(Array.from(this.docIndex.values()));
         this.resetQueryCache();
-        this.markIndexDirty();
-        await waitForIdle(10);
-    }
-
-    markIndexDirty() {
-        this.indexDirty = true;
-        this.clearPersistTimer();
-        this.persistTimeout = setTimeout(() => { void this.flushPersist(); }, this.persistDelayMs);
-    }
-
-    markIndexStale() {
-        this.indexStale = true;
-    }
-
-    async flushPersist(force = false) {
-        if (!this.indexDirty && !force) return;
-
-        if (this.persistInFlight) {
-            await this.persistInFlight;
-            if (!this.indexDirty && !force) return;
-        }
-
-        await waitForIdle(0);
-
-        const persistPromise = this.persistIndex(force).finally(() => {
-            this.persistInFlight = null;
-        });
-
-        this.persistInFlight = persistPromise;
-        await persistPromise;
     }
 
     async persistIndex(force = false) {
         if (!this.miniSearch && !force) return;
         const jsonStr = JSON.stringify(this.miniSearch ? this.miniSearch.toJSON() : {});
-        await chatStorage.setSearchIndex(jsonStr, this.allChats.length, this.allChats);
-        this.indexDirty = false;
-        this.clearPersistTimer();
+        const metadata = this.buildIndexMetadataFromDocs(this.allChats);
+        await chatStorage.setSearchIndex(jsonStr, this.allChats.length, metadata);
     }
 
-    async buildDocument(meta) {
-        const chat = await chatStorage.loadChat(meta.chatId);
-        const document = {
-            id: this.normaliseId(meta.chatId),
-            title: meta.title,
-            content: this.extractTextFromMessages(chat.messages),
-            timestamp: meta.timestamp
-        };
-        await waitForIdle(5);
-        return document;
-    }
-
-    async syncIndexWithMetadata(metadata) {
-        const metadataMap = new Map(metadata.map(meta => [this.normaliseId(meta.chatId), meta]));
-        const existingDocsMap = new Map(this.docIndex);
-
-        let removed = 0;
+    async syncIndexWithDocs(indexMetadata = []) {
+        const snapshot = new Map(indexMetadata.map(entry => [entry.id, entry]));
         let added = 0;
         let updated = 0;
+        let removed = 0;
 
-        let processed = 0;
-
-        for (const [id, doc] of existingDocsMap.entries()) {
-            if (!metadataMap.has(id)) {
-                this.miniSearch.remove(doc);
-                this.docIndex.delete(id);
-                removed++;
-            }
-
-            processed++;
-            if (processed % 50 === 0) {
-                await waitForIdle(25);
-            }
-        }
-
-        const additions = [];
-        const renameUpdates = [];
-        const contentUpdates = [];
-
-        for (const meta of metadata) {
-            const id = this.normaliseId(meta.chatId);
-            const existing = this.docIndex.get(id);
-
-            if (!existing) {
-                additions.push(meta);
+        for (const [id, doc] of this.docIndex.entries()) {
+            const meta = snapshot.get(id);
+            if (!meta) {
+                this.ensureDocumentIndexed(doc);
+                this.insertIntoAllChats(doc);
+                added++;
                 continue;
             }
 
-            const titleChanged = existing.title !== meta.title;
-            const timestampChanged = existing.timestamp !== meta.timestamp;
+            snapshot.delete(id);
 
-            if (!titleChanged && !timestampChanged) continue;
-
-            if (timestampChanged) {
-                contentUpdates.push(meta);
-            } else if (titleChanged) {
-                renameUpdates.push(meta);
-            }
-
-            processed++;
-            if (processed % 50 === 0) {
-                await waitForIdle(25);
+            if (meta.title !== doc.title || meta.timestamp !== doc.timestamp) {
+                this.replaceDocumentInIndex(doc);
+                this.insertIntoAllChats(doc);
+                updated++;
             }
         }
 
-        if (additions.length) {
-            const newDocs = await Promise.all(additions.map(meta => this.buildDocument(meta)));
-            newDocs.forEach(doc => {
-                this.miniSearch.add(doc);
-                this.docIndex.set(doc.id, doc);
-            });
-            added = newDocs.length;
-            await waitForIdle(25);
+        for (const [id] of snapshot) {
+            try {
+                if (typeof this.miniSearch.discard === 'function') {
+                    this.miniSearch.discard(id);
+                } else {
+                    const stored = snapshot.get(id);
+                    if (stored) {
+                        this.miniSearch.remove(stored);
+                    }
+                }
+                removed++;
+            } catch (error) {
+                this.indexStale = true;
+                console.warn('Search removal failed during sync, scheduling rebuild:', error);
+            }
         }
 
-        if (renameUpdates.length) {
-            renameUpdates.forEach(meta => {
-                const id = this.normaliseId(meta.chatId);
-                const existing = this.docIndex.get(id);
-                if (!existing) return;
-                existing.title = meta.title;
-                existing.timestamp = meta.timestamp;
-                this.miniSearch.replace(existing);
-            });
-            updated += renameUpdates.length;
-            await waitForIdle(25);
-        }
-
-        if (contentUpdates.length) {
-            const updatedDocs = await Promise.all(contentUpdates.map(meta => this.buildDocument(meta)));
-            updatedDocs.forEach(doc => {
-                this.miniSearch.replace(doc);
-                this.docIndex.set(doc.id, doc);
-            });
-            updated += updatedDocs.length;
-            await waitForIdle(25);
-        }
-
-        this.allChats = metadata
-            .map(meta => this.docIndex.get(this.normaliseId(meta.chatId)))
-            .filter(Boolean);
-
-        const changed = Boolean(removed || added || updated);
-        const summary = `${added} added, ${updated} updated, ${removed} removed`;
-
-        if (changed) {
+        if (added || updated || removed) {
             this.resetQueryCache();
         }
-
-        return { changed, summary };
-    }
-
-    handleVisibilityChange() {
-        if (document.visibilityState === 'hidden') {
-            void this.flushPersist(true);
-        }
-    }
-
-    clearPersistTimer() {
-        if (this.persistTimeout) {
-            clearTimeout(this.persistTimeout);
-            this.persistTimeout = null;
-        }
-    }
-
-    extractTextFromMessages(messages) {
-        if (!messages || !Array.isArray(messages)) return '';
-
-        return messages.map(msg => this.extractMessageText(msg)).join(' ');
-    }
-
-    extractMessageText(msg) {
-        if (!msg) return '';
-
-        if (Array.isArray(msg.contents)) {
-            return msg.contents
-                .flat()
-                .filter(part => part && (part.type === 'text' || part.type === 'thought'))
-                .map(part => part.content || '')
-                .join(' ');
-        }
-
-        if (msg.responses) {
-            return ['model_a', 'model_b']
-                .map(modelKey => msg.responses[modelKey]?.messages || [])
-                .flat()
-                .flat()
-                .filter(part => part && part.type === 'text')
-                .map(part => part.content || '')
-                .join(' ');
-        }
-
-        return '';
+        return {
+            changed: Boolean(added || updated || removed),
+            summary: `${added} added, ${updated} updated, ${removed} removed`
+        };
     }
 
     handleSearch(query) {
@@ -1481,42 +1745,57 @@ class ChatSearch {
         try {
             const hasTrailingSpace = /\s$/.test(query);
             const normalisedQuery = this.normaliseForSearch(trimmed);
-            const cacheKey = `${trimmed}__${hasTrailingSpace ? '1' : '0'}`;
+            const needsLiteralCheck = /[^a-z0-9]/i.test(trimmed);
+            const cacheKey = `${normalisedQuery}__${hasTrailingSpace ? '1' : '0'}`;
 
             let finalIds;
 
-            if (this.lastQuery === cacheKey && this.lastMatchingIds) {
-                finalIds = new Set(this.lastMatchingIds);
+            if (this.lastQuery === cacheKey && Array.isArray(this.lastMatchingIds)) {
+                finalIds = [...this.lastMatchingIds];
             } else {
                 const miniSearchResults = this.miniSearch.search(trimmed, {
-                    fuzzy: FUZZY_MATCHER,
                     prefix: !hasTrailingSpace,
                     combineWith: 'AND'
-                }).map(result => this.normaliseId(result.id));
+                });
 
-                const resultIdSet = new Set(miniSearchResults);
+                const exactMatches = [];
+                const partialMatches = [];
+                const seen = new Set();
 
-                if (normalisedQuery) {
-                    for (const doc of this.allChats) {
-                        if (!this.documentContainsQuery(doc, normalisedQuery)) continue;
-                        resultIdSet.add(doc.id);
+                for (const result of miniSearchResults) {
+                    const normalisedId = this.normaliseId(result.id);
+                    if (seen.has(normalisedId)) continue;
+                    const doc = this.docIndex.get(normalisedId);
+                    if (!doc) continue;
+                    seen.add(normalisedId);
+                    if (needsLiteralCheck && normalisedQuery && this.documentContainsQuery(doc, normalisedQuery)) {
+                        exactMatches.push(normalisedId);
+                    } else {
+                        partialMatches.push(normalisedId);
                     }
                 }
 
-                finalIds = resultIdSet;
-                this.lastMatchingIds = new Set(resultIdSet);
+                if (needsLiteralCheck && exactMatches.length > 0) {
+                    finalIds = exactMatches.concat(partialMatches);
+                } else {
+                    finalIds = partialMatches;
+                }
+
+                this.lastMatchingIds = [...finalIds];
                 this.lastQuery = cacheKey;
                 this.lastNormalizedQuery = normalisedQuery;
             }
 
-            this.currentDisplayItems = this.buildSearchResults(Array.from(finalIds));
+            this.currentDisplayItems = this.buildSearchResults(finalIds);
             this.searchDisplayOffset = 0;
             this.renderNextSearchBatch(true);
 
+            const highlightAllowed = trimmed.length >= 3;
             this.chatUI.setSearchHighlight({
                 rawQuery: trimmed,
-                resultIds: Array.from(finalIds),
-                normalizedQuery: normalisedQuery
+                resultIds: finalIds,
+                normalizedQuery: normalisedQuery,
+                highlightAllowed
             });
         } catch (error) {
             console.error('Search error:', error);
@@ -1589,7 +1868,7 @@ class ChatSearch {
         if (!container || this.currentDisplayItems.length === 0) return;
 
         const { scrollTop, scrollHeight, clientHeight } = container;
-        const nearBottom = scrollHeight - (scrollTop + clientHeight) < 16;
+        const nearBottom = scrollHeight - (scrollTop + clientHeight) < 100;
 
         if (nearBottom) {
             this.renderNextSearchBatch();
@@ -1617,11 +1896,10 @@ class ChatSearch {
         allDividers.forEach(divider => divider.classList.remove('search-hidden'));
 
         document.getElementById('search-clear').style.display = 'none';
-        this.lastMatchingIds = null;
+        this.resetQueryCache();
     }
 
     async reindex() {
-        const currentCount = await chatStorage.getChatCount();
         await this.rebuildIndex();
     }
 }
@@ -1629,16 +1907,12 @@ class ChatSearch {
 let mediaTab;
 let chatSearch;
 
-function init() {
+document.addEventListener('DOMContentLoaded', () => {
     initMessageListeners();
     document.getElementById('auto-rename').onclick = autoRenameUnmodified;
     document.getElementById('export').onclick = (e) => initiateChatBackupDownload(e.target);
     document.getElementById('import').onclick = (e) => initiateChatBackupImport(e.target);
 
-    // Initialize media tab and search
     mediaTab = new MediaTab(chatStorage, chatUI);
     chatSearch = new ChatSearch(chatUI);
-}
-
-
-document.addEventListener('DOMContentLoaded', init);
+});

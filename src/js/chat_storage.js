@@ -89,6 +89,10 @@ export class ChatStorage {
                 const searchStore = db.createObjectStore('searchIndex', { keyPath: 'id' });
                 searchStore.createIndex('id', 'id', { unique: true });
             }
+
+            if (!db.objectStoreNames.contains('searchDocs')) {
+                db.createObjectStore('searchDocs', { keyPath: 'id' });
+            }
         }
     }
 
@@ -236,10 +240,11 @@ export class ChatStorage {
 
     async createChatWithMessages(title, messages, bonus_options = {}) {
         const db = await this.getDB();
-        const tx = db.transaction(['chatMeta', 'messages', 'mediaIndex'], 'readwrite');
+        const tx = db.transaction(['chatMeta', 'messages', 'mediaIndex', 'searchDocs'], 'readwrite');
         const metaStore = tx.objectStore('chatMeta');
         const messageStore = tx.objectStore('messages');
         const mediaStore = tx.objectStore('mediaIndex');
+        const searchDocsStore = tx.objectStore('searchDocs');
 
         return new Promise((resolve, reject) => {
             const chatMeta = {
@@ -268,14 +273,26 @@ export class ChatStorage {
                         const mediaPromises = this.indexImagesFromMessages(chatId, messages, mediaStore);
                         return Promise.all(mediaPromises);
                     })
-                    .then(() => {
+                    .then(() => new Promise((resolveDoc, rejectDoc) => {
+                        const searchDoc = ChatStorage.buildSearchDocument({
+                            chatId,
+                            title: chatMeta.title,
+                            timestamp: chatMeta.timestamp,
+                            messages
+                        });
+                        const putReq = searchDocsStore.put(searchDoc);
+                        putReq.onsuccess = () => resolveDoc(searchDoc);
+                        putReq.onerror = () => rejectDoc(putReq.error);
+                    }))
+                    .then((searchDoc) => {
                         // Send message after successful creation
                         chrome.runtime.sendMessage({
                             type: 'new_chat_saved',
                             chat: {
                                 chatId,
                                 ...chatMeta,
-                            }
+                            },
+                            searchDoc
                         });
 
                         resolve({
@@ -321,11 +338,26 @@ export class ChatStorage {
 
         await this.updateChatOption(chatId, { timestamp });
 
+        const searchDelta = ChatStorage.extractTextFromMessages(messages);
+        if (searchDelta.trim()) {
+            let appended = false;
+            try {
+                appended = await this.appendToSearchDoc(chatId, searchDelta, timestamp);
+            } catch (error) {
+                console.warn('Failed to append search doc:', error);
+            }
+            if (!appended) {
+                await this.refreshSearchDoc(chatId);
+            }
+        }
+
         chrome.runtime.sendMessage({
             type: 'appended_messages_to_saved_chat',
             chatId: chatId,
             addedCount: messages.length,
-            startIndex: startMessageIdIncrementAt
+            startIndex: startMessageIdIncrementAt,
+            timestamp,
+            searchDelta
         });
 
         return results;
@@ -360,6 +392,8 @@ export class ChatStorage {
 
         await this.updateChatOption(chatId, { timestamp });
 
+        await this.refreshSearchDoc(chatId);
+
         chrome.runtime.sendMessage({
             type: 'message_updated',
             chatId: chatId,
@@ -385,39 +419,56 @@ export class ChatStorage {
         const db = await this.getDB();
         const tx = db.transaction(['messages'], 'readonly');
         const messageStore = tx.objectStore('messages');
-    
+
+        const hasFiniteLimit = Number.isInteger(limit) && limit > 0;
+        const hasValidStart = Number.isInteger(startIndex) && startIndex >= 0;
+
+        if (hasFiniteLimit && hasValidStart) {
+            const requests = [];
+            for (let offset = 0; offset < limit; offset++) {
+                const messageId = startIndex + offset;
+                requests.push(new Promise((resolve) => {
+                    const req = messageStore.get([chatId, messageId]);
+                    req.onsuccess = () => resolve(req.result || null);
+                    req.onerror = () => resolve(null);
+                }));
+            }
+            const results = await Promise.all(requests);
+            return results.filter(Boolean);
+        }
+
         return new Promise((resolve) => {
             const messages = [];
-            let count = 0;
-            let skipped = 0;
-    
+            let collected = 0;
             const index = messageStore.index('chatId');
-            // Using 'next' instead of 'prev' for ascending order
             const cursorRequest = index.openCursor(IDBKeyRange.only(chatId), 'next');
-    
+
             cursorRequest.onsuccess = (event) => {
                 const cursor = event.target.result;
-    
-                if (!cursor || count >= limit) {
+                if (!cursor) {
                     resolve(messages);
                     return;
                 }
-    
-                // Skip messages until startIndex
-                if (skipped < startIndex) {
-                    skipped++;
-                    cursor.continue();
+
+                const messageId = typeof cursor.value?.messageId === 'number' ? cursor.value.messageId : null;
+                if (typeof messageId === 'number' && messageId < startIndex) {
+                    const skip = startIndex - messageId;
+                    if (skip > 0) {
+                        cursor.advance(skip);
+                    }
                     return;
                 }
-    
+
                 messages.push(cursor.value);
-                count++;
+                collected++;
+                if (hasFiniteLimit && collected >= limit) {
+                    resolve(messages);
+                    return;
+                }
                 cursor.continue();
             };
-    
-            cursorRequest.onerror = () => {
-                resolve([]);
-            };
+
+            cursorRequest.onerror = () => resolve([]);
         });
     }
 
@@ -508,7 +559,14 @@ export class ChatStorage {
             title: newTitle,
             renamed: true
         });
-    
+
+        const metaUpdated = await this.updateSearchDocMeta(chatId, {
+            title: newTitle
+        });
+        if (!metaUpdated) {
+            await this.refreshSearchDoc(chatId);
+        }
+
         if (announceUpdate) {
             chrome.runtime.sendMessage({
                 type: 'chat_renamed',
@@ -542,11 +600,12 @@ export class ChatStorage {
 
     async deleteChat(chatId) {
         const db = await this.getDB();
-        const tx = db.transaction(['messages', 'chatMeta', 'mediaIndex'], 'readwrite');
+        const tx = db.transaction(['messages', 'chatMeta', 'mediaIndex', 'searchDocs'], 'readwrite');
 
         const messageStore = tx.objectStore('messages');
         const metaStore = tx.objectStore('chatMeta');
         const mediaStore = tx.objectStore('mediaIndex');
+        const searchDocsStore = tx.objectStore('searchDocs');
 
         const messageIndex = messageStore.index('chatId');
         const mediaIndex = mediaStore.index('chatId');
@@ -576,7 +635,16 @@ export class ChatStorage {
                     }
                 };
             }),
-            metaStore.delete(chatId)
+            new Promise((resolve) => {
+                const request = metaStore.delete(chatId);
+                request.onsuccess = () => resolve();
+                request.onerror = () => resolve();
+            }),
+            new Promise((resolve) => {
+                const request = searchDocsStore.delete(chatId);
+                request.onsuccess = () => resolve();
+                request.onerror = () => resolve();
+            })
         ]);
     }
 
@@ -1016,13 +1084,11 @@ export class ChatStorage {
         });
     }
 
-    // Persist search index, document count, and serialized documents snapshot
-    async setSearchIndex(jsonString, count, docs = []) {
+    // Persist search index and document count
+    async setSearchIndex(jsonString, count, metadata = []) {
         if (typeof jsonString !== 'string') {
             jsonString = JSON.stringify(jsonString || {});
         }
-
-        const serialisedDocs = Array.isArray(docs) ? JSON.stringify(docs) : JSON.stringify([]);
 
         const db = await this.getDB();
         const tx = db.transaction('searchIndex', 'readwrite');
@@ -1030,7 +1096,7 @@ export class ChatStorage {
 
         store.put({ id: 'search', json: jsonString });
         store.put({ id: 'count', value: count });
-        store.put({ id: 'docs', json: serialisedDocs });
+        store.put({ id: 'metadata', value: metadata });
 
         return new Promise((resolve, reject) => {
             tx.oncomplete = () => resolve();
@@ -1050,6 +1116,18 @@ export class ChatStorage {
         });
     }
 
+    async getSearchMetadata() {
+        const db = await this.getDB();
+        const tx = db.transaction('searchIndex', 'readonly');
+        const store = tx.objectStore('searchIndex');
+        const req = store.get('metadata');
+
+        return new Promise((resolve, reject) => {
+            req.onsuccess = () => resolve(req.result?.value || []);
+            req.onerror = () => reject(req.error);
+        });
+    }
+
     async getSearchCount() {
         const db = await this.getDB();
         const tx = db.transaction('searchIndex', 'readonly');
@@ -1064,27 +1142,240 @@ export class ChatStorage {
 
     async getSearchDocs() {
         const db = await this.getDB();
-        const tx = db.transaction('searchIndex', 'readonly');
-        const store = tx.objectStore('searchIndex');
-        const req = store.get('docs');
+        const tx = db.transaction('searchDocs', 'readonly');
+        const store = tx.objectStore('searchDocs');
 
         return new Promise((resolve, reject) => {
-            req.onsuccess = () => {
-                const raw = req.result?.json;
-                if (!raw) {
-                    resolve(null);
+            const request = store.getAll();
+            request.onsuccess = () => resolve(request.result || []);
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async putSearchDoc(doc) {
+        if (!doc || doc.id == null) return;
+        const db = await this.getDB();
+        const tx = db.transaction('searchDocs', 'readwrite');
+        const store = tx.objectStore('searchDocs');
+
+        const payload = ChatStorage.applySearchDocFields({
+            id: doc.id,
+            title: doc.title ?? '',
+            content: doc.content ?? '',
+            timestamp: doc.timestamp ?? null,
+            searchTitle: doc.searchTitle ?? null
+        });
+
+        return new Promise((resolve, reject) => {
+            const request = store.put(payload);
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async appendToSearchDoc(chatId, delta, timestamp = null) {
+        if (!delta || !delta.trim()) return false;
+        const db = await this.getDB();
+        const tx = db.transaction('searchDocs', 'readwrite');
+        const store = tx.objectStore('searchDocs');
+
+        return new Promise((resolve, reject) => {
+            const getReq = store.get(chatId);
+            getReq.onsuccess = () => {
+                const existing = getReq.result;
+                if (!existing) {
+                    resolve(false);
+                    return;
+                }
+                const trimmed = delta.trim();
+                if (!trimmed) {
+                    resolve(false);
                     return;
                 }
 
-                try {
-                    resolve(JSON.parse(raw));
-                } catch (error) {
-                    console.warn('Failed to parse stored search documents snapshot:', error);
-                    resolve(null);
+                const normalisedDelta = ChatStorage.normaliseForSearch(trimmed);
+                if (normalisedDelta) {
+                    existing.content = existing.content
+                        ? `${existing.content} ${normalisedDelta}`.trim()
+                        : normalisedDelta;
                 }
+                if (timestamp != null) existing.timestamp = timestamp;
+
+                if (typeof existing.searchTitle !== 'string') {
+                    existing.searchTitle = ChatStorage.normaliseForSearch(existing.title || '');
+                }
+
+                const putReq = store.put(existing);
+                putReq.onsuccess = () => resolve(true);
+                putReq.onerror = () => reject(putReq.error);
             };
-            req.onerror = () => reject(req.error);
+            getReq.onerror = () => reject(getReq.error);
         });
+    }
+
+    async putSearchDocs(docs = []) {
+        const db = await this.getDB();
+        const tx = db.transaction('searchDocs', 'readwrite');
+        const store = tx.objectStore('searchDocs');
+
+        return new Promise((resolve, reject) => {
+            const keysReq = store.getAllKeys();
+            keysReq.onsuccess = () => {
+                const existingIds = new Set(keysReq.result || []);
+                if (Array.isArray(docs) && docs.length > 0) {
+                    docs.forEach(doc => {
+                        const payload = ChatStorage.applySearchDocFields({
+                            id: doc.id,
+                            title: doc.title ?? '',
+                            content: doc.content ?? '',
+                            timestamp: doc.timestamp ?? null,
+                            searchTitle: doc.searchTitle ?? null
+                        });
+                        existingIds.delete(payload.id);
+                        store.put(payload);
+                    });
+                }
+
+                existingIds.forEach(id => {
+                    store.delete(id);
+                });
+            };
+            keysReq.onerror = () => reject(keysReq.error);
+
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        });
+    }
+
+    async deleteSearchDoc(id) {
+        if (id == null) return;
+        const db = await this.getDB();
+        const tx = db.transaction('searchDocs', 'readwrite');
+        const store = tx.objectStore('searchDocs');
+
+        return new Promise((resolve, reject) => {
+            const request = store.delete(id);
+            request.onsuccess = () => resolve();
+            request.onerror = () => reject(request.error);
+        });
+    }
+
+    async updateSearchDocMeta(chatId, updates = {}) {
+        if (chatId == null) return false;
+        const db = await this.getDB();
+        const tx = db.transaction('searchDocs', 'readwrite');
+        const store = tx.objectStore('searchDocs');
+
+        return new Promise((resolve, reject) => {
+            const getReq = store.get(chatId);
+            getReq.onsuccess = () => {
+                const doc = getReq.result;
+                if (!doc) {
+                    resolve(false);
+                    return;
+                }
+                const next = { ...doc };
+                if (Object.prototype.hasOwnProperty.call(updates, 'title') && updates.title !== undefined) {
+                    next.title = updates.title;
+                }
+                if (Object.prototype.hasOwnProperty.call(updates, 'timestamp') && updates.timestamp !== undefined) {
+                    next.timestamp = updates.timestamp;
+                }
+                if (Object.prototype.hasOwnProperty.call(updates, 'content') && updates.content !== undefined) {
+                    next.content = updates.content;
+                }
+                ChatStorage.applySearchDocFields(next);
+                const putReq = store.put(next);
+                putReq.onsuccess = () => resolve(true);
+                putReq.onerror = () => reject(putReq.error);
+            };
+            getReq.onerror = () => reject(getReq.error);
+        });
+    }
+
+    async refreshSearchDoc(chatId) {
+        try {
+            const chatData = await this.loadChat(chatId);
+            if (!chatData) return;
+            const searchDoc = ChatStorage.buildSearchDocument({
+                chatId,
+                title: chatData.title,
+                timestamp: chatData.timestamp,
+                messages: chatData.messages
+            });
+            await this.putSearchDoc(searchDoc);
+        } catch (error) {
+            console.warn('Failed to refresh search doc:', error);
+        }
+    }
+
+    static normaliseForSearch(input, { collapseWhitespace = true } = {}) {
+        if (!input) return '';
+
+        const normalized = `${input}`
+            .toLowerCase()
+            .normalize('NFKD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[\u0000-\u001f]+/g, ' ');
+
+        if (!collapseWhitespace) {
+            return normalized.trim();
+        }
+
+        return normalized.replace(/\s+/g, ' ').trim();
+    }
+
+    static applySearchDocFields(doc) {
+        if (!doc) return doc;
+        if ('searchTitleCompact' in doc) delete doc.searchTitleCompact;
+        if ('searchContentCompact' in doc) delete doc.searchContentCompact;
+        doc.searchTitle = ChatStorage.normaliseForSearch(doc.title || '');
+        doc.content = ChatStorage.normaliseForSearch(doc.content || '');
+        doc._normalized = true;
+        return doc;
+    }
+
+    static buildSearchDocument({ chatId, title, timestamp, messages }) {
+        const doc = {
+            id: chatId,
+            title: title ?? '',
+            timestamp: timestamp ?? null,
+            content: ChatStorage.extractTextFromMessages(messages)
+        };
+        return ChatStorage.applySearchDocFields(doc);
+    }
+
+    static extractTextFromMessages(messages) {
+        if (!Array.isArray(messages) || messages.length === 0) return '';
+        return messages
+            .map(ChatStorage.extractTextFromMessage)
+            .filter(Boolean)
+            .join(' ')
+            .trim();
+    }
+
+    static extractTextFromMessage(msg) {
+        if (!msg) return '';
+
+        if (Array.isArray(msg.contents)) {
+            return msg.contents
+                .flat()
+                .filter(part => part && (part.type === 'text' || part.type === 'thought'))
+                .map(part => part.content || '')
+                .join(' ');
+        }
+
+        if (msg.responses) {
+            return ['model_a', 'model_b']
+                .map(modelKey => msg.responses[modelKey]?.messages || [])
+                .flat()
+                .flat()
+                .filter(part => part && part.type === 'text')
+                .map(part => part.content || '')
+                .join(' ');
+        }
+
+        return '';
     }
 }
 
