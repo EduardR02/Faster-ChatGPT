@@ -985,22 +985,102 @@ export class HistoryChatUI extends ChatUI {
         super(baseOptions);
         this.historyList = this.stateManager.historyList;
 
-        this.loadMore = this.loadMore.bind(this);
-        this.handleHistoryScroll = this.handleHistoryScroll.bind(this);
         this.continueFunc = continueFunc;
         this.addPopupActions = addPopupActions;
         this.loadHistoryItems = loadHistoryItems;
         this.loadChat = loadChat;
         this.getChatMeta = getChatMeta;
 
+        this.handleHistoryScroll = this.handleHistoryScroll.bind(this);
+
         this.activeChatId = null;
         this.searchHighlightConfig = null;
         this.activeHighlights = [];
+
+        this.mode = 'history';
         this.searchRenderedIds = new Set();
-        this.inSearchMode = false;
+        this.requestMoreSearchResults = null;
+
+        this.paginator = this.createPaginator();
 
         this.initHistoryListHandling();
         this.initKeyboardNavigation();
+    }
+
+    createPaginator() {
+        let pending = null;
+        let offset = 0;
+        let hasMore = true;
+
+        const loadHistory = async (reason) => {
+            if (!this.stateManager.canLoadMore() || pending) return false;
+
+            pending = (async () => {
+                this.stateManager.isLoading = true;
+                try {
+                    const items = await this.loadHistoryItems(this.stateManager.limit, offset);
+                    if (!items.length) {
+                        hasMore = false;
+                        return false;
+                    }
+
+                    items.forEach(item => this.addHistoryItem(item));
+                    offset += items.length;
+                    this.stateManager.offset = offset;
+                    return true;
+                } catch (error) {
+                    console.error(error);
+                    hasMore = false;
+                    return false;
+                } finally {
+                    this.stateManager.isLoading = false;
+                    pending = null;
+                    if (hasMore && this.mode === 'history' && this.stateManager.shouldLoadMore()) {
+                        void requestMore({ reason: 'auto' });
+                    }
+                }
+            })();
+
+            return pending;
+        };
+
+        const loadSearch = async (reason) => {
+            if (typeof this.requestMoreSearchResults !== 'function' || pending) return false;
+
+            const before = this.getVisibleHistoryItemCount();
+            pending = Promise.resolve(this.requestMoreSearchResults(reason))
+                .then(() => this.getVisibleHistoryItemCount() > before)
+                .finally(() => {
+                    pending = null;
+                });
+
+            return pending;
+        };
+
+        const requestMore = ({ reason = 'manual' } = {}) => {
+            if (this.mode === 'search') {
+                return loadSearch(reason);
+            }
+            if (!hasMore) return false;
+            return loadHistory(reason);
+        };
+
+        const reset = ({ mode = 'history' } = {}) => {
+            pending = null;
+            offset = 0;
+            hasMore = true;
+            this.mode = mode;
+            this.stateManager.offset = 0;
+            this.stateManager.hasMoreItems = true;
+        };
+
+        return {
+            requestMore,
+            reset,
+            get pending() {
+                return pending;
+            }
+        };
     }
 
     // we need all of this just for the animations. If we don't care then it's like a 15 line function. But we care... also gemini loves comments lol
@@ -1036,17 +1116,23 @@ export class HistoryChatUI extends ChatUI {
         };
     
         // Helper to find the next focusable history item, skipping dividers
+        const isHistoryItem = (element) => element?.classList?.contains('history-sidebar-item');
+        const isDivider = (element) => element?.classList?.contains('history-divider');
+        const isHidden = (element) => element?.classList?.contains('search-hidden');
+
         const findNextHistoryItem = (currentItem, direction) => {
             const siblingProp = direction === 'up' ? 'previousElementSibling' : 'nextElementSibling';
             let candidate = currentItem[siblingProp];
-            while (candidate && candidate.classList.contains('history-divider')) {
+            while (candidate && (isDivider(candidate) || !isHistoryItem(candidate) || isHidden(candidate))) {
                 candidate = candidate[siblingProp];
             }
             // Ensure it's actually a history item before returning
-            return (candidate && candidate.classList.contains('history-sidebar-item')) ? candidate : null;
+            return isHistoryItem(candidate) ? candidate : null;
         };
     
-        document.addEventListener('keydown', (e) => {
+        const loadMoreForKeyboard = async () => this.paginator.requestMore({ reason: 'keyboard' });
+
+        document.addEventListener('keydown', async (e) => {
             if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
     
             const currentItem = document.activeElement;
@@ -1058,7 +1144,14 @@ export class HistoryChatUI extends ChatUI {
             e.preventDefault(); // Stop default page scroll
     
             const direction = e.key === 'ArrowUp' ? 'up' : 'down';
-            const nextItem = findNextHistoryItem(currentItem, direction);
+            let nextItem = findNextHistoryItem(currentItem, direction);
+
+            if (!nextItem && direction === 'down') {
+                const loaded = await loadMoreForKeyboard();
+                if (loaded) {
+                    nextItem = findNextHistoryItem(currentItem, direction);
+                }
+            }
     
             if (nextItem) {
                 // --- Aggressive Cleanup ---
@@ -1133,56 +1226,27 @@ export class HistoryChatUI extends ChatUI {
         });
     }
 
+    getVisibleHistoryItemCount() {
+        return this.historyList.querySelectorAll('.history-sidebar-item:not(.search-hidden)').length;
+    }
+
     reloadHistoryList() {
         this.stateManager.reset();
         this.historyList.innerHTML = '';
-        this.historyList.removeEventListener('scroll', this.handleHistoryScroll);
+        this.paginator.reset({ mode: 'history' });
         this.initHistoryListHandling();
-    }
-
-    async loadMore() {
-        if (this.inSearchMode) return;
-        if (!this.stateManager.canLoadMore()) return;
-        this.stateManager.isLoading = true;
-
-        try {
-            const items = await this.loadHistoryItems(
-                this.stateManager.limit,
-                this.stateManager.offset
-            );
-
-            if (items.length === 0) {
-                this.stateManager.hasMoreItems = false;
-                this.historyList.removeEventListener('scroll', this.handleHistoryScroll);
-                return;
-            }
-
-            items.forEach(item => this.addHistoryItem(item));
-            this.stateManager.offset += items.length;
-        } catch (error) {
-            console.error(error);
-            this.stateManager.hasMoreItems = false;
-            this.stateManager.isLoading = false;
-            return;
-        } finally {
-            this.stateManager.isLoading = false;
-            if (this.stateManager.shouldLoadMore()) {
-                this.loadMore();
-            }
-        }
     }
 
     initHistoryListHandling() {
         this.historyList.addEventListener('scroll', this.handleHistoryScroll);
-        this.loadMore();
+        void this.paginator.requestMore({ reason: 'initial' });
     }
 
     handleHistoryScroll() {
-        if (this.inSearchMode) return;
         const { scrollTop, scrollHeight, clientHeight } = this.historyList;
 
-        if (scrollHeight - (scrollTop + clientHeight) < 10 && this.stateManager.canLoadMore()) {
-            this.loadMore();
+        if (scrollHeight - (scrollTop + clientHeight) < 10) {
+            void this.paginator.requestMore({ reason: 'scroll' });
         }
     }
 
@@ -1271,6 +1335,10 @@ export class HistoryChatUI extends ChatUI {
         this.searchRenderedIds.clear();
     }
 
+    setSearchLoader(loader) {
+        this.requestMoreSearchResults = typeof loader === 'function' ? loader : null;
+    }
+
     startSearchMode() {
         if (!this.inSearchMode) {
             this.inSearchMode = true;
@@ -1292,6 +1360,8 @@ export class HistoryChatUI extends ChatUI {
             divider.dataset.searchMatch = 'false';
             divider.classList.add('search-hidden');
         });
+
+        void this.paginator.requestMore({ reason: 'search-init' });
     }
 
     exitSearchMode() {
@@ -1316,6 +1386,7 @@ export class HistoryChatUI extends ChatUI {
         });
 
         this.clearSearchResults();
+        this.setSearchLoader(null);
     }
 
     renderSearchResults(results = [], options = {}) {
@@ -1454,7 +1525,7 @@ export class HistoryChatUI extends ChatUI {
         }
     
         if (this.historyList.scrollHeight <= this.historyList.clientHeight) {
-            this.loadMore();
+            void this.paginator.requestMore({ reason: 'deletion' });
         }
     }
 

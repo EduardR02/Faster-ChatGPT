@@ -403,6 +403,54 @@ export class ChatStorage {
         return result;
     }
 
+    async indexAllMediaFromExistingMessages(batchSize = 25) {
+        const db = await this.getDB();
+
+        if (!db.objectStoreNames.contains('mediaIndex')) {
+            return 0;
+        }
+
+        const allMeta = await this.getChatMetadata(Infinity, 0);
+        let indexed = 0;
+
+        for (let i = 0; i < allMeta.length; i += batchSize) {
+            const batch = allMeta.slice(i, i + batchSize);
+
+            for (const { chatId } of batch) {
+                const chat = await this.loadChat(chatId);
+                if (!chat?.messages?.length) continue;
+
+                const tx = db.transaction(['mediaIndex'], 'readwrite');
+                const mediaStore = tx.objectStore('mediaIndex');
+
+                const completion = new Promise((resolve, reject) => {
+                    tx.oncomplete = () => resolve();
+                    tx.onerror = () => reject(tx.error);
+                    tx.onabort = () => reject(tx.error);
+                });
+
+                const requests = this.indexImagesFromMessages(chatId, chat.messages, mediaStore);
+                if (requests.length) {
+                    await Promise.all(requests);
+                }
+
+                if (typeof tx.commit === 'function') {
+                    try {
+                        tx.commit();
+                    } catch (commitError) {
+                        // ignore; browsers without commit will throw
+                    }
+                }
+
+                await completion;
+
+                indexed += requests.length;
+            }
+        }
+
+        return indexed;
+    }
+
     async getMessage(chatId, messageId) {
         const db = await this.getDB();
         const tx = db.transaction(['messages'], 'readonly');
@@ -413,6 +461,65 @@ export class ChatStorage {
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
         });
+    }
+
+    async getMessagesBatch(keys) {
+        try {
+            if (!Array.isArray(keys) || keys.length === 0) {
+                return new Map();
+            }
+
+            const normalized = [];
+            const seen = new Set();
+
+            for (const rawKey of keys) {
+                if (!rawKey) continue;
+
+                let chatId;
+                let messageId;
+
+                if (Array.isArray(rawKey)) {
+                    [chatId, messageId] = rawKey;
+                } else if (typeof rawKey === 'object') {
+                    ({ chatId, messageId } = rawKey);
+                }
+
+                if (chatId === undefined || messageId === undefined) continue;
+
+                const compositeKey = `${chatId}:${messageId}`;
+                if (seen.has(compositeKey)) continue;
+                seen.add(compositeKey);
+                normalized.push({ chatId, messageId, compositeKey });
+            }
+
+            if (!normalized.length) {
+                return new Map();
+            }
+
+            const db = await this.getDB();
+            const tx = db.transaction(['messages'], 'readonly');
+            const store = tx.objectStore('messages');
+
+            return await new Promise((resolve, reject) => {
+                const results = new Map();
+
+                for (const { chatId, messageId, compositeKey } of normalized) {
+                    const request = store.get([chatId, messageId]);
+                    request.onsuccess = () => {
+                        results.set(compositeKey, request.result ?? null);
+                    };
+                    request.onerror = () => {
+                        results.set(compositeKey, null);
+                    };
+                }
+
+                tx.oncomplete = () => resolve(results);
+                tx.onerror = () => reject(tx.error);
+            });
+        } catch (error) {
+            console.error('Error in getMessagesBatch:', error);
+            return new Map();
+        }
     }
 
     async getMessages(chatId, startIndex = 0, limit) {

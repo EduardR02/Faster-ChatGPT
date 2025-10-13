@@ -407,8 +407,16 @@ function sendChatToSidepanel(options) {
         type: "reconstruct_chat",
         options,
     };
-    chrome.runtime.sendMessage({ type: "open_side_panel" }).finally(() => {
-        chrome.runtime.sendMessage(message);
+    chrome.runtime.sendMessage({ type: "open_side_panel" }, () => {
+        const lastError = chrome.runtime.lastError;
+        if (lastError) {
+            console.warn('Failed to open side panel before sending chat:', lastError);
+        }
+        chrome.runtime.sendMessage(message, undefined, () => {
+            if (chrome.runtime.lastError) {
+                console.warn('Failed to forward chat to side panel:', chrome.runtime.lastError);
+            }
+        });
     });
 }
 
@@ -508,9 +516,11 @@ async function initiateChatBackupImport(element) {
 
 
 const MEDIA_DEFAULT_LIMIT = 500;
+const MEDIA_INITIAL_PREFETCH_COUNT = 12;
+const MEDIA_RENDER_CHUNK_SIZE = 12;
 const MEDIA_STATE = Object.freeze({
     loading: 'loading',
-    migrating: 'migrating',
+    indexing: 'indexing',
     ready: 'ready',
     empty: 'empty',
     error: 'error'
@@ -521,9 +531,9 @@ const MEDIA_STATUS_MESSAGES = Object.freeze({
         title: 'Loading media…',
         subtitle: ''
     },
-    [MEDIA_STATE.migrating]: {
+    [MEDIA_STATE.indexing]: {
         title: 'Indexing existing images…',
-        subtitle: 'This will only happen once.'
+        subtitle: 'This may take a moment.'
     },
     [MEDIA_STATE.empty]: {
         title: 'No images found',
@@ -623,7 +633,12 @@ class MediaTab {
             try {
                 let entries = await this.chatStorage.getAllMedia(MEDIA_DEFAULT_LIMIT, 0);
 
-                entries = await this.handlePotentialMigration(entries, panel, loadStart);
+                if (entries.length === 0) {
+                    const indexedCount = await this.maybeIndexExistingMedia(panel, loadContext);
+                    if (indexedCount > 0) {
+                        entries = await this.chatStorage.getAllMedia(MEDIA_DEFAULT_LIMIT, 0);
+                    }
+                }
 
                 this.invalidMediaIds = new Set();
                 this.mediaEntries = entries;
@@ -657,31 +672,6 @@ class MediaTab {
 
         this.pendingRefresh = false;
         await runLoad();
-    }
-
-    async handlePotentialMigration(initialEntries, panel, loadStart) {
-        if (initialEntries.length > 0) return initialEntries;
-
-        const migrateStart = now();
-        const needsMigration = await this.detectUnindexedImages();
-
-        if (!needsMigration) {
-            console.log(`Media grid load found 0 entries and no migration needed (${formatDuration(loadStart)})`);
-            return initialEntries;
-        }
-
-        this.setMediaState(panel, MEDIA_STATE.migrating);
-
-        try {
-            const indexedCount = await this.migrateExistingImages();
-            console.log(`Media migration indexed ${indexedCount} images in ${formatDuration(migrateStart)}`);
-            if (indexedCount === 0) return initialEntries;
-            return await this.chatStorage.getAllMedia(MEDIA_DEFAULT_LIMIT, 0);
-        } catch (error) {
-            console.error('Media migration failed:', error);
-            this.setMediaState(panel, MEDIA_STATE.error);
-            throw error;
-        }
     }
 
     setMediaState(panel, state) {
@@ -719,65 +709,6 @@ class MediaTab {
             title,
             subtitle
         };
-    }
-
-    async detectUnindexedImages(sampleSize = 20) {
-        const metas = await this.chatStorage.getChatMetadata(sampleSize, 0);
-
-        for (const meta of metas) {
-            const chat = await this.chatStorage.loadChat(meta.chatId, 50);
-            if (this.chatContainsImages(chat.messages)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    chatContainsImages(messages) {
-        if (!Array.isArray(messages)) return false;
-
-        return messages.some(msg => {
-            if (!msg) return false;
-            if (Array.isArray(msg.images) && msg.images.length) return true;
-
-            if (Array.isArray(msg.contents)) {
-                if (msg.contents.some(group => Array.isArray(group) && group.some(part => part?.type === 'image'))) {
-                    return true;
-                }
-            }
-
-            if (msg.responses) {
-                return ['model_a', 'model_b'].some(key =>
-                    msg.responses[key]?.messages?.some(group =>
-                        Array.isArray(group) && group.some(part => part?.type === 'image')
-                    )
-                );
-            }
-
-            return false;
-        });
-    }
-
-    async migrateExistingImages(batchSize = 50) {
-        const allMeta = await this.chatStorage.getChatMetadata(Infinity, 0);
-        const db = await this.chatStorage.getDB();
-        let totalImages = 0;
-
-        for (let i = 0; i < allMeta.length; i += batchSize) {
-            const batch = allMeta.slice(i, i + batchSize);
-
-            await Promise.all(batch.map(async (meta) => {
-                const chat = await this.chatStorage.loadChat(meta.chatId);
-                const tx = db.transaction(['mediaIndex'], 'readwrite');
-                const mediaStore = tx.objectStore('mediaIndex');
-                const promises = this.chatStorage.indexImagesFromMessages(meta.chatId, chat.messages, mediaStore);
-                await Promise.all(promises);
-                totalImages += promises.length;
-            }));
-        }
-
-        return totalImages;
     }
 
     setFilter(filter) {
@@ -845,27 +776,72 @@ class MediaTab {
 
     async renderMediaInBatches(entries, grid, loadContext = null, batchSize = 24) {
         const messageCache = this.messageCache;
+        let prefetchBudget = Math.min(MEDIA_INITIAL_PREFETCH_COUNT, entries.length);
 
         for (let i = 0; i < entries.length; i += batchSize) {
             if (loadContext?.aborted) return;
 
             const batch = entries.slice(i, i + batchSize);
-            await this.ensureMessagesLoaded(batch, messageCache, loadContext);
-            if (loadContext?.aborted) return;
 
-            const elements = await Promise.all(batch.map(entry => this.buildMediaItem(entry, messageCache, loadContext)));
+            let startIndex = 0;
 
-            const fragment = document.createDocumentFragment();
-            elements.forEach(el => {
-                if (el) fragment.appendChild(el);
-            });
-
-            if (fragment.childNodes.length) {
-                grid.appendChild(fragment);
+            if (prefetchBudget > 0) {
+                const prefetchCount = Math.min(prefetchBudget, batch.length);
+                if (prefetchCount > 0) {
+                    const prefetchChunk = batch.slice(0, prefetchCount);
+                    await this.ensureMessagesLoaded(prefetchChunk, messageCache, loadContext);
+                    if (loadContext?.aborted) return;
+                    prefetchBudget = Math.max(0, prefetchBudget - prefetchCount);
+                    startIndex = prefetchCount;
+                }
             }
 
-            if (loadContext?.aborted) return;
-            await nextFrame();
+            if (startIndex < batch.length) {
+                const remaining = batch.slice(startIndex);
+                if (remaining.length) {
+                    await this.ensureMessagesLoaded(remaining, messageCache, loadContext);
+                    if (loadContext?.aborted) return;
+                }
+            }
+
+            for (let j = 0; j < batch.length; j += MEDIA_RENDER_CHUNK_SIZE) {
+                if (loadContext?.aborted) return;
+
+                const fragment = document.createDocumentFragment();
+                const chunk = batch.slice(j, j + MEDIA_RENDER_CHUNK_SIZE);
+                const chunkElements = await Promise.all(chunk.map(async (entry) => {
+                    const cachedElement = this.mediaItemElements.get(entry.id);
+                    if (cachedElement) {
+                        return cachedElement;
+                    }
+
+                    return await this.buildMediaItem(entry, messageCache, loadContext);
+                }));
+
+                chunkElements.forEach(el => {
+                    if (el) fragment.appendChild(el);
+                });
+
+                if (fragment.childNodes.length) {
+                    grid.appendChild(fragment);
+                }
+
+                if (loadContext?.aborted) return;
+                await nextFrame();
+            }
+        }
+    }
+
+    async maybeIndexExistingMedia(panel, loadContext) {
+        this.setMediaState(panel, MEDIA_STATE.indexing);
+
+        try {
+            return await this.chatStorage.indexAllMediaFromExistingMessages();
+        } catch (error) {
+            if (!loadContext?.aborted) {
+                console.error('Failed to index existing media:', error);
+            }
+            return 0;
         }
     }
 
@@ -907,30 +883,47 @@ class MediaTab {
     }
 
     async ensureMessagesLoaded(entries, messageCache, loadContext = null) {
+        const batchRequests = [];
         const pendingKeys = new Set();
-        const loaders = [];
 
         for (const entry of entries) {
             const key = this.getEntryMessageKey(entry);
             if (messageCache.has(key) || pendingKeys.has(key)) continue;
             pendingKeys.add(key);
-
-            loaders.push((async () => {
-                try {
-                    const message = await this.chatStorage.getMessage(entry.chatId, entry.messageId);
-                    if (loadContext?.aborted) return;
-                    messageCache.set(key, message ?? null);
-                } catch (error) {
-                    console.warn('Failed to prefetch message for media entry', entry.id, error);
-                    if (!messageCache.has(key)) {
-                        messageCache.set(key, null);
-                    }
-                }
-            })());
+            batchRequests.push({ chatId: entry.chatId, messageId: entry.messageId, entryId: entry.id, cacheKey: key });
         }
 
-        if (loaders.length) {
-            await Promise.all(loaders);
+        if (!batchRequests.length) return;
+
+        try {
+            const results = await this.chatStorage.getMessagesBatch(batchRequests.map(r => ({ chatId: r.chatId, messageId: r.messageId })));
+            if (loadContext?.aborted) return;
+
+            for (const request of batchRequests) {
+                const { cacheKey, entryId } = request;
+                const message = results.get(cacheKey) ?? null;
+                if (message === null && !results.has(cacheKey)) {
+                    console.warn('Missing message for media entry', entryId);
+                }
+                messageCache.set(cacheKey, message);
+            }
+        } catch (error) {
+            console.warn('Failed to batch load messages for media entries', error);
+            if (loadContext?.aborted) return;
+
+            for (const request of batchRequests) {
+                const { chatId, messageId, cacheKey, entryId } = request;
+                try {
+                    const message = await this.chatStorage.getMessage(chatId, messageId);
+                    if (loadContext?.aborted) return;
+                    messageCache.set(cacheKey, message ?? null);
+                } catch (singleError) {
+                    console.warn('Failed to load message for media entry', entryId, singleError);
+                    if (!messageCache.has(cacheKey)) {
+                        messageCache.set(cacheKey, null);
+                    }
+                }
+            }
         }
     }
 
@@ -1815,6 +1808,7 @@ class ChatSearch {
         if (reset) {
             this.chatUI.exitSearchMode();
             this.chatUI.startSearchMode();
+            this.chatUI.paginator.reset({ mode: 'search' });
             this.searchDisplayOffset = 0;
             this.chatUI.updateSearchCounter(this.currentDisplayItems.length, 0);
             this.attachSearchScrollListener();
@@ -1825,15 +1819,19 @@ class ChatSearch {
             this.searchDisplayOffset + this.searchResultsLimit
         );
 
-        if (reset && slice.length === 0) {
+        const reachedEnd = slice.length === 0;
+
+        if (reset && reachedEnd) {
             this.chatUI.renderSearchResults([]);
             this.chatUI.updateSearchCounter(0, 0);
             this.detachSearchScrollListener();
+            this.chatUI.paginator.reset({ mode: 'search' });
             return;
         }
 
-        if (slice.length === 0) {
+        if (reachedEnd) {
             this.detachSearchScrollListener();
+            this.chatUI.paginator.reset({ mode: 'search' });
             return;
         }
 
@@ -1847,6 +1845,7 @@ class ChatSearch {
 
         if (this.searchDisplayOffset >= this.currentDisplayItems.length) {
             this.detachSearchScrollListener();
+            this.chatUI.paginator.reset({ mode: 'search' });
         }
     }
 
