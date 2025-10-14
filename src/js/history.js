@@ -402,21 +402,14 @@ function handleChatRenamed(chatId, title) {
 }
 
 
-function sendChatToSidepanel(options) {
-    const message = {
+async function sendChatToSidepanel(options) {
+    // Open sidepanel (returns immediately if already open)
+    await chrome.runtime.sendMessage({ type: "open_side_panel" });
+    
+    // Send the reconstruct message
+    chrome.runtime.sendMessage({
         type: "reconstruct_chat",
         options,
-    };
-    chrome.runtime.sendMessage({ type: "open_side_panel" }, () => {
-        const lastError = chrome.runtime.lastError;
-        if (lastError) {
-            console.warn('Failed to open side panel before sending chat:', lastError);
-        }
-        chrome.runtime.sendMessage(message, undefined, () => {
-            if (chrome.runtime.lastError) {
-                console.warn('Failed to forward chat to side panel:', chrome.runtime.lastError);
-            }
-        });
     });
 }
 

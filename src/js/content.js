@@ -42,13 +42,15 @@ function listener(event) {
     if (selection.length > 0 && selection !== previous_selection && (event.ctrlKey || event.metaKey)) {
         (async () => {
             let current_url = window.location.href;
-            let response = await chrome.runtime.sendMessage({ type: "is_sidepanel_open" });
-            if (!response.isOpen) {
-                chrome.runtime.sendMessage({ type: "open_side_panel" });
-            }
+            
+            // Open sidepanel (returns immediately if already open)
+            await chrome.runtime.sendMessage({ type: "open_side_panel" });
+            
+            // Send the selection
             chrome.runtime.sendMessage({ type: "new_selection", text: selection, url: current_url });
-            previous_selection = selection;
         })();
+        
+        previous_selection = selection;
     }
     else if (selection.length === 0 && previous_selection.length > 0) {
         // previous_selection has to be > 0, otherwise will spam messages on normal mouse clicks

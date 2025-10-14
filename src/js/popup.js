@@ -35,24 +35,27 @@ function run_on_init() {
 }
 
 
-function open_side_panel() {
-    let isModeOn = new Promise(resolve => get_mode(mode => resolve(is_on(mode))));
-    let isSidePanelClosed = new Promise(resolve => 
-        chrome.runtime.sendMessage({ type: "is_sidepanel_open" }, response => resolve(!response.isOpen))
-    );
+async function open_side_panel() {
+	// Check if mode is on
+	const modeOn = await new Promise(resolve => get_mode(mode => resolve(is_on(mode))));
+	if (!modeOn) {
+		return;
+	}
 
-	Promise.all([isModeOn, isSidePanelClosed])
-		.then(([modeOn, panelClosed]) => {
-			if (!modeOn) {
-				return;
-			}
+	// Check if panel is already open
+	const { isOpen } = await chrome.runtime.sendMessage({ type: "is_sidepanel_open" });
+	const wasClosed = !isOpen;
 
-			chrome.runtime.sendMessage({ type: "open_side_panel" });
-			chrome.runtime.sendMessage({ type: "new_chat" });
-			if (panelClosed) {
-				window.close();
-			}
-		});
+	// Open sidepanel via background (which has proper permissions)
+	await chrome.runtime.sendMessage({ type: "open_side_panel" });
+	
+	// Send the new_chat message
+	chrome.runtime.sendMessage({ type: "new_chat" }).catch(() => {});
+	
+	// Close popup if we opened the panel
+	if (wasClosed) {
+		self.close();
+	}
 }
 
 
