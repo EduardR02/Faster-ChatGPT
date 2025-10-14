@@ -1566,19 +1566,16 @@ class ChatSearch {
             return null;
         }
 
-        return storedDocsSnapshot.map(raw => {
-            const id = this.normaliseId(raw.id);
-            const hydrated = {
-                id,
-                title: raw.title ?? '',
-                timestamp: raw.timestamp ?? null,
-                content: typeof raw.content === 'string' ? raw.content : '',
-                searchTitle: typeof raw.searchTitle === 'string' ? raw.searchTitle : '',
-                _normalized: true
-            };
-            this.docIndex.set(id, hydrated);
-            return hydrated;
-        });
+        // Trust the stored format - it's already correct. Avoid creating new objects.
+        // Just normalize IDs in-place and populate the index.
+        for (const doc of storedDocsSnapshot) {
+            const id = this.normaliseId(doc.id);
+            doc.id = id;
+            doc._normalized = true;
+            this.docIndex.set(id, doc);
+        }
+        
+        return storedDocsSnapshot;
     }
 
     async rebuildIndex(metadata = null, startOverride = null) {
@@ -1737,7 +1734,7 @@ class ChatSearch {
             let finalIds;
 
             if (this.lastQuery === cacheKey && Array.isArray(this.lastMatchingIds)) {
-                finalIds = [...this.lastMatchingIds];
+                finalIds = this.lastMatchingIds;
             } else {
                 const miniSearchResults = this.miniSearch.search(trimmed, {
                     prefix: !hasTrailingSpace,
@@ -1767,7 +1764,7 @@ class ChatSearch {
                     finalIds = partialMatches;
                 }
 
-                this.lastMatchingIds = [...finalIds];
+                this.lastMatchingIds = finalIds;
                 this.lastQuery = cacheKey;
                 this.lastNormalizedQuery = normalisedQuery;
             }

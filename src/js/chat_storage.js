@@ -1434,6 +1434,12 @@ export class ChatStorage {
 
     static applySearchDocFields(doc) {
         if (!doc) return doc;
+        
+        // Skip re-normalization if already normalized
+        if (doc._normalized === true) {
+            return doc;
+        }
+        
         if ('searchTitleCompact' in doc) delete doc.searchTitleCompact;
         if ('searchContentCompact' in doc) delete doc.searchContentCompact;
         doc.searchTitle = ChatStorage.normaliseForSearch(doc.title || '');
