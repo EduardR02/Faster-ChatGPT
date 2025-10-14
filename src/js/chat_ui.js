@@ -1519,9 +1519,6 @@ export class HistoryChatUI extends ChatUI {
         if (header?.classList.contains('history-divider') && 
             (!nextItem || nextItem.classList.contains('history-divider'))) {
             header.remove();
-            if (nextHeader) {
-                nextHeader.style.paddingTop = '0';
-            }
         }
     
         if (this.historyList.scrollHeight <= this.historyList.clientHeight) {
@@ -1539,14 +1536,10 @@ export class HistoryChatUI extends ChatUI {
             this.historyList.insertBefore(newItem, firstItem.nextSibling);
         } else {
             const newItem = this.createHistoryItem(chat);
-            const newDivider = this.createDateDivider(currentCategory, false);
+            const newDivider = this.createDateDivider(currentCategory);
 
             this.historyList.prepend(newItem);
             this.historyList.prepend(newDivider);
-
-            if (firstItem?.classList.contains('history-divider')) {
-                firstItem.style.paddingTop = '1rem';
-            }
         }
     }
 
@@ -1580,13 +1573,8 @@ export class HistoryChatUI extends ChatUI {
         }
     }
 
-    createDateDivider(category, paddingTop = true) {
-        const divider = createElementWithClass('div', 'history-divider', category);
-        if (this.stateManager.lastDateCategory !== null) {
-            divider.style.paddingTop = '1rem';
-        }
-        if (!paddingTop) divider.style.paddingTop = '0';
-        return divider;
+    createDateDivider(category) {
+        return createElementWithClass('div', 'history-divider', category);
     }
 
 
