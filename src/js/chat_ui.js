@@ -1083,151 +1083,107 @@ export class HistoryChatUI extends ChatUI {
         };
     }
 
-    // we need all of this just for the animations. If we don't care then it's like a 15 line function. But we care... also gemini loves comments lol
     initKeyboardNavigation() {
-        // State for tracking the item currently undergoing keyboard navigation animation
-        const keyboardNavState = {
-            targetItem: null,       // The element currently being animated
-            transitionEndHandler: null, // Reference to the specific transitionend listener
-            cleanupTimeoutId: null      // ID for the failsafe cleanup timeout
-        };
-    
-        // Central cleanup: Remove styles, listener, and timeout for a given item
-        const cleanupKeyboardStyles = (item) => {
-            if (!item) return;
-    
-            item.classList.remove('keyboard-navigating');
-    
-            // If this item is the one we're currently tracking, clear its associated state
-            if (keyboardNavState.targetItem === item) {
-                if (keyboardNavState.transitionEndHandler) {
-                    item.removeEventListener('transitionend', keyboardNavState.transitionEndHandler);
-                }
-                if (keyboardNavState.cleanupTimeoutId) {
-                    clearTimeout(keyboardNavState.cleanupTimeoutId);
-                }
-                // Reset state tracking
-                keyboardNavState.targetItem = null;
-                keyboardNavState.transitionEndHandler = null;
-                keyboardNavState.cleanupTimeoutId = null;
-            }
-            // Note: We don't reset state if 'item' is not the current targetItem,
-            // because the cleanup might be preemptive (on the *next* item).
-        };
-    
-        // Helper to find the next focusable history item, skipping dividers
-        const isHistoryItem = (element) => element?.classList?.contains('history-sidebar-item');
-        const isDivider = (element) => element?.classList?.contains('history-divider');
-        const isHidden = (element) => element?.classList?.contains('search-hidden');
+        const navState = { targetItem: null, transitionHandler: null, timeoutId: null };
 
-        const findNextHistoryItem = (currentItem, direction) => {
-            const siblingProp = direction === 'up' ? 'previousElementSibling' : 'nextElementSibling';
-            let candidate = currentItem[siblingProp];
-            while (candidate && (isDivider(candidate) || !isHistoryItem(candidate) || isHidden(candidate))) {
-                candidate = candidate[siblingProp];
+        const cleanup = (item) => {
+            if (!item) return;
+            item.classList.remove('keyboard-navigating');
+            if (navState.targetItem === item) {
+                if (navState.transitionHandler) item.removeEventListener('transitionend', navState.transitionHandler);
+                if (navState.timeoutId) clearTimeout(navState.timeoutId);
+                navState.targetItem = navState.transitionHandler = navState.timeoutId = null;
             }
-            // Ensure it's actually a history item before returning
-            return isHistoryItem(candidate) ? candidate : null;
         };
-    
-        const loadMoreForKeyboard = async () => this.paginator.requestMore({ reason: 'keyboard' });
+
+        const isItem = (el) => el?.classList?.contains('history-sidebar-item');
+        const isDivider = (el) => el?.classList?.contains('history-divider');
+        const isHidden = (el) => el?.classList?.contains('search-hidden');
+
+        const findNext = (current, dir) => {
+            const prop = dir === 'up' ? 'previousElementSibling' : 'nextElementSibling';
+            let candidate = current[prop];
+            while (candidate && (isDivider(candidate) || !isItem(candidate) || isHidden(candidate))) {
+                candidate = candidate[prop];
+            }
+            return isItem(candidate) ? candidate : null;
+        };
 
         document.addEventListener('keydown', async (e) => {
             if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
-    
-            const currentItem = document.activeElement;
-            // Ensure focus is valid and within the history list
-            if (!currentItem || !currentItem.classList.contains('history-sidebar-item') || !this.historyList.contains(currentItem)) {
+
+            const current = document.activeElement;
+            if (!current || !current.classList.contains('history-sidebar-item') || !this.historyList.contains(current)) {
                 return;
             }
-    
-            e.preventDefault(); // Stop default page scroll
-    
-            const direction = e.key === 'ArrowUp' ? 'up' : 'down';
-            let nextItem = findNextHistoryItem(currentItem, direction);
 
-            if (!nextItem && direction === 'down') {
-                const loaded = await loadMoreForKeyboard();
-                if (loaded) {
-                    nextItem = findNextHistoryItem(currentItem, direction);
-                }
+            e.preventDefault();
+
+            const direction = e.key === 'ArrowUp' ? 'up' : 'down';
+            let next = findNext(current, direction);
+
+            if (!next && direction === 'down') {
+                const loaded = await this.paginator.requestMore({ reason: 'keyboard' });
+                if (loaded) next = findNext(current, direction);
             }
-    
-            if (nextItem) {
-                // --- Aggressive Cleanup ---
-                // 1. Clean the *previously* targeted item (handles rapid navigation)
-                cleanupKeyboardStyles(keyboardNavState.targetItem);
-                // 2. Clean the item we are *moving to* (handles potential stale states, e.g., from hover)
-                cleanupKeyboardStyles(nextItem);
-    
-                // --- Navigation ---
-                nextItem.focus();
-                nextItem.click(); // Assuming click side-effect is desired
-                nextItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    
-                // --- Apply Effect & Setup Cleanup Handlers ---
-    
-                // Handler executed when the CSS transition finishes
-                const specificTransitionEndHandler = (event) => {
-                    // Ensure we only handle the transform transition on the correct target
-                    if (event.target === nextItem && event.propertyName === 'transform') {
-                        // If this item is still the tracked target, clean it up.
-                        // The check prevents cleanup if the user navigated away *extremely* fast.
-                        if (keyboardNavState.targetItem === nextItem) {
-                             // Normal cleanup via transitionend, cancel the failsafe timeout
-                            if (keyboardNavState.cleanupTimeoutId) {
-                               clearTimeout(keyboardNavState.cleanupTimeoutId);
-                               // keyboardNavState.cleanupTimeoutId = null; // cleanupKeyboardStyles will null it
-                            }
-                            cleanupKeyboardStyles(nextItem);
+
+            if (next) {
+                cleanup(navState.targetItem);
+                cleanup(next);
+
+                next.focus();
+                next.click();
+                next.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+
+                const onTransitionEnd = (event) => {
+                    if (event.target === next && event.propertyName === 'transform') {
+                        if (navState.targetItem === next) {
+                            if (navState.timeoutId) clearTimeout(navState.timeoutId);
+                            cleanup(next);
                         } else {
-                            // If target changed before transitionend fired, ensure listener is removed anyway.
-                            // cleanupKeyboardStyles for the *new* target would handle state reset.
-                            nextItem.removeEventListener('transitionend', specificTransitionEndHandler);
+                            next.removeEventListener('transitionend', onTransitionEnd);
                         }
                     }
                 };
-    
-                // Apply animation class & attach listener
-                nextItem.classList.add('keyboard-navigating');
-                nextItem.addEventListener('transitionend', specificTransitionEndHandler);
-    
-                // Update state to track the new item and its handler
-                keyboardNavState.targetItem = nextItem;
-                keyboardNavState.transitionEndHandler = specificTransitionEndHandler;
-    
-                // --- Failsafe Timeout ---
-                // Guarantees cleanup even if transitionend doesn't fire reliably.
-                const transitionDurationMs = parseFloat(getComputedStyle(nextItem).transitionDuration) * 1000;
-                const failsafeDelay = isNaN(transitionDurationMs) ? 300 : transitionDurationMs + 100; // Duration + buffer
-    
-                 // Clear any previous failsafe timeout before setting a new one.
-                 if (keyboardNavState.cleanupTimeoutId) {
-                     clearTimeout(keyboardNavState.cleanupTimeoutId);
-                 }
-    
-                keyboardNavState.cleanupTimeoutId = setTimeout(() => {
-                    // Double-check if this item is *still* the target when the timeout fires
-                    if (keyboardNavState.targetItem === nextItem) {
-                        // console.warn(`Keyboard nav style cleanup triggered by timeout for:`, nextItem);
-                        cleanupKeyboardStyles(nextItem); // Force cleanup
-                    }
-                    // Ensure timeout ID is cleared regardless once it executes (or is cleared elsewhere)
-                    // cleanupKeyboardStyles handles nulling if targetItem matches. If not, we should null it here?
-                    // Let's rethink: if targetItem isn't nextItem anymore when timeout fires, the timeout belongs
-                    // to an "orphaned" state. It should just null itself out.
-                    if (keyboardNavState.targetItem !== nextItem) {
-                        keyboardNavState.cleanupTimeoutId = null; // Timeout fired for a stale target
-                    }
-                    // If targetItem WAS nextItem, cleanupKeyboardStyles already nulled it.
-    
-                }, failsafeDelay);
+
+                next.classList.add('keyboard-navigating');
+                next.addEventListener('transitionend', onTransitionEnd);
+                navState.targetItem = next;
+                navState.transitionHandler = onTransitionEnd;
+
+                const duration = parseFloat(getComputedStyle(next).transitionDuration) * 1000;
+                const delay = isNaN(duration) ? 300 : duration + 100;
+
+                if (navState.timeoutId) clearTimeout(navState.timeoutId);
+                navState.timeoutId = setTimeout(() => {
+                    if (navState.targetItem === next) cleanup(next);
+                    else navState.timeoutId = null;
+                }, delay);
             }
         });
     }
 
     getVisibleHistoryItemCount() {
         return this.historyList.querySelectorAll('.history-sidebar-item:not(.search-hidden)').length;
+    }
+
+    _setSearchMatch(elements, value) {
+        elements.forEach(el => {
+            if (value === null) delete el.dataset.searchMatch;
+            else el.dataset.searchMatch = value;
+        });
+    }
+
+    _toggleSearchHidden(elements, hidden) {
+        elements.forEach(el => el.classList.toggle('search-hidden', hidden));
+    }
+
+    _getHistoryItems() {
+        return this.historyList.querySelectorAll('.history-sidebar-item');
+    }
+
+    _getDividers() {
+        return this.historyList.querySelectorAll('.history-divider');
     }
 
     reloadHistoryList() {
@@ -1320,18 +1276,11 @@ export class HistoryChatUI extends ChatUI {
     }
 
     clearSearchResults() {
-        const tempItems = this.historyList.querySelectorAll('.history-sidebar-item[data-search-temp="true"]');
-        tempItems.forEach(item => item.remove());
-        const baseItems = this.historyList.querySelectorAll('.history-sidebar-item');
-        baseItems.forEach(item => {
-            delete item.dataset.searchMatch;
-        });
-        const dividers = this.historyList.querySelectorAll('.history-divider');
-        dividers.forEach(divider => delete divider.dataset.searchMatch);
-        const noResultsMsg = this.historyList.querySelector('.search-no-results');
-        if (noResultsMsg) noResultsMsg.remove();
-        const counter = this.historyList.querySelector('.search-counter');
-        if (counter) counter.remove();
+        this.historyList.querySelectorAll('.history-sidebar-item[data-search-temp="true"]').forEach(item => item.remove());
+        this._setSearchMatch(this._getHistoryItems(), null);
+        this._setSearchMatch(this._getDividers(), null);
+        this.historyList.querySelector('.search-no-results')?.remove();
+        this.historyList.querySelector('.search-counter')?.remove();
         this.searchRenderedIds.clear();
     }
 
@@ -1345,21 +1294,14 @@ export class HistoryChatUI extends ChatUI {
             this.historyList.classList.add('is-searching');
         }
 
-        const baseItems = this.historyList.querySelectorAll('.history-sidebar-item');
-        baseItems.forEach(item => {
-            if (item.dataset.searchTemp === 'true') {
-                item.remove();
-                return;
-            }
-            item.dataset.searchMatch = 'false';
-            item.classList.add('search-hidden');
-        });
+        this.historyList.querySelectorAll('.history-sidebar-item[data-search-temp="true"]').forEach(item => item.remove());
+        const items = this._getHistoryItems();
+        this._setSearchMatch(items, 'false');
+        this._toggleSearchHidden(items, true);
 
-        const dividers = this.historyList.querySelectorAll('.history-divider');
-        dividers.forEach(divider => {
-            divider.dataset.searchMatch = 'false';
-            divider.classList.add('search-hidden');
-        });
+        const dividers = this._getDividers();
+        this._setSearchMatch(dividers, 'false');
+        this._toggleSearchHidden(dividers, true);
 
         void this.paginator.requestMore({ reason: 'search-init' });
     }
@@ -1369,91 +1311,64 @@ export class HistoryChatUI extends ChatUI {
         this.inSearchMode = false;
         this.historyList.classList.remove('is-searching');
 
-        const baseItems = this.historyList.querySelectorAll('.history-sidebar-item');
-        baseItems.forEach(item => {
-            if (item.dataset.searchTemp === 'true') {
-                item.remove();
-                return;
-            }
-            delete item.dataset.searchMatch;
-            item.classList.remove('search-hidden');
-        });
+        this.historyList.querySelectorAll('.history-sidebar-item[data-search-temp="true"]').forEach(item => item.remove());
+        const items = this._getHistoryItems();
+        this._setSearchMatch(items, null);
+        this._toggleSearchHidden(items, false);
 
-        const dividers = this.historyList.querySelectorAll('.history-divider');
-        dividers.forEach(divider => {
-            delete divider.dataset.searchMatch;
-            divider.classList.remove('search-hidden');
-        });
+        const dividers = this._getDividers();
+        this._setSearchMatch(dividers, null);
+        this._toggleSearchHidden(dividers, false);
 
         this.clearSearchResults();
         this.setSearchLoader(null);
+        this.paginator.reset({ mode: 'history' });
     }
 
     renderSearchResults(results = [], options = {}) {
         const desiredIds = new Set(results.map(r => `${r.id}`));
         const shouldAppend = options?.append === true;
 
-        if (!shouldAppend) {
-            this.clearSearchResults();
-        }
+        if (!shouldAppend) this.clearSearchResults();
 
         results.forEach(({ doc, id }) => {
             const idStr = `${id}`;
             let item = this.getHistoryItem(idStr);
-            if (!item) {
-                if (!doc) return;
-                item = this.createSearchTempItem(doc);
-            }
+            if (!item && doc) item = this.createSearchTempItem(doc);
             if (item) {
                 item.dataset.searchMatch = 'true';
                 item.classList.remove('search-hidden');
-                if (item.dataset.searchTemp !== 'true') {
-                    this.revealDividerForItem(item);
-                }
-            }
-        });
-
-        const tempItems = this.historyList.querySelectorAll('.history-sidebar-item[data-search-temp="true"]');
-        tempItems.forEach(item => {
-            if (!desiredIds.has(item.id) && !shouldAppend) {
-                item.remove();
+                if (item.dataset.searchTemp !== 'true') this.revealDividerForItem(item);
             }
         });
 
         if (!shouldAppend) {
+            this.historyList.querySelectorAll('.history-sidebar-item[data-search-temp="true"]').forEach(item => {
+                if (!desiredIds.has(item.id)) item.remove();
+            });
             this.searchRenderedIds = new Set(desiredIds);
         } else {
             results.forEach(({ id }) => this.searchRenderedIds.add(`${id}`));
         }
 
-        const baseItems = this.historyList.querySelectorAll('.history-sidebar-item');
-        baseItems.forEach(item => {
-            if (item.dataset.searchTemp === 'true') {
-                item.classList.remove('search-hidden');
-                return;
-            }
-            const match = item.dataset.searchMatch === 'true';
-            item.classList.toggle('search-hidden', !match);
+        this._getHistoryItems().forEach(item => {
+            if (item.dataset.searchTemp === 'true') item.classList.remove('search-hidden');
+            else item.classList.toggle('search-hidden', item.dataset.searchMatch !== 'true');
         });
 
-        const dividers = this.historyList.querySelectorAll('.history-divider');
-        dividers.forEach(divider => {
-            const match = divider.dataset.searchMatch === 'true';
-            divider.classList.toggle('search-hidden', !match);
+        this._getDividers().forEach(divider => {
+            divider.classList.toggle('search-hidden', divider.dataset.searchMatch !== 'true');
         });
 
         const noResultsMsg = this.historyList.querySelector('.search-no-results');
         if (!results.length && !noResultsMsg) {
-            const noResults = createElementWithClass('div', 'search-no-results', 'No results found');
-            this.historyList.appendChild(noResults);
+            this.historyList.appendChild(createElementWithClass('div', 'search-no-results', 'No results found'));
         } else if (results.length && noResultsMsg) {
             noResultsMsg.remove();
         }
 
         if (options?.showCounter) {
-            const totalCount = options.totalCount ?? 0;
-            const visible = this.searchRenderedIds.size;
-            this.updateSearchCounter(totalCount, visible);
+            this.updateSearchCounter(options.totalCount ?? 0, this.searchRenderedIds.size);
         }
     }
 
@@ -1473,10 +1388,6 @@ export class HistoryChatUI extends ChatUI {
 
         const counter = createElementWithClass('div', 'search-counter', text);
         this.historyList.prepend(counter);
-    }
-
-    getHistoryList() {
-        return this.historyList;
     }
 
     getSearchContainer() {
@@ -1511,16 +1422,14 @@ export class HistoryChatUI extends ChatUI {
     handleItemDeletion(item) {
         const header = item.previousElementSibling;
         const nextItem = item.nextElementSibling;
-        const nextHeader = nextItem?.classList.contains('history-divider') ? nextItem : null;
-    
+
         item.remove();
-    
-        // If this was the last item under its header
+
         if (header?.classList.contains('history-divider') && 
             (!nextItem || nextItem.classList.contains('history-divider'))) {
             header.remove();
         }
-    
+
         if (this.historyList.scrollHeight <= this.historyList.clientHeight) {
             void this.paginator.requestMore({ reason: 'deletion' });
         }
@@ -1529,27 +1438,22 @@ export class HistoryChatUI extends ChatUI {
     handleNewChatSaved(chat) {
         const currentCategory = this.getDateCategory(chat.timestamp);
         const firstItem = this.historyList.firstElementChild;
+        const newItem = this.createHistoryItem(chat);
 
-        if (firstItem?.classList.contains('history-divider') &&
-            firstItem.textContent === currentCategory) {
-            const newItem = this.createHistoryItem(chat);
+        if (firstItem?.classList.contains('history-divider') && firstItem.textContent === currentCategory) {
             this.historyList.insertBefore(newItem, firstItem.nextSibling);
         } else {
-            const newItem = this.createHistoryItem(chat);
-            const newDivider = this.createDateDivider(currentCategory);
-
             this.historyList.prepend(newItem);
-            this.historyList.prepend(newDivider);
+            this.historyList.prepend(this.createDateDivider(currentCategory));
         }
     }
 
     appendMessages(newMessages, currentMessageIndex) {
         newMessages.forEach(message => {
-            const tempIndex = currentMessageIndex;
             if (message.responses) {
-                this.createArenaMessageWrapperFunc(message, { continueFunc: this.continueFunc, messageIndex: tempIndex });
+                this.createArenaMessageWrapperFunc(message, { continueFunc: this.continueFunc, messageIndex: currentMessageIndex });
             } else {
-                this.addFullMessage(message, false, tempIndex, this.continueFunc);
+                this.addFullMessage(message, false, currentMessageIndex, this.continueFunc);
             }
             currentMessageIndex++;
             this.pendingMediaDiv = null;
@@ -1629,8 +1533,7 @@ export class HistoryChatUI extends ChatUI {
     }
 
     clearLinkedChatFromHeader() {
-        const header = document.getElementById('title-wrapper').querySelector('.linked-chat');
-        if (header) header.remove();
+        document.getElementById('title-wrapper').querySelector('.linked-chat')?.remove();
     }
 
     highlightHistoryItem(chatId) {
@@ -1649,7 +1552,7 @@ export class HistoryChatUI extends ChatUI {
 
     autoUpdateChatHeader(chatId) {
         if (!chatId) return null;
-        const historyItem = document.getElementById(chatId)?.querySelector('.item-text');
+        const historyItem = this.getHistoryItem(chatId)?.querySelector('.item-text');
         if (historyItem && historyItem.textContent !== "Renaming..." && historyItem.textContent !== "Rename failed") {
             this.updateChatHeader(historyItem.textContent);
             return historyItem.textContent;
@@ -1657,7 +1560,7 @@ export class HistoryChatUI extends ChatUI {
     }
 
     handleChatRenamed(chatId, newName) {
-        const historyItem = document.getElementById(chatId)?.querySelector('.item-text');
+        const historyItem = this.getHistoryItem(chatId)?.querySelector('.item-text');
         if (historyItem) historyItem.textContent = newName;
     }
 
@@ -1693,11 +1596,7 @@ export class HistoryChatUI extends ChatUI {
     }
 
     setSearchHighlight(config) {
-        if (config && (!config.rawQuery || !config.rawQuery.length)) {
-            config = null;
-        }
-
-        this.searchHighlightConfig = config ? {
+        this.searchHighlightConfig = (config?.rawQuery?.length) ? {
             rawQuery: config.rawQuery,
             normalizedQuery: config.normalizedQuery ?? null,
             resultIds: Array.isArray(config.resultIds) ? config.resultIds : null,
@@ -1728,11 +1627,13 @@ export class HistoryChatUI extends ChatUI {
         const highlights = this.highlightMatchesInConversation({ rawQuery, normalizedQuery });
         this.activeHighlights = highlights;
 
-        if (forceScroll && highlights.length) {
-            requestAnimationFrame(() => {
-                highlights[0].classList.add('is-first');
-                highlights[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
-            });
+        if (highlights.length) {
+            highlights[0].classList.add('is-first');
+            if (forceScroll) {
+                requestAnimationFrame(() => {
+                    highlights[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+                });
+            }
         }
     }
 
@@ -1779,15 +1680,14 @@ export class HistoryChatUI extends ChatUI {
                 const startIndex = match.index ?? 0;
                 const matchText = match[0] ?? '';
                 const range = this.createRangeForSubstring(element, startIndex, matchText.length);
-                if (!range) return;
+                if (!range) continue;
                 const span = document.createElement('span');
                 span.className = 'search-highlight';
                 try {
                     range.surroundContents(span);
                     elementHighlights.push(span);
                 } catch (error) {
-                    // If surround fails (e.g., due to overlapping ranges), ignore this match
-                    console.warn('Highlight surround failed:', error);
+                    // Silently skip matches that span across element boundaries
                 }
             }
 
@@ -1799,17 +1699,11 @@ export class HistoryChatUI extends ChatUI {
     }
 
     buildHighlightPattern(rawQuery, normalizedQuery) {
-        const source = (rawQuery && rawQuery.trim()) || (normalizedQuery && normalizedQuery.trim());
+        const source = rawQuery?.trim() || normalizedQuery?.trim();
         if (!source) return null;
-        const parts = source.split(/(\s+)/).filter(Boolean);
-        if (!parts.length) return null;
-        const escaped = parts.map(part => {
-            if (/^\s+$/.test(part)) {
-                return '\\s+';
-            }
-            return part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        }).join('');
-        return escaped;
+        return source.split(/(\s+)/).filter(Boolean).map(part => 
+            /^\s+$/.test(part) ? '\\s+' : part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        ).join('');
     }
 
     createRangeForSubstring(container, start, length) {
@@ -1849,9 +1743,4 @@ export class HistoryChatUI extends ChatUI {
 
         return null;
     }
-
-    // NOTE: startSearchMode/exitSearchMode plus related rendering helpers are
-    // defined earlier in this class. The duplicate legacy implementations that
-    // only toggled simple state have been removed to ensure the more complete
-    // versions (which manage dividers, pagination, and counters) remain active.
 }

@@ -1668,15 +1668,20 @@ p {
 }
 
 .search-highlight {
-  background: rgba(152, 195, 121, 0.35);
-  color: inherit;
+  background: #fffafa;
+  color: #17141D;
   border-radius: 0.2rem;
   padding: 0 0.1em;
   transition: background 0.2s ease;
 }
 
 .search-highlight.is-first {
-  background: rgba(97, 175, 239, 0.45);
+  background: #ef596f;
+  color: #ffffff;
+}
+
+.search-highlight::selection {
+  color: #17141D;
 }
 
 .search-highlight.fade-out {
