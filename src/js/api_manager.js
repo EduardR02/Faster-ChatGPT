@@ -189,7 +189,16 @@ export class ApiManager {
                 messageParts.push({ type: 'text', content: part.text });
             } else if (part.inlineData?.data) {
                 const mimeType = part.inlineData.mimeType || 'image/png';
-                const imageDataUri = `data:${mimeType};base64,${part.inlineData.data}`;
+                // Fix API bug: Gemini sometimes appends text to base64 image data
+                // Cut at first non-base64 character, then align to multiple of 4
+                let imageData = part.inlineData.data;
+                const firstInvalid = imageData.search(/[^A-Za-z0-9+/=]/);
+                if (firstInvalid !== -1) {
+                    imageData = imageData.slice(0, firstInvalid);
+                    const remainder = imageData.length % 4;
+                    if (remainder) imageData = imageData.slice(0, -remainder);
+                }
+                const imageDataUri = `data:${mimeType};base64,${imageData}`;
                 messageParts.push({ type: 'image', content: imageDataUri });
             }
         }

@@ -26,9 +26,14 @@ class ChatUI {
 
     // Core message creation methods
     createMessage(role, parts = [], options = {}) {
-        const { files, images, ...prefixOptions } = options;
+        const { files, images, messageId, ...prefixOptions } = options;
         if (parts.length > 0 && parts.at(-1).model) prefixOptions.model = parts.at(-1).model;
         const messageBlock = createElementWithClass('div', `${role}-message`);
+        
+        // Add data-message-id if available
+        if (messageId !== undefined && messageId !== null) {
+            messageBlock.dataset.messageId = messageId;
+        }
 
         const prefixWrapper = this.createPrefixWrapper(role, prefixOptions);
         const messageWrapper = this.createMessageWrapper(role, parts, { files, images });
@@ -120,7 +125,7 @@ class ChatUI {
     addFullMessage(message, hideModels = false, index = null, continueFunc = null) {
         const { contents, timestamp, chatId, messageId, ...rest } = message;
         message.contents.forEach((parts, secIdx) => {
-            const new_options = { hideModels, ...rest };
+            const new_options = { hideModels, messageId, ...rest };
             if (continueFunc) new_options.continueFunc = () => continueFunc(index, secIdx);
             if (secIdx !== 0) new_options.isRegeneration = true;
             const messageBlock = this.createMessageWrapperFunc(parts, new_options);
@@ -133,6 +138,12 @@ class ChatUI {
     createArenaMessage(message = {}, options = {}) {
         const { responses, role } = message || {};
         const messageBlock = createElementWithClass('div', `assistant-message`);
+        
+        // Add data-message-id if available
+        if (message.messageId !== undefined && message.messageId !== null) {
+            messageBlock.dataset.messageId = message.messageId;
+        }
+        
         const container = createElementWithClass('div', 'arena-full-container');
         messageBlock.appendChild(container);
         const arenaDivs = [null, null];
@@ -1463,7 +1474,7 @@ export class HistoryChatUI extends ChatUI {
     appendSingleRegeneratedMessage(message, index) {
         const {contents, role, timestamp, messageId, chatId,  ...options} = message
         const continueFunc = () => this.continueFunc(index, contents.length - 1, role);
-        const new_options = { hideModels: false, isRegeneration: true, continueFunc, ...options };
+        const new_options = { hideModels: false, isRegeneration: true, continueFunc, messageId, ...options };
         this.addMessage(role, contents.at(-1), new_options);
     }
 

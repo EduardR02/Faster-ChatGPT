@@ -1004,10 +1004,34 @@ class MediaTab {
     handleMediaClick(entry) {
         this.chatUI.buildChat(entry.chatId).then(() => {
             document.querySelector('[data-tab="chats"]').click();
-            const messageElement = document.querySelector(`[data-message-id="${entry.messageId}"]`);
-            if (messageElement) {
-                messageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
+            
+            // Wait for DOM update after tab switch
+            requestAnimationFrame(() => {
+                const messageElement = document.querySelector(`[data-message-id="${entry.messageId}"]`);
+                if (!messageElement) return;
+
+                // Find the specific image within the message
+                let targetImage = null;
+                
+                if (entry.source === 'user' && entry.imageIndex !== undefined) {
+                    // For user images, get all image-content elements and select by index
+                    const images = messageElement.querySelectorAll('.user-content.image-content img');
+                    targetImage = images[entry.imageIndex];
+                } else if (entry.source === 'assistant') {
+                    // For assistant images, images are in message-wrapper
+                    const images = messageElement.querySelectorAll('.assistant-content.image-content img');
+                    // For simplicity, try to find by position in the content flow
+                    if (entry.contentIndex !== undefined && images.length > entry.contentIndex) {
+                        targetImage = images[entry.contentIndex];
+                    } else if (images.length > 0) {
+                        targetImage = images[0]; // Fallback to first image
+                    }
+                }
+
+                // Scroll to the image if found, otherwise scroll to message
+                const scrollTarget = targetImage || messageElement;
+                scrollTarget.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            });
         });
     }
 
@@ -1038,6 +1062,15 @@ class MediaTab {
 
     async handleInvalidMedia(entryId, item = null) {
         this.markEntryInvalid(entryId);
+        
+        // Clean up caches
+        const messageKey = this.entryMessageKeys.get(entryId);
+        if (messageKey) {
+            this.messageCache.delete(messageKey);
+            this.entryMessageKeys.delete(entryId);
+        }
+        this.mediaItemElements.delete(entryId);
+        
         try {
             await this.chatStorage.deleteMediaEntry(entryId);
         } catch (error) {
