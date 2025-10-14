@@ -768,58 +768,31 @@ class MediaTab {
     }
 
     async renderMediaInBatches(entries, grid, loadContext = null, batchSize = 24) {
-        const messageCache = this.messageCache;
-        let prefetchBudget = Math.min(MEDIA_INITIAL_PREFETCH_COUNT, entries.length);
-
         for (let i = 0; i < entries.length; i += batchSize) {
             if (loadContext?.aborted) return;
 
             const batch = entries.slice(i, i + batchSize);
+            
+            // Load all messages for this batch
+            await this.ensureMessagesLoaded(batch, this.messageCache, loadContext);
+            if (loadContext?.aborted) return;
 
-            let startIndex = 0;
-
-            if (prefetchBudget > 0) {
-                const prefetchCount = Math.min(prefetchBudget, batch.length);
-                if (prefetchCount > 0) {
-                    const prefetchChunk = batch.slice(0, prefetchCount);
-                    await this.ensureMessagesLoaded(prefetchChunk, messageCache, loadContext);
-                    if (loadContext?.aborted) return;
-                    prefetchBudget = Math.max(0, prefetchBudget - prefetchCount);
-                    startIndex = prefetchCount;
-                }
-            }
-
-            if (startIndex < batch.length) {
-                const remaining = batch.slice(startIndex);
-                if (remaining.length) {
-                    await this.ensureMessagesLoaded(remaining, messageCache, loadContext);
-                    if (loadContext?.aborted) return;
-                }
-            }
-
+            // Render in smaller chunks for smoother UI
             for (let j = 0; j < batch.length; j += MEDIA_RENDER_CHUNK_SIZE) {
                 if (loadContext?.aborted) return;
 
-                const fragment = document.createDocumentFragment();
                 const chunk = batch.slice(j, j + MEDIA_RENDER_CHUNK_SIZE);
-                const chunkElements = await Promise.all(chunk.map(async (entry) => {
-                    const cachedElement = this.mediaItemElements.get(entry.id);
-                    if (cachedElement) {
-                        return cachedElement;
-                    }
+                const chunkElements = await Promise.all(chunk.map(entry => 
+                    this.mediaItemElements.get(entry.id) || this.buildMediaItem(entry, this.messageCache, loadContext)
+                ));
 
-                    return await this.buildMediaItem(entry, messageCache, loadContext);
-                }));
-
-                chunkElements.forEach(el => {
-                    if (el) fragment.appendChild(el);
-                });
-
+                const fragment = document.createDocumentFragment();
+                chunkElements.forEach(el => el && fragment.appendChild(el));
+                
                 if (fragment.childNodes.length) {
                     grid.appendChild(fragment);
                 }
 
-                if (loadContext?.aborted) return;
                 await nextFrame();
             }
         }
@@ -842,25 +815,7 @@ class MediaTab {
         const messageKey = this.getEntryMessageKey(entry);
         this.entryMessageKeys.set(entry.id, messageKey);
 
-        const cachedElement = this.mediaItemElements.get(entry.id);
-        if (cachedElement) {
-            return cachedElement;
-        }
-
-        let message = messageCache.get(messageKey);
-
-        if (message === undefined) {
-            try {
-                message = await this.chatStorage.getMessage(entry.chatId, entry.messageId);
-            } catch (error) {
-                console.warn('Failed to load message for media entry', entry.id, error);
-                message = null;
-            }
-
-            if (loadContext?.aborted) return null;
-            messageCache.set(messageKey, message ?? null);
-        }
-
+        const message = messageCache.get(messageKey) ?? null;
         const imageData = this.extractImageData(entry, message);
 
         if (!this.isValidImage(imageData)) {
@@ -883,7 +838,7 @@ class MediaTab {
             const key = this.getEntryMessageKey(entry);
             if (messageCache.has(key) || pendingKeys.has(key)) continue;
             pendingKeys.add(key);
-            batchRequests.push({ chatId: entry.chatId, messageId: entry.messageId, entryId: entry.id, cacheKey: key });
+            batchRequests.push({ chatId: entry.chatId, messageId: entry.messageId, cacheKey: key });
         }
 
         if (!batchRequests.length) return;
@@ -892,29 +847,21 @@ class MediaTab {
             const results = await this.chatStorage.getMessagesBatch(batchRequests.map(r => ({ chatId: r.chatId, messageId: r.messageId })));
             if (loadContext?.aborted) return;
 
-            for (const request of batchRequests) {
-                const { cacheKey, entryId } = request;
-                const message = results.get(cacheKey) ?? null;
-                if (message === null && !results.has(cacheKey)) {
-                    console.warn('Missing message for media entry', entryId);
-                }
-                messageCache.set(cacheKey, message);
-            }
+            batchRequests.forEach(({ cacheKey }) => {
+                messageCache.set(cacheKey, results.get(cacheKey) ?? null);
+            });
         } catch (error) {
-            console.warn('Failed to batch load messages for media entries', error);
+            console.warn('Batch load failed, falling back to individual requests:', error);
             if (loadContext?.aborted) return;
 
-            for (const request of batchRequests) {
-                const { chatId, messageId, cacheKey, entryId } = request;
+            // Fallback: load individually
+            for (const { chatId, messageId, cacheKey } of batchRequests) {
+                if (loadContext?.aborted) return;
                 try {
                     const message = await this.chatStorage.getMessage(chatId, messageId);
-                    if (loadContext?.aborted) return;
                     messageCache.set(cacheKey, message ?? null);
-                } catch (singleError) {
-                    console.warn('Failed to load message for media entry', entryId, singleError);
-                    if (!messageCache.has(cacheKey)) {
-                        messageCache.set(cacheKey, null);
-                    }
+                } catch (error) {
+                    messageCache.set(cacheKey, null);
                 }
             }
         }
@@ -1004,35 +951,22 @@ class MediaTab {
     handleMediaClick(entry) {
         this.chatUI.buildChat(entry.chatId).then(() => {
             document.querySelector('[data-tab="chats"]').click();
-            
-            // Wait for DOM update after tab switch
             requestAnimationFrame(() => {
                 const messageElement = document.querySelector(`[data-message-id="${entry.messageId}"]`);
                 if (!messageElement) return;
 
-                // Find the specific image within the message
-                let targetImage = null;
-                
-                if (entry.source === 'user' && entry.imageIndex !== undefined) {
-                    // For user images, get all image-content elements and select by index
-                    const images = messageElement.querySelectorAll('.user-content.image-content img');
-                    targetImage = images[entry.imageIndex];
-                } else if (entry.source === 'assistant') {
-                    // For assistant images, images are in message-wrapper
-                    const images = messageElement.querySelectorAll('.assistant-content.image-content img');
-                    // For simplicity, try to find by position in the content flow
-                    if (entry.contentIndex !== undefined && images.length > entry.contentIndex) {
-                        targetImage = images[entry.contentIndex];
-                    } else if (images.length > 0) {
-                        targetImage = images[0]; // Fallback to first image
-                    }
-                }
-
-                // Scroll to the image if found, otherwise scroll to message
-                const scrollTarget = targetImage || messageElement;
-                scrollTarget.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                const targetImage = this.findImageInMessage(messageElement, entry);
+                (targetImage || messageElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
             });
         });
+    }
+
+    findImageInMessage(messageElement, entry) {
+        const selector = entry.source === 'user' ? '.user-content.image-content img' : '.assistant-content.image-content img';
+        const images = messageElement.querySelectorAll(selector);
+        const index = entry.source === 'user' ? entry.imageIndex : entry.contentIndex;
+        
+        return images[index] || images[0] || null;
     }
 
     isValidImage(imageData) {

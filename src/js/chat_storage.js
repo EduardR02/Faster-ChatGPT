@@ -378,20 +378,17 @@ export class ChatStorage {
                 timestamp,
                 ...message
             });
+            
             request.onsuccess = () => {
-                // Track images in media index
-                const mediaPromises = this.indexImagesFromMessages(chatId, [message], mediaStore, messageId);
-                Promise.all(mediaPromises).then(() => {
-                    resolve(request.result);
-                }).catch(() => {
-                    resolve(request.result); // Don't fail on media index errors
-                });
+                this.replaceMediaEntriesForMessage(mediaStore, chatId, messageId, message)
+                    .then(() => resolve(request.result))
+                    .catch(() => resolve(request.result)); // Don't fail on media index errors
             };
+            
             request.onerror = () => reject(request.error);
         });
 
         await this.updateChatOption(chatId, { timestamp });
-
         await this.refreshSearchDoc(chatId);
 
         chrome.runtime.sendMessage({
@@ -401,6 +398,41 @@ export class ChatStorage {
         });
 
         return result;
+    }
+
+    // Helper to replace media entries for a message (delete old, add new)
+    async replaceMediaEntriesForMessage(mediaStore, chatId, messageId, message) {
+        // Find all existing media entries for this message
+        const entriesToDelete = await new Promise((resolve) => {
+            const entries = [];
+            const cursor = mediaStore.index('chatId').openCursor(IDBKeyRange.only(chatId));
+            
+            cursor.onsuccess = (e) => {
+                const result = e.target.result;
+                if (result) {
+                    if (result.value.messageId === messageId) {
+                        entries.push(result.primaryKey);
+                    }
+                    result.continue();
+                } else {
+                    resolve(entries);
+                }
+            };
+            cursor.onerror = () => resolve([]); // Continue even if cursor fails
+        });
+
+        // Delete old entries
+        await Promise.all(entriesToDelete.map(key =>
+            new Promise(resolve => {
+                const req = mediaStore.delete(key);
+                req.onsuccess = () => resolve();
+                req.onerror = () => resolve();
+            })
+        ));
+
+        // Add new entries
+        const mediaPromises = this.indexImagesFromMessages(chatId, [message], mediaStore, messageId);
+        await Promise.all(mediaPromises);
     }
 
     async indexAllMediaFromExistingMessages(batchSize = 25) {

@@ -190,16 +190,33 @@ export class ApiManager {
             } else if (part.inlineData?.data) {
                 const mimeType = part.inlineData.mimeType || 'image/png';
                 // Fix API bug: Gemini sometimes appends text to base64 image data
-                // Cut at first non-base64 character, then align to multiple of 4
                 let imageData = part.inlineData.data;
-                const firstInvalid = imageData.search(/[^A-Za-z0-9+/=]/);
-                if (firstInvalid !== -1) {
-                    imageData = imageData.slice(0, firstInvalid);
-                    const remainder = imageData.length % 4;
-                    if (remainder) imageData = imageData.slice(0, -remainder);
+                let appendedText = '';
+                
+                // Find last = from the end
+                const lastEquals = imageData.lastIndexOf('=');
+                if (lastEquals !== -1 && lastEquals < imageData.length - 1) {
+                    // There's content after the =, check if it looks like text
+                    const afterEquals = imageData.slice(lastEquals + 1);
+                    if (/[^A-Za-z0-9+/=]/.test(afterEquals)) {
+                        // Contains non-base64 characters, split here
+                        appendedText = afterEquals;
+                        imageData = imageData.slice(0, lastEquals + 1);
+                    }
                 }
+                
                 const imageDataUri = `data:${mimeType};base64,${imageData}`;
                 messageParts.push({ type: 'image', content: imageDataUri });
+                
+                // If we found appended text, add it as a separate text part
+                if (appendedText) {
+                    try {
+                        appendedText = decodeURIComponent(appendedText);
+                    } catch (e) {
+                        // If decoding fails, use as-is
+                    }
+                    messageParts.push({ type: 'text', content: appendedText });
+                }
             }
         }
 
@@ -207,7 +224,7 @@ export class ApiManager {
             throw new Error("No content in response");
         }
 
-        return this.returnMessage(messageParts);
+        return messageParts;
     }
 
     processFiles(messages) {
