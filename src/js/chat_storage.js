@@ -1016,7 +1016,8 @@ export class ChatStorage {
     }
 
     triggerDownload(json, filename = `chat-backup-${Date.now()}.json`) {
-        const blob = new Blob([json], { type: 'application/json' });
+        // Explicitly specify UTF-8 encoding to ensure consistency across platforms
+        const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
         const url = URL.createObjectURL(blob);
 
         const a = document.createElement('a');

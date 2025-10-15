@@ -502,14 +502,13 @@ async function initiateChatBackupImport(element) {
             }
             setTimeout(() => { element.textContent = "import"; }, 5000);
         };
-        reader.readAsText(file);
+        reader.readAsText(file, 'UTF-8');
     };
     fileInput.click(); // Programmatically trigger file selection
 }
 
 
 const MEDIA_DEFAULT_LIMIT = 500;
-const MEDIA_INITIAL_PREFETCH_COUNT = 12;
 const MEDIA_RENDER_CHUNK_SIZE = 12;
 const MEDIA_STATE = Object.freeze({
     loading: 'loading',
