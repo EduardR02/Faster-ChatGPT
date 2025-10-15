@@ -1763,8 +1763,8 @@ class ChatSearch {
     renderNextSearchBatch(reset = false) {
         if (reset) {
             this.chatUI.exitSearchMode();
-            this.chatUI.startSearchMode();
             this.chatUI.paginator.reset({ mode: 'search' });
+            this.chatUI.startSearchMode();
             this.searchDisplayOffset = 0;
             this.chatUI.updateSearchCounter(this.currentDisplayItems.length, 0);
             this.attachSearchScrollListener();
