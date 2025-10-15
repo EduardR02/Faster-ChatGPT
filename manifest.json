@@ -23,13 +23,15 @@
 	"commands": {
 		"new-chat": {
 			"suggested_key": {
-				"default": "Ctrl+Shift+L"
+				"default": "Ctrl+Shift+L",
+				"mac": "Command+Shift+L"
 			},
 			"description": "Start new chat"
 		},
 		"open-history": {
 			"suggested_key": {
-				"default": "Ctrl+Shift+H"
+				"default": "Ctrl+Shift+H",
+				"mac": "Command+Shift+H"
 			},
 			"description": "Open history"
 		}
