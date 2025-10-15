@@ -936,9 +936,10 @@ export class ChatStorage {
                 chatQueue.push(chat);
             });
 
-            const tx = db.transaction(['chatMeta', 'messages'], 'readwrite');
+            const tx = db.transaction(['chatMeta', 'messages', 'mediaIndex'], 'readwrite');
             const metaStore = tx.objectStore('chatMeta');
             const messageStore = tx.objectStore('messages');
+            const mediaStore = tx.objectStore('mediaIndex');
 
             let importedCount = 0;
             const pendingLinkUpdates = [];
@@ -972,6 +973,10 @@ export class ChatStorage {
                             messageStore.add({ ...msg, chatId: newChatId }).onsuccess = resolve;
                         })
                     ));
+
+                    // Index media from imported messages
+                    const mediaPromises = this.indexImagesFromMessages(newChatId, messages, mediaStore);
+                    await Promise.all(mediaPromises);
 
                     importedCount++;
                 }));
