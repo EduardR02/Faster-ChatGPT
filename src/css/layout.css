@@ -1202,10 +1202,30 @@ p {
   padding-bottom: 1px;
   margin-left: auto;
   background: #fdaaaa;
+  transition: background 0.15s ease;
 }
 
 .delete-arena.confirm {
   background: #ef596f;
+}
+
+.button.delete-arena.reindex-busy {
+  background: #fcb7c1;
+}
+
+.button.delete-arena.reindex-success {
+  background: #98c379;
+  color: #1e1e1e;
+}
+
+.button.delete-arena.reindex-failure {
+  background: #ef596f;
+  color: #ffffff;
+}
+
+.button.delete-arena.reindex-prompt {
+  background: #fffafa;
+  color: #1e1e1e;
 }
 
 .arena-button {

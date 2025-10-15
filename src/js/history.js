@@ -297,6 +297,20 @@ function initMessageListeners() {
             case 'chat_renamed':
                 handleChatRenamed(message.chatId, message.title);
                 break;
+            case 'history_reindex':
+                (async () => {
+                    try {
+                        const tasks = [];
+                        if (chatSearch) tasks.push(chatSearch.reindex());
+                        if (mediaTab) tasks.push(mediaTab.reindexMedia());
+                        await Promise.all(tasks);
+                        sendResponse({ ok: true });
+                    } catch (error) {
+                        console.error('History reindex failed:', error);
+                        sendResponse({ ok: false, error: error?.message ?? 'unknown_error' });
+                    }
+                })();
+                return true;
         }
     });
 }
@@ -554,6 +568,7 @@ class MediaTab {
         this.renderScheduled = false;
         this.mediaItemElements = new Map();
         this.entryMessageKeys = new Map();
+        this.deferredForceRefresh = false;
         this.init();
     }
 
@@ -589,18 +604,29 @@ class MediaTab {
         if (tabName === 'media') {
             if (mediaSidebar) mediaSidebar.style.display = 'flex';
             if (mediaView) mediaView.style.display = 'flex';
+            if (!this.hasAttemptedInitialLoad) {
+                this.hasAttemptedInitialLoad = true;
+                const shouldForce = this.deferredForceRefresh;
+                if (shouldForce) this.deferredForceRefresh = false;
+                runWhenIdle(() => { void this.refreshMedia({ force: shouldForce }); });
+            } else if (this.deferredForceRefresh) {
+                this.deferredForceRefresh = false;
+                runWhenIdle(() => { void this.refreshMedia({ force: true }); });
+            } else if (this.pendingRefresh) {
+                runWhenIdle(() => { void this.refreshMedia({ force: true }); });
+            }
         } else {
             if (chatContainer) chatContainer.style.display = 'flex';
             if (chatView) chatView.style.display = 'flex';
         }
 
-        if (tabName === 'media' && !this.hasAttemptedInitialLoad) {
-            this.hasAttemptedInitialLoad = true;
-            runWhenIdle(() => { void this.refreshMedia(); });
-        }
     }
 
     async refreshMedia({ force = false } = {}) {
+        if (force) {
+            this.deferredForceRefresh = false;
+        }
+
         if (this.isLoading && !force) return;
 
         const runLoad = async () => {
@@ -664,6 +690,70 @@ class MediaTab {
 
         this.pendingRefresh = false;
         await runLoad();
+    }
+
+    async reindexMedia() {
+        const db = await this.chatStorage.getDB();
+
+        if (!db.objectStoreNames.contains('mediaIndex')) {
+            const mediaActive = this.isMediaTabActive();
+            if (mediaActive) {
+                this.deferredForceRefresh = false;
+                await this.refreshMedia({ force: true });
+            } else {
+                this.deferredForceRefresh = true;
+                this.mediaEntries = [];
+                this.mediaItemElements.clear();
+                this.entryMessageKeys.clear();
+                this.messageCache.clear();
+                this.invalidMediaIds = new Set();
+                this.mediaLoadContext = null;
+                this.isLoading = false;
+                this.pendingRefresh = false;
+            }
+            return 0;
+        }
+
+        try {
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction(['mediaIndex'], 'readwrite');
+                tx.objectStore('mediaIndex').clear();
+                const fail = () => reject(tx.error || new Error('Failed to clear media index'));
+                tx.oncomplete = () => resolve();
+                tx.onabort = fail;
+                tx.onerror = fail;
+            });
+
+            const indexedCount = await this.chatStorage.indexAllMediaFromExistingMessages();
+            const mediaActive = this.isMediaTabActive();
+            if (mediaActive) {
+                this.deferredForceRefresh = false;
+                await this.refreshMedia({ force: true });
+            } else {
+                this.deferredForceRefresh = true;
+                this.mediaEntries = [];
+                this.mediaItemElements.clear();
+                this.entryMessageKeys.clear();
+                this.messageCache.clear();
+                this.invalidMediaIds = new Set();
+                this.mediaLoadContext = null;
+                this.isLoading = false;
+                this.pendingRefresh = false;
+            }
+            return indexedCount;
+        } catch (error) {
+            if (this.isMediaTabActive()) {
+                await this.refreshMedia({ force: true }).catch(() => {});
+            } else {
+                this.deferredForceRefresh = true;
+            }
+            throw error;
+        }
+    }
+
+    isMediaTabActive() {
+        const tab = document.querySelector('.history-tab[data-tab="media"]');
+        return !!tab && tab.classList.contains('active');
     }
 
     setMediaState(panel, state) {

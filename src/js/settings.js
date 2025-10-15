@@ -75,6 +75,11 @@ class SettingsUI {
         // Arena reset
         const resetButton = document.getElementById('button-delete-arena');
         resetButton.addEventListener('click', () => this.handleArenaReset(resetButton));
+
+        const reindexButton = document.getElementById('button-reindex');
+        if (reindexButton) {
+            reindexButton.addEventListener('click', () => this.handleReindexRequest(reindexButton));
+        }
     }
 
     async initializeUI() {
@@ -167,8 +172,7 @@ class SettingsUI {
         if (selectToggle.checked) {
             const otherMode = mode === 'arena' ? 'rename' : 'arena';
             document.getElementById(`${otherMode}_select`).checked = false;
-        }
-    
+        }        
         this.updateModelCheckboxes();
     }
     
@@ -176,6 +180,56 @@ class SettingsUI {
         const input = event.target;
         const key = input.value.trim();
         if (key) this.stateManager.setApiKey(this.apiProviders[this.currentApiIndex], key);
+    }
+
+    async handleReindexRequest(button) {
+        if (!button || button.dataset.busy === 'true') return;
+
+        const span = button.querySelector('span');
+        const readLabel = () => (span ? span.textContent : button.textContent).trim();
+        const writeLabel = (text) => {
+            if (span) {
+                span.textContent = `${text} `;
+            } else {
+                button.textContent = text;
+            }
+        };
+
+        const defaultLabel = button.dataset.defaultLabel || readLabel();
+        button.dataset.defaultLabel = defaultLabel;
+
+        const stateClasses = ['reindex-busy', 'reindex-success', 'reindex-prompt', 'reindex-failure', 'confirm'];
+        const applyState = (text, classes = []) => {
+            writeLabel(text);
+            button.classList.remove(...stateClasses);
+            classes.forEach(cls => button.classList.add(cls));
+        };
+
+        const resetState = () => {
+            setTimeout(() => {
+                applyState(defaultLabel);
+            }, 2500);
+        };
+
+        button.dataset.busy = 'true';
+        button.disabled = true;
+        applyState('Reindexing...', ['reindex-busy']);
+
+        try {
+            const result = await chrome.runtime.sendMessage({ type: 'history_reindex' });
+            if (result?.ok) {
+                applyState('Reindexed', ['reindex-success']);
+            } else {
+                applyState('Open history first to reindex', ['reindex-prompt']);
+            }
+        } catch (error) {
+            console.error('Failed to trigger reindex:', error);
+            applyState('Reindex failed', ['reindex-failure']);
+        } finally {
+            button.disabled = false;
+            delete button.dataset.busy;
+            resetState();
+        }
     }
 
     updateModelCheckboxes() {
