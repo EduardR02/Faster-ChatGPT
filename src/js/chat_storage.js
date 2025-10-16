@@ -1076,17 +1076,17 @@ export class ChatStorage {
 
             if (message.images && message.images.length > 0) {
                 message.images.forEach((imageData, imgIndex) => {
-                    promises.push(new Promise((resolve, reject) => {
-                        const req = mediaStore.add({
-                            chatId,
-                            messageId,
-                            imageIndex: imgIndex,
-                            source: 'user',
-                            timestamp: baseTimestamp
-                        });
-                        req.onsuccess = () => resolve();
-                        req.onerror = () => resolve(); // Don't fail the whole transaction on media index errors
-                    }));
+                    const record = {
+                        chatId,
+                        messageId,
+                        imageIndex: imgIndex,
+                        source: 'user',
+                        timestamp: baseTimestamp
+                    };
+                    promises.push(this.storeMediaEntry(mediaStore, record, this.getImageDataForThumbnail(message, {
+                        source: 'user',
+                        imageIndex: imgIndex
+                    })));
                 });
             }
 
@@ -1095,18 +1095,19 @@ export class ChatStorage {
                     if (!contentGroup || !Array.isArray(contentGroup)) return;
                     contentGroup.forEach((part, partIndex) => {
                         if (!part || part.type !== 'image') return;
-                        promises.push(new Promise((resolve, reject) => {
-                            const req = mediaStore.add({
-                                chatId,
-                                messageId,
-                                contentIndex,
-                                partIndex,
-                                source: 'assistant',
-                                timestamp: baseTimestamp
-                            });
-                            req.onsuccess = () => resolve();
-                            req.onerror = () => resolve();
-                        }));
+                        const record = {
+                            chatId,
+                            messageId,
+                            contentIndex,
+                            partIndex,
+                            source: 'assistant',
+                            timestamp: baseTimestamp
+                        };
+                        promises.push(this.storeMediaEntry(mediaStore, record, this.getImageDataForThumbnail(message, {
+                            source: 'assistant',
+                            contentIndex,
+                            partIndex
+                        })));
                     });
                 });
             }
@@ -1120,19 +1121,21 @@ export class ChatStorage {
                         if (!msgGroup || !Array.isArray(msgGroup)) return;
                         msgGroup.forEach((part, partIndex) => {
                             if (!part || part.type !== 'image') return;
-                            promises.push(new Promise((resolve, reject) => {
-                                const req = mediaStore.add({
-                                    chatId,
-                                    messageId,
-                                    modelKey,
-                                    messageIndex: msgIndex,
-                                    partIndex,
-                                    source: 'assistant',
-                                    timestamp: baseTimestamp
-                                });
-                                req.onsuccess = () => resolve();
-                                req.onerror = () => resolve();
-                            }));
+                            const record = {
+                                chatId,
+                                messageId,
+                                modelKey,
+                                messageIndex: msgIndex,
+                                partIndex,
+                                source: 'assistant',
+                                timestamp: baseTimestamp
+                            };
+                            promises.push(this.storeMediaEntry(mediaStore, record, this.getImageDataForThumbnail(message, {
+                                source: 'assistant',
+                                modelKey,
+                                messageIndex: msgIndex,
+                                partIndex
+                            })));
                         });
                     });
                 });
@@ -1140,6 +1143,226 @@ export class ChatStorage {
         });
 
         return promises;
+    }
+
+    getImageDataForThumbnail(message, descriptor) {
+        if (!message || !descriptor) return null;
+
+        if (descriptor.source === 'user') {
+            return Array.isArray(message.images) ? message.images[descriptor.imageIndex] ?? null : null;
+        }
+
+        if (descriptor.source === 'assistant') {
+            if (descriptor.contentIndex !== undefined) {
+                const group = Array.isArray(message.contents) ? message.contents[descriptor.contentIndex] : null;
+                const part = Array.isArray(group) ? group[descriptor.partIndex] : null;
+                if (part?.type === 'image' && part.content) return part.content;
+            }
+
+            if (descriptor.modelKey) {
+                const modelResponse = message.responses?.[descriptor.modelKey];
+                const msgGroup = Array.isArray(modelResponse?.messages) ? modelResponse.messages[descriptor.messageIndex] : null;
+                const part = Array.isArray(msgGroup) ? msgGroup[descriptor.partIndex] : null;
+                if (part?.type === 'image' && part.content) return part.content;
+            }
+        }
+
+        return null;
+    }
+
+    async storeMediaEntry(mediaStore, record, imageData) {
+        const entry = { ...record };
+
+        return new Promise((resolve) => {
+            const req = mediaStore.add(entry);
+            req.onsuccess = async () => {
+                resolve();
+                if (!imageData) return;
+                const entryId = req.result;
+                if (entryId == null) return;
+                entry.id = entryId;
+                try {
+                    const thumbnail = await this.createThumbnail(imageData);
+                    if (thumbnail?.dataUrl) {
+                        entry.thumbnail = thumbnail.dataUrl;
+                        entry.thumbnailWidth = thumbnail.width;
+                        entry.thumbnailHeight = thumbnail.height;
+                        entry.thumbnailFormat = thumbnail.format;
+                        await this.updateMediaThumbnail(entryId, entry);
+                    }
+                } catch (error) {
+                    console.warn('Failed to generate media thumbnail:', error);
+                }
+            };
+            req.onerror = () => resolve();
+        });
+    }
+
+    async createThumbnail(imageData, maxShortEdge = 512) {
+        if (typeof document === 'undefined' || typeof Image === 'undefined') {
+            return null;
+        }
+
+        if (typeof imageData !== 'string' || !imageData.startsWith('data:image/')) {
+            return null;
+        }
+
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.decoding = 'async';
+            img.crossOrigin = 'anonymous';
+            img.onload = () => {
+                const width = img.naturalWidth || img.width;
+                const height = img.naturalHeight || img.height;
+
+                if (!width || !height) {
+                    resolve(null);
+                    return;
+                }
+
+                const shortestSide = Math.min(width, height);
+                let scale = 1;
+
+                if (shortestSide > maxShortEdge) {
+                    scale = maxShortEdge / shortestSide;
+                }
+
+                const targetWidth = Math.max(1, Math.round(width * scale));
+                const targetHeight = Math.max(1, Math.round(height * scale));
+
+                if (scale === 1) {
+                    resolve({
+                        dataUrl: imageData,
+                        width,
+                        height,
+                        format: this.extractMimeFromDataUrl(imageData)
+                    });
+                    return;
+                }
+
+                const canvas = document.createElement('canvas');
+                canvas.width = targetWidth;
+                canvas.height = targetHeight;
+                const ctx = canvas.getContext('2d');
+                if (!ctx) {
+                    resolve(null);
+                    return;
+                }
+                ctx.imageSmoothingQuality = 'medium';
+                ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+
+                let dataUrl;
+                try {
+                    dataUrl = canvas.toDataURL('image/webp', 0.82);
+                } catch (error) {
+                    try {
+                        dataUrl = canvas.toDataURL('image/png');
+                    } catch (_) {
+                        dataUrl = null;
+                    }
+                }
+
+                resolve(dataUrl ? {
+                    dataUrl,
+                    width: targetWidth,
+                    height: targetHeight,
+                    format: this.extractMimeFromDataUrl(dataUrl)
+                } : null);
+            };
+            img.onerror = () => resolve(null);
+            img.src = imageData;
+        });
+    }
+
+    extractMimeFromDataUrl(dataUrl) {
+        if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) return null;
+        const mimeSection = dataUrl.slice(5, dataUrl.indexOf(';'));
+        return mimeSection || null;
+    }
+
+    async updateMediaThumbnail(entryId, partialEntry) {
+        if (!partialEntry?.thumbnail) return;
+        try {
+            const db = await this.getDB();
+            const tx = db.transaction('mediaIndex', 'readwrite');
+            const store = tx.objectStore('mediaIndex');
+
+            const existing = await new Promise((resolve) => {
+                const getReq = store.get(entryId);
+                getReq.onsuccess = () => resolve(getReq.result ?? null);
+                getReq.onerror = () => resolve(null);
+            });
+
+            if (!existing) return;
+            existing.thumbnail = partialEntry.thumbnail;
+            existing.thumbnailWidth = partialEntry.thumbnailWidth;
+            existing.thumbnailHeight = partialEntry.thumbnailHeight;
+            existing.thumbnailFormat = partialEntry.thumbnailFormat;
+
+            await new Promise((resolve) => {
+                const putReq = store.put(existing);
+                putReq.onsuccess = () => resolve();
+                putReq.onerror = () => resolve();
+            });
+        } catch (error) {
+            console.warn('Failed to persist media thumbnail:', error);
+        }
+    }
+
+    async ensureMediaThumbnails(entries, { maxShortEdge = 512 } = {}) {
+        if (!Array.isArray(entries) || entries.length === 0) {
+            return false;
+        }
+
+        const pending = entries.filter(entry => entry && entry.id != null && !entry.thumbnail);
+        if (pending.length === 0) {
+            return false;
+        }
+
+        const updated = [];
+
+        for (const entry of pending) {
+            try {
+                const imageData = await this.getImageFromMediaEntry(entry);
+                if (!imageData) continue;
+                const thumbnail = await this.createThumbnail(imageData, maxShortEdge);
+                if (!thumbnail?.dataUrl) continue;
+
+                entry.thumbnail = thumbnail.dataUrl;
+                entry.thumbnailWidth = thumbnail.width;
+                entry.thumbnailHeight = thumbnail.height;
+                entry.thumbnailFormat = thumbnail.format;
+                updated.push(entry);
+            } catch (error) {
+                console.warn('Failed to backfill media thumbnail:', error);
+            }
+        }
+
+        if (updated.length === 0) {
+            return false;
+        }
+
+        try {
+            const db = await this.getDB();
+            const tx = db.transaction('mediaIndex', 'readwrite');
+            const store = tx.objectStore('mediaIndex');
+
+            await Promise.all(updated.map(entry => new Promise((resolve) => {
+                const req = store.put(entry);
+                req.onsuccess = () => resolve();
+                req.onerror = () => resolve();
+            })));
+
+            await new Promise((resolve) => {
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => resolve();
+                tx.onabort = () => resolve();
+            });
+        } catch (error) {
+            console.warn('Failed to persist thumbnail backfill batch:', error);
+        }
+
+        return true;
     }
 
     // Get all media entries
@@ -1191,6 +1414,10 @@ export class ChatStorage {
 
     // Get image data from a media index entry
     async getImageFromMediaEntry(entry) {
+        if (entry?.thumbnail) {
+            return entry.thumbnail;
+        }
+
         const message = await this.getMessage(entry.chatId, entry.messageId);
         if (!message) return null;
 
