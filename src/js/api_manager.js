@@ -1230,7 +1230,7 @@ export class ApiManager {
     }
 
     handleKimiStreamData(parsed, tokenCounter, streamWriter) {
-        if (parsed?.usage && parsed?.choices?.[0]?.delta?.content === "") {
+        if (parsed?.usage && parsed?.choices?.length === 0) {
             tokenCounter.update(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);
             return;
         }
