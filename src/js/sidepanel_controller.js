@@ -92,7 +92,10 @@ export class SidepanelController {
             }
             success = true;
         } catch (error) {
-            if (!manualAborted) this.chatUI.addErrorMessage(`Error: ${error.message}`);
+            if (!manualAborted) {
+                const uiMessage = this.apiManager.getUiErrorMessage(error);
+                this.chatUI.addErrorMessage(uiMessage);
+            }
         } finally {
             tokenCounter.updateLifetimeTokens();
             // Always remove by logical model key so arena lookup works

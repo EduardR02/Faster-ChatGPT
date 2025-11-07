@@ -57,7 +57,17 @@ export class ApiManager {
         try {
             const response = await fetch(apiLink, requestOptions);
             clearTimeout(timeoutId);
-            if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
+
+            if (!response.ok) {
+                const errorDetail = await this.readErrorResponse(response);
+                throw this.createApiError('API request failed', {
+                    model,
+                    provider,
+                    status: response.status,
+                    statusText: response.statusText,
+                    detail: errorDetail
+                });
+            }
 
             return streamResponse 
                 ? this.handleStreamResponse(response, model, tokenCounter, streamWriter)
@@ -67,10 +77,21 @@ export class ApiManager {
             if (streamWriter?.stopThinkingCounter) {
                 streamWriter.stopThinkingCounter();
             }
-            if (error.name === 'AbortError') {
-                throw new Error(`API request for ${model} was aborted after ${timeoutDuration / 1000} seconds.`);
+            if (error?.name === 'AbortError') {
+                throw this.createApiError('API request aborted', {
+                    model,
+                    provider,
+                    detail: `Timed out after ${timeoutDuration / 1000} seconds`
+                });
             }
-            throw new Error(`API request error: ${error.message}`);
+            if (error?.isDetailedApiError) {
+                throw error;
+            }
+            throw this.createApiError('API request error', {
+                model,
+                provider,
+                detail: error
+            });
         }
     }
 
@@ -95,18 +116,35 @@ export class ApiManager {
             clearTimeout(timeoutId);
             
             if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(`Image generation failed with status ${response.status}: ${errorText}`);
+                const errorDetail = await this.readErrorResponse(response);
+                throw this.createApiError('Image generation failed', {
+                    model,
+                    provider,
+                    status: response.status,
+                    statusText: response.statusText,
+                    detail: errorDetail
+                });
             }
 
             const data = await response.json();
             return this.handleImageApiResponse(provider, data, tokenCounter, streamWriter);
         } catch (error) {
             clearTimeout(timeoutId);
-            if (error.name === 'AbortError') {
-                throw new Error(`Image generation was aborted after ${timeoutDuration / 1000} seconds.`);
+            if (error?.name === 'AbortError') {
+                throw this.createApiError('Image generation aborted', {
+                    model,
+                    provider,
+                    detail: `Timed out after ${timeoutDuration / 1000} seconds`
+                });
             }
-            throw new Error(`Image generation error: ${error.message}`);
+            if (error?.isDetailedApiError) {
+                throw error;
+            }
+            throw this.createApiError('Image generation error', {
+                model,
+                provider,
+                detail: error
+            });
         }
     }
 
@@ -246,7 +284,7 @@ export class ApiManager {
     createApiRequest(model, messages, streamResponse, streamWriter, localModelOverride = null) {
         const provider = this.getProviderForModel(model);
         const apiKeys = this.settingsManager.getSetting('api_keys');
-        
+
         switch (provider) {
             case 'openai':
                 return this.createOpenAIRequest(model, messages, streamResponse, streamWriter, apiKeys.openai);
@@ -258,6 +296,8 @@ export class ApiManager {
                 return this.createDeepseekRequest(model, messages, streamResponse, streamWriter, apiKeys.deepseek);
             case 'grok':
                 return this.createGrokRequest(model, messages, streamResponse, streamWriter, apiKeys.grok);
+            case 'kimi':
+                return this.createKimiRequest(model, messages, streamResponse, streamWriter, apiKeys.kimi);
             case 'llamacpp':
                 return this.createLlamaCppRequest(model, messages, streamResponse, streamWriter, localModelOverride);
             default:
@@ -388,7 +428,7 @@ export class ApiManager {
         // Grok uses standard OpenAI format and supports vision - always include images
         return messages.map(msg => {
             const textContent = this.extractTextContent(msg);
-            
+
             if (msg.images) {
                 const content = [];
                 content.push({ type: 'text', text: textContent });
@@ -402,6 +442,11 @@ export class ApiManager {
             }
             return { role: msg.role, content: textContent };
         });
+    }
+
+    formatMessagesForKimi(messages) {
+        // Kimi uses OpenAI-compatible format (text only)
+        return messages.map(msg => ({ role: msg.role, content: this.extractTextContent(msg) }));
     }
 
     getBase64MediaType(base64String) {
@@ -631,6 +676,30 @@ export class ApiManager {
         }];
     }
 
+    createKimiRequest(model, messages, streamResponse, streamWriter, apiKey) {
+        const isThinking = model.includes('thinking');
+        if (isThinking && streamWriter) streamWriter.setThinkingModel();
+
+        const maxTokens = Math.min(
+            this.settingsManager.getSetting('max_tokens'),
+            MaxTokens.kimi
+        );
+
+        return ['https://api.moonshot.ai/v1/chat/completions', {
+            method: 'POST',
+            credentials: 'omit',
+            headers: {'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}`},
+            body: JSON.stringify({
+                model,
+                messages: this.formatMessagesForKimi(messages),
+                max_tokens: maxTokens,
+                temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.kimi),
+                stream: streamResponse,
+                ...(streamResponse && {stream_options: {include_usage: true}})
+            })
+        }];
+    }
+
     createLlamaCppRequest(model, messages, streamResponse, streamWriter, override = null) {
         const configuration = override || { raw: model, port: this.localServerPort || 8000 };
         const { raw: modelId, port } = configuration;
@@ -697,6 +766,8 @@ export class ApiManager {
                 return this.handleDeepseekNonStreamResponse(data, tokenCounter);
             case 'grok':
                 return this.handleGrokNonStreamResponse(data, tokenCounter);
+            case 'kimi':
+                return this.handleKimiNonStreamResponse(data, tokenCounter);
             case 'llamacpp':
                 return this.handleLlamaCppNonStreamResponse(data, tokenCounter);
             default:
@@ -756,6 +827,13 @@ export class ApiManager {
         return this.returnMessage([message.content], thoughts);
     }
 
+    handleKimiNonStreamResponse(data, tokenCounter) {
+        tokenCounter.update(data.usage.prompt_tokens, data.usage.completion_tokens);
+        const message = data.choices[0].message;
+        const thoughts = message.reasoning_content ? [message.reasoning_content] : [];
+        return this.returnMessage([message.content], thoughts);
+    }
+
     async handleLlamaCppNonStreamResponse(data, tokenCounter) {
         if (data.usage) {
             tokenCounter.update(data.usage.prompt_tokens || 0, data.usage.completion_tokens || 0);
@@ -783,6 +861,207 @@ export class ApiManager {
         return message;
     }
 
+    async readErrorResponse(response) {
+        if (!response || typeof response.text !== 'function') {
+            return '';
+        }
+
+        const contentType = response.headers?.get?.('content-type') || '';
+        let bodyText = '';
+        try {
+            bodyText = await response.text();
+        } catch (_) {
+            return '';
+        }
+
+        const trimmed = bodyText.trim();
+        if (!trimmed) {
+            return '';
+        }
+
+        const parsedIsJson = contentType.includes('json');
+        if (parsedIsJson) {
+            const parsed = this.safeParseJson(trimmed);
+            return parsed !== null ? this.formatErrorDetails(parsed) : trimmed;
+        }
+
+        const parsed = this.safeParseJson(trimmed);
+        if (parsed !== null) {
+            return this.formatErrorDetails(parsed);
+        }
+
+        return trimmed;
+    }
+
+    formatErrorDetails(value, seen = new WeakSet()) {
+        if (value === null || value === undefined) return '';
+        if (value instanceof Error) {
+            const base = (value.message || value.name || '').trim();
+            const cause = value.cause ? this.formatErrorDetails(value.cause, seen) : '';
+            return cause ? `${base} | cause: ${cause}` : base;
+        }
+
+        const type = typeof value;
+        if (type === 'string') {
+            const trimmed = value.trim();
+            if (!trimmed) return '';
+            if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+                const parsed = this.safeParseJson(trimmed);
+                if (parsed !== null) return this.formatErrorDetails(parsed, seen);
+            }
+            return trimmed;
+        }
+
+        if (type === 'number' || type === 'boolean' || type === 'bigint') {
+            return String(value);
+        }
+
+        if (Array.isArray(value)) {
+            const parts = value
+                .map(item => this.formatErrorDetails(item, seen))
+                .filter(Boolean);
+            return parts.length ? [...new Set(parts)].join(' | ') : '';
+        }
+
+        if (type === 'object') {
+            if (seen.has(value)) return '';
+            seen.add(value);
+
+            const parts = [];
+
+            const textFields = ['message', 'detail', 'error', 'error_description', 'description'];
+            textFields.forEach(field => {
+                const fieldValue = value[field];
+                if (typeof fieldValue === 'string') {
+                    const formatted = this.formatErrorDetails(fieldValue, seen);
+                    if (formatted) parts.push(formatted);
+                } else if (fieldValue && fieldValue !== value) {
+                    const formatted = this.formatErrorDetails(fieldValue, seen);
+                    if (formatted) parts.push(formatted);
+                }
+            });
+
+            if (typeof value.title === 'string' && value.title.trim() && typeof value.detail === 'string' && value.detail.trim()) {
+                parts.push(`${value.title.trim()}: ${value.detail.trim()}`);
+            }
+
+            const meta = [];
+            ['type', 'code', 'status', 'status_code', 'param', 'reason'].forEach(key => {
+                const metaValue = value[key];
+                if (metaValue === undefined || metaValue === null) return;
+                const metaType = typeof metaValue;
+                if (metaType === 'string') {
+                    const trimmed = metaValue.trim();
+                    if (trimmed) meta.push(`${key}=${trimmed}`);
+                } else if (metaType === 'number' || metaType === 'boolean' || metaType === 'bigint') {
+                    meta.push(`${key}=${metaValue}`);
+                }
+            });
+            if (meta.length && parts.length) {
+                parts[0] = `${parts[0]} (${meta.join(', ')})`;
+            } else if (meta.length) {
+                parts.push(meta.join(', '));
+            }
+
+            if (value.cause && value.cause !== value) {
+                const cause = this.formatErrorDetails(value.cause, seen);
+                if (cause) parts.push(`cause: ${cause}`);
+            }
+
+            if (Array.isArray(value.errors) && value.errors !== value) {
+                const nestedErrors = this.formatErrorDetails(value.errors, seen);
+                if (nestedErrors) parts.push(nestedErrors);
+            }
+
+            const uniqueParts = [...new Set(parts.map(part => part.trim()).filter(Boolean))];
+            if (uniqueParts.length) return uniqueParts.join(' | ');
+
+            if (typeof value.toString === 'function') {
+                const fallback = String(value).trim();
+                if (fallback && fallback !== '[object Object]') return fallback;
+            }
+
+            try {
+                return JSON.stringify(value);
+            } catch (_) {
+                return '';
+            }
+        }
+
+        if (type === 'function') {
+            return value.name || '[function]';
+        }
+
+        return '';
+    }
+
+    safeParseJson(text) {
+        try {
+            return JSON.parse(text);
+        } catch (_) {
+            return null;
+        }
+    }
+
+    createApiError(prefix, context = {}) {
+        const { model, provider, status, statusText, detail } = context;
+        const meta = [];
+        if (model) {
+            meta.push(`model=${model}`);
+        }
+        if (provider) {
+            meta.push(`provider=${provider}`);
+        }
+        if (status !== undefined && status !== null) {
+            const statusLabel = statusText ? `${status} ${statusText}` : status;
+            meta.push(`status=${statusLabel}`);
+        }
+
+        const suffix = meta.length ? ` (${meta.join(', ')})` : '';
+        const detailText = this.formatErrorDetails(detail);
+        const message = detailText ? `${prefix}${suffix}: ${detailText}` : `${prefix}${suffix}`;
+        const error = new Error(message);
+        error.isDetailedApiError = true;
+        return error;
+    }
+
+    getUiErrorMessage(error, options = {}) {
+        const { prefix = 'Error' } = options;
+        const detail = this.formatErrorDetails(error);
+
+        const extractFallback = () => {
+            if (error && typeof error.message === 'string') {
+                return error.message.trim();
+            }
+            if (typeof error === 'string') {
+                return error.trim();
+            }
+            if (error === null || error === undefined) {
+                return '';
+            }
+            return String(error).trim();
+        };
+
+        let message = (detail || '').trim();
+        if (!message) {
+            message = extractFallback();
+        }
+        if (!message) {
+            message = 'Unknown error';
+        }
+
+        if (!prefix) {
+            return message;
+        }
+
+        const normalizedMessage = message.toLowerCase();
+        const normalizedPrefix = `${prefix}:`.toLowerCase();
+        if (normalizedMessage.startsWith(normalizedPrefix)) {
+            return message;
+        }
+        return `${prefix}: ${message}`;
+    }
+
     processStreamData(data, model, tokenCounter, streamWriter) {
         const provider = this.getProviderForModel(model);
         let parsed;
@@ -807,6 +1086,9 @@ export class ApiManager {
                 break;
             case 'grok':
                 this.handleGrokStreamData(parsed, tokenCounter, streamWriter);
+                break;
+            case 'kimi':
+                this.handleKimiStreamData(parsed, tokenCounter, streamWriter);
                 break;
             case 'llamacpp':
                 this.handleLlamaCppStreamData(parsed, tokenCounter, streamWriter);
@@ -880,8 +1162,13 @@ export class ApiManager {
                     tokenCounter.update(0, parsed.usage.output_tokens);
                 }
                 break;
-            case 'error':
-                throw new Error(`Anthropic stream error: ${parsed.error}`);
+            case 'error': {
+                const errorDetail = this.formatErrorDetails(parsed.error);
+                throw this.createApiError('Anthropic stream error', {
+                    provider: 'anthropic',
+                    detail: errorDetail
+                });
+            }
         }
     }
 
@@ -919,7 +1206,7 @@ export class ApiManager {
             const baseCompletionTokens = parsed.usage.completion_tokens || 0;
             const reasoningTokens = parsed.usage.completion_tokens_details?.reasoning_tokens || 0;
             const totalCompletionTokens = baseCompletionTokens + reasoningTokens;
-            
+
             tokenCounter.update(parsed.usage.prompt_tokens, totalCompletionTokens);
 
             // Append citations at end if provided by Grok
@@ -930,10 +1217,26 @@ export class ApiManager {
             }
             return;
         }
-        
+
         const reasoningContent = parsed?.choices?.[0]?.delta?.reasoning_content;
         const content = parsed?.choices?.[0]?.delta?.content;
-        
+
+        if (reasoningContent) {
+            streamWriter.processContent(reasoningContent, true);
+        }
+        if (content) {
+            streamWriter.processContent(content);
+        }
+    }
+
+    handleKimiStreamData(parsed, tokenCounter, streamWriter) {
+        if (parsed?.usage && parsed?.choices?.[0]?.delta?.content === "") {
+            tokenCounter.update(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);
+            return;
+        }
+        const reasoningContent = parsed?.choices?.[0]?.delta?.reasoning_content;
+        const content = parsed?.choices?.[0]?.delta?.content;
+
         if (reasoningContent) {
             streamWriter.processContent(reasoningContent, true);
         }
@@ -1040,7 +1343,8 @@ const MaxTemp = {
     anthropic: 1.0,
     gemini: 2.0,
     deepseek: 2.0,
-    grok: 2.0
+    grok: 2.0,
+    kimi: 1.0
 };
 
 const MaxTokens = {
@@ -1054,7 +1358,8 @@ const MaxTokens = {
     gemini_thinking: 65536,
     deepseek: 8000,
     anthropic_old: 8192,
-    grok: 131072
+    grok: 131072,
+    kimi: 262144
 };
 
 // for now decided against of having a "max tokens" for every api, as it varies by model... let the user figure it out :)

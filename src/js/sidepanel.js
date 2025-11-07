@@ -369,7 +369,8 @@ class SidepanelApp {
                 resolve();
             };
             reader.onerror = error => {
-                this.chatUI.addErrorMessage(`Error: ${error.message}`);
+                const uiMessage = this.apiManager.getUiErrorMessage(error);
+                this.chatUI.addErrorMessage(uiMessage);
                 resolve();
             };
             reader.readAsText(file);

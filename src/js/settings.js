@@ -7,6 +7,7 @@ const apiDisplayNames = {
     gemini: 'Gemini',
     deepseek: 'DeepSeek',
     grok: 'Grok',
+    kimi: 'Kimi',
     llamacpp: 'Llamacpp'
 };
 
