@@ -10,6 +10,8 @@ export class ApiManager {
         this.getWebSearch = options.getWebSearch || null;
         this.getOpenAIReasoningEffort = options.getOpenAIReasoningEffort || (() => this.settingsManager.getSetting('reasoning_effort') || 'medium');
         this.getGeminiThinkingLevel = options.getGeminiThinkingLevel || (() => this.settingsManager.getSetting('reasoning_effort') || 'medium');
+        this.getImageAspectRatio = options.getImageAspectRatio || (() => '16:9');
+        this.getImageResolution = options.getImageResolution || (() => '2K');
     }
 
     getCurrentModel() {
@@ -105,7 +107,7 @@ export class ApiManager {
         if (!abortController) abortController = new AbortController();
         requestOptions.signal = abortController.signal;
 
-        const timeoutDuration = 30000; // 30 seconds for image generation
+        const timeoutDuration = 60000; // 60 seconds for image generation
         const timeoutId = setTimeout(() => {
             abortController.abort();
         }, timeoutDuration);
@@ -179,6 +181,13 @@ export class ApiManager {
 
     createGeminiImageRequest(model, messages, apiKey) {
         const formattedMessages = this.formatMessagesForGemini(messages);
+        const isGemini3 = /gemini-[3-9]|gemini-\d{2,}/.test(model);
+        
+        const aspectRatio = this.getImageAspectRatio();
+        const imageConfig = {
+            ...(aspectRatio !== 'auto' && { aspectRatio }),
+            ...(isGemini3 && { imageSize: this.getImageResolution() })
+        };
         
         return [`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
             method: 'POST',
@@ -189,7 +198,8 @@ export class ApiManager {
                 safetySettings: this.getGeminiSafetySettings(),
                 generationConfig: {
                     temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.gemini),
-                    maxOutputTokens: Math.min(this.settingsManager.getSetting('max_tokens'), this.getGeminiMaxTokens(model))
+                    maxOutputTokens: Math.min(this.settingsManager.getSetting('max_tokens'), this.getGeminiMaxTokens(model)),
+                    ...(Object.keys(imageConfig).length > 0 && { imageConfig })
                 }
             })
         }];

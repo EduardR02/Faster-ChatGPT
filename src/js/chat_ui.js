@@ -512,6 +512,32 @@ export class SidepanelChatUI extends ChatUI {
         this.stateManager.subscribeToSetting('current_model', updateWebButton);
     }
 
+    initImageConfigToggles() {
+        const aspectBtn = document.getElementById('image-aspect-toggle');
+        const resBtn = document.getElementById('image-res-toggle');
+        if (!aspectBtn || !resBtn) return;
+
+        const setLabel = (btn, value) => btn.querySelector('.reasoning-label').textContent = value;
+
+        aspectBtn.addEventListener('click', () => setLabel(aspectBtn, this.stateManager.cycleImageAspectRatio()));
+        resBtn.addEventListener('click', () => setLabel(resBtn, this.stateManager.cycleImageResolution()));
+
+        const update = () => {
+            const model = this.stateManager.getSetting('current_model') || '';
+            const isImage = model.includes('gemini') && model.includes('image');
+            const isGemini3 = isImage && /gemini-[3-9]|gemini-\d{2,}/.test(model);
+            
+            aspectBtn.style.display = isImage ? 'flex' : 'none';
+            resBtn.style.display = isGemini3 ? 'flex' : 'none';
+            
+            if (isImage) setLabel(aspectBtn, this.stateManager.getImageAspectRatio());
+            if (isGemini3) setLabel(resBtn, this.stateManager.getImageResolution());
+        };
+
+        this.stateManager.runOnReady(update);
+        this.stateManager.subscribeToSetting('current_model', update);
+    }
+
     // Model picker popup next to the textarea controls
     initModelPicker() {
         const controlsContainer = document.querySelector('.textarea-bottom-left-controls');

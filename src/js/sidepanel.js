@@ -12,7 +12,9 @@ class SidepanelApp {
             getShouldThink: () => this.stateManager.getShouldThink(),
             getWebSearch: () => this.stateManager.getShouldWebSearch(),
             getOpenAIReasoningEffort: () => this.stateManager.getOpenAIReasoningEffort(),
-            getGeminiThinkingLevel: () => this.stateManager.getGeminiThinkingLevel()
+            getGeminiThinkingLevel: () => this.stateManager.getGeminiThinkingLevel(),
+            getImageAspectRatio: () => this.stateManager.getImageAspectRatio(),
+            getImageResolution: () => this.stateManager.getImageResolution()
         });
         this.chatStorage = new ChatStorage();
 
@@ -42,6 +44,7 @@ class SidepanelApp {
         this.chatUI.initSonnetThinking();
         this.stateManager.runOnReady(() => { 
             this.chatUI.initWebSearchToggle();
+            this.chatUI.initImageConfigToggles();
             this.chatUI.initModelPicker();
         });
     }

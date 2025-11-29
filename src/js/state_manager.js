@@ -642,6 +642,30 @@ export class SidepanelStateManager extends ArenaStateManager {
         return this.getReasoningEffort();
     }
 
+    getImageAspectRatio() {
+        return this.state.imageAspectRatio || 'auto';
+    }
+
+    cycleImageAspectRatio() {
+        const options = ['auto', '16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3', '4:5', '5:4', '21:9'];
+        const current = this.getImageAspectRatio();
+        const next = options[(options.indexOf(current) + 1) % options.length];
+        this.state.imageAspectRatio = next;
+        return next;
+    }
+
+    getImageResolution() {
+        return this.state.imageResolution || '2K';
+    }
+
+    cycleImageResolution() {
+        const options = ['1K', '2K', '4K'];
+        const current = this.getImageResolution();
+        const next = options[(options.indexOf(current) + 1) % options.length];
+        this.state.imageResolution = next;
+        return next;
+    }
+
     get continuedChatOptions() {
         return this.state.continuedChatOptions;
     }
