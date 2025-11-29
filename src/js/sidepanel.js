@@ -11,7 +11,8 @@ class SidepanelApp {
         this.apiManager = new ApiManager({
             getShouldThink: () => this.stateManager.getShouldThink(),
             getWebSearch: () => this.stateManager.getShouldWebSearch(),
-            getOpenAIReasoningEffort: () => this.stateManager.getOpenAIReasoningEffort()
+            getOpenAIReasoningEffort: () => this.stateManager.getOpenAIReasoningEffort(),
+            getGeminiThinkingLevel: () => this.stateManager.getGeminiThinkingLevel()
         });
         this.chatStorage = new ChatStorage();
 

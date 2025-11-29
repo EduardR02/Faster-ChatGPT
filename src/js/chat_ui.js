@@ -408,20 +408,29 @@ export class SidepanelChatUI extends ChatUI {
 
         sonnetThinkButton.style.display = 'none';
 
-        const isOpenAIReasoner = (model) => (/o\d/.test(model) || model.includes('gpt-5'));
-        const isSonnet = (model) => ['3-7-sonnet', 'sonnet-4', 'opus-4'].some(sub => model.includes(sub));
+        const isGeminiImage = (model) => model.includes('gemini') && model.includes('image');
+        const hasReasoningLevels = (model) => (
+            /o\d/.test(model) || model.includes('gpt-5') ||
+            (/gemini-[3-9]\.?\d*|gemini-\d{2,}/.test(model) && !isGeminiImage(model))
+        );
+        const isGemini25Flash = (model) => model.includes('gemini-2.5') && model.includes('flash') && !isGeminiImage(model);
+        const hasToggleThinking = (model) => (
+            ['3-7-sonnet', 'sonnet-4', 'opus-4'].some(sub => model.includes(sub)) ||
+            isGemini25Flash(model)
+        );
+        
         const setReasoningLabel = (model) => {
             const span = sonnetThinkButton.querySelector('.reasoning-label');
-            if (!span) return; // span is in HTML now
-            span.textContent = isOpenAIReasoner(model)
-                ? this.stateManager.getOpenAIReasoningEffort()
+            if (!span) return;
+            span.textContent = hasReasoningLevels(model)
+                ? this.stateManager.getReasoningEffort()
                 : 'reason';
         };
 
         sonnetThinkButton.addEventListener('click', () => {
             const model = this.stateManager.getSetting('current_model') || '';
-            if (isOpenAIReasoner(model)) {
-                const next = this.stateManager.cycleOpenAIReasoningEffort();
+            if (hasReasoningLevels(model)) {
+                const next = this.stateManager.cycleReasoningEffort();
                 sonnetThinkButton.title = `Reasoning: ${next}`;
                 setReasoningLabel(model);
                 sonnetThinkButton.classList.add('active');
@@ -434,12 +443,12 @@ export class SidepanelChatUI extends ChatUI {
 
         const updateSonnetThinkingButton = () => {
             const model = this.stateManager.getSetting('current_model') || '';
-            const canThink = isSonnet(model) || isOpenAIReasoner(model);
+            const canThink = hasToggleThinking(model) || hasReasoningLevels(model);
 
             if (canThink) {
                 sonnetThinkButton.style.display = 'flex';
-                if (isOpenAIReasoner(model)) {
-                    const effort = this.stateManager.getOpenAIReasoningEffort();
+                if (hasReasoningLevels(model)) {
+                    const effort = this.stateManager.getReasoningEffort();
                     sonnetThinkButton.title = `Reasoning: ${effort}`;
                     sonnetThinkButton.classList.add('active');
                 } else {

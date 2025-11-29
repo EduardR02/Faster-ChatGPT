@@ -617,22 +617,29 @@ export class SidepanelStateManager extends ArenaStateManager {
         this.state.shouldWebSearch = !this.state.shouldWebSearch;
     }
 
-    // --- OpenAI per-chat reasoning effort (low/medium/high) ---
-    getOpenAIReasoningEffort() {
-        return this.state.openaiReasoningEffort || this.getSetting('reasoning_effort') || 'medium';
+    getReasoningEffort() {
+        return this.state.reasoningEffort || this.getSetting('reasoning_effort') || 'medium';
     }
 
-    setOpenAIReasoningEffort(value) {
+    setReasoningEffort(value) {
         if (!['low', 'medium', 'high'].includes(value)) return;
-        this.state.openaiReasoningEffort = value;
+        this.state.reasoningEffort = value;
     }
 
-    cycleOpenAIReasoningEffort() {
+    cycleReasoningEffort() {
         const order = ['low', 'medium', 'high'];
-        const current = this.getOpenAIReasoningEffort();
+        const current = this.getReasoningEffort();
         const next = order[(order.indexOf(current) + 1) % order.length];
-        this.state.openaiReasoningEffort = next;
+        this.state.reasoningEffort = next;
         return next;
+    }
+
+    getOpenAIReasoningEffort() {
+        return this.getReasoningEffort();
+    }
+
+    getGeminiThinkingLevel() {
+        return this.getReasoningEffort();
     }
 
     get continuedChatOptions() {

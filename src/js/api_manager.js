@@ -6,10 +6,10 @@ export class ApiManager {
         this.settingsManager = new SettingsManager(['api_keys', 'max_tokens', 'temperature', 'models', 'current_model', 'web_search', 'reasoning_effort']);
         this.lastContentWasRedacted = false;
         this.localServerPort = 8080;
-        // Getter for UI/state-driven reasoning toggle, injected by caller (optional)
         this.getShouldThink = options.getShouldThink || (() => false);
         this.getWebSearch = options.getWebSearch || null;
         this.getOpenAIReasoningEffort = options.getOpenAIReasoningEffort || (() => this.settingsManager.getSetting('reasoning_effort') || 'medium');
+        this.getGeminiThinkingLevel = options.getGeminiThinkingLevel || (() => this.settingsManager.getSetting('reasoning_effort') || 'medium');
     }
 
     getCurrentModel() {
@@ -17,7 +17,6 @@ export class ApiManager {
     }
 
     isImageModel(model) {
-        // Check if model is an image generation model
         return model.includes('image') || model.includes('imagen');
     }
 
@@ -179,28 +178,21 @@ export class ApiManager {
     }
 
     createGeminiImageRequest(model, messages, apiKey) {
-        // Nano Banana uses standard Gemini API format - can output both text and images
-        const apiVersion = 'v1beta';
-        const apiLink = `https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:generateContent?key=${apiKey}`;
-        
-        // Use the same message formatting as regular Gemini (already handles images)
         const formattedMessages = this.formatMessagesForGemini(messages);
         
-        const requestOptions = {
+        return [`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
-                contents: formattedMessages.slice(1),  // Skip system message
-                systemInstruction: formattedMessages[0],  // System prompt
+                contents: formattedMessages.slice(1),
+                systemInstruction: formattedMessages[0],
                 safetySettings: this.getGeminiSafetySettings(),
                 generationConfig: {
                     temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.gemini),
                     maxOutputTokens: Math.min(this.settingsManager.getSetting('max_tokens'), this.getGeminiMaxTokens(model))
                 }
             })
-        };
-        
-        return [apiLink, requestOptions];
+        }];
     }
 
     handleGeminiImageResponse(data, tokenCounter, streamWriter) {
@@ -314,12 +306,13 @@ export class ApiManager {
     }
 
     getGeminiMaxTokens(model) {
-        // Determine max tokens based on specific Gemini model version
-        if (model.includes('2.5')) {
-            if (model.includes('image')) {
-                return MaxTokens.gemini_2_5_image;  // 32,768 for Nano Banana
-            }
-            return MaxTokens.gemini_2_5;  // 65,536 for Gemini 2.5 Flash
+        // Image models have lower output limits
+        if (model.includes('image')) {
+            return MaxTokens.gemini_image;
+        }
+        // Modern Gemini (2.5+) has higher limits
+        if (/gemini-[2-9]\.?\d*|gemini-\d{2,}/.test(model)) {
+            return MaxTokens.gemini_modern;
         }
         return MaxTokens.gemini;  // 8,192 for older Gemini models (2.0 and below)
     }
@@ -606,10 +599,14 @@ export class ApiManager {
     }
 
     createGeminiRequest(model, messages, streamResponse, streamWriter, apiKey) {
-        const isThinking = model.includes('thinking') || model.includes('gemini-2.5-pro') || model.includes('gemini-2.5-flash');  // very specific but no better way to do this rn
-        if (isThinking) {
-            if (streamWriter) streamWriter.addThinkingCounter();
-        }
+        const isGemini3Plus = /gemini-[3-9]\.?\d*|gemini-\d{2,}/.test(model);
+        const isGemini25 = model.includes('gemini-2.5');
+        const isGemini25Pro = isGemini25 && model.includes('pro');
+        
+        // Gemini 3+: always thinks, Gemini 2.5 Pro: always thinks, Gemini 2.5 Flash: toggle
+        const isThinking = isGemini3Plus || isGemini25Pro || (isGemini25 && this.getShouldThink());
+        
+        if (isThinking && streamWriter) streamWriter.setThinkingModel();
         
         const maxTokens = Math.min(
             this.settingsManager.getSetting('max_tokens'),
@@ -617,11 +614,18 @@ export class ApiManager {
         );
         
         messages = this.formatMessagesForGemini(messages);
-        const apiVersion = isThinking ? 'v1alpha' : 'v1beta';
         const responseType = streamResponse ? "streamGenerateContent" : "generateContent";
         const streamParam = streamResponse ? "alt=sse&" : "";
         
-        return [`https://generativelanguage.googleapis.com/${apiVersion}/models/${model}:${responseType}?${streamParam}key=${apiKey}`, {
+        // Gemini 3+: thinkingLevel, Gemini 2.5: thinkingBudget (-1 = dynamic)
+        let thinkingParams = {};
+        if (isGemini3Plus) {
+            thinkingParams = { thinking_config: { thinkingLevel: this.getGeminiThinkingLevel(), include_thoughts: true } };
+        } else if (isThinking) {
+            thinkingParams = { thinking_config: { thinkingBudget: -1, include_thoughts: true } };
+        }
+        
+        return [`https://generativelanguage.googleapis.com/v1beta/models/${model}:${responseType}?${streamParam}key=${apiKey}`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
@@ -632,7 +636,7 @@ export class ApiManager {
                     temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.gemini),
                     maxOutputTokens: maxTokens,
                     responseMimeType: "text/plain",
-                    ...(isThinking && {thinking_config: {include_thoughts: true}})  // this param doesn't work anymore, they stopped giving thoughts in response...
+                    ...thinkingParams
                 }
             })
         }];
@@ -1353,8 +1357,8 @@ const MaxTokens = {
     anthropic: 32000,   // sonnet-4 is 64k, opus-4 is 32k, older models like original sonnet 3.5 are 8k or less
     anthropic_thinking: 64000,
     gemini: 8192,       // Old Gemini models (2.0 and below)
-    gemini_2_5: 65536,  // New Gemini 2.5 Flash (normal)
-    gemini_2_5_image: 32768,  // Gemini 2.5 Flash Image (Nano Banana)
+    gemini_modern: 65536,  // Gemini 2.5+ and 3+
+    gemini_image: 32768,   // Gemini image models (Nano Banana variants)
     gemini_thinking: 65536,
     deepseek: 8000,
     anthropic_old: 8192,
