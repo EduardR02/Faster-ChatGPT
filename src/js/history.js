@@ -329,6 +329,10 @@ async function handleAppendedMessages(chatId, addedCount, startIndex, message = 
         }
     }
 
+    if (mediaTab) {
+        mediaTab.deferredForceRefresh = true;
+    }
+
     if (chatCore.getChatId() !== chatId) return;
     
     const newMessages = message ? [message] : await chatStorage.getMessages(chatId, startIndex, addedCount);
@@ -388,6 +392,10 @@ async function handleMessageUpdate(chatId, messageId) {
         return;
     }
     
+    if (mediaTab) {
+        mediaTab.deferredForceRefresh = true;
+    }
+
     await handleHistoryItemOnNewMessage(chatId, { timestamp: updatedMessage.timestamp ?? Date.now() });
     if (updatedMessage.responses) chatUI.updateArenaMessage(updatedMessage, messageId);
     else chatUI.appendSingleRegeneratedMessage(updatedMessage, messageId);
@@ -1156,21 +1164,27 @@ class MediaTab {
         this.chatUI.buildChat(entry.chatId).then(() => {
             document.querySelector('[data-tab="chats"]').click();
             requestAnimationFrame(() => {
-                const messageElement = document.querySelector(`[data-message-id="${entry.messageId}"]`);
-                if (!messageElement) return;
-
-                const targetImage = this.findImageInMessage(messageElement, entry);
-                (targetImage || messageElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+                const targetImage = this.findImageInMessage(entry);
+                const fallback = document.querySelector(`[data-message-id="${entry.messageId}"]`);
+                (targetImage || fallback)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             });
         });
     }
 
-    findImageInMessage(messageElement, entry) {
-        const selector = entry.source === 'user' ? '.user-content.image-content img' : '.assistant-content.image-content img';
-        const images = messageElement.querySelectorAll(selector);
-        const index = entry.source === 'user' ? entry.imageIndex : entry.contentIndex;
-        
-        return images[index] || images[0] || null;
+    findImageInMessage(entry) {
+        const messageElements = document.querySelectorAll(`[data-message-id="${entry.messageId}"]`);
+        if (!messageElements.length) return null;
+
+        if (entry.source === 'user') {
+            const images = messageElements[0].querySelectorAll('.user-content.image-content img');
+            return images[entry.imageIndex] || images[0] || null;
+        }
+
+        // For assistant images: contentIndex = which regeneration, partIndex = which image within it
+        const msgElement = messageElements[entry.contentIndex] || messageElements[messageElements.length - 1];
+        const images = msgElement.querySelectorAll('.assistant-content.image-content img');
+        const imgIndex = entry.partIndex ?? 0;
+        return images[imgIndex] || images[0] || null;
     }
 
     isValidImage(imageData) {
