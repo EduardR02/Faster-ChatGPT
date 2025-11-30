@@ -246,7 +246,9 @@ export class ApiManager {
                 }
                 
                 const imageDataUri = `data:${mimeType};base64,${imageData}`;
-                messageParts.push({ type: 'image', content: imageDataUri });
+                const imagePart = { type: 'image', content: imageDataUri };
+                if (part.thoughtSignature) imagePart.thoughtSignature = part.thoughtSignature;
+                messageParts.push(imagePart);
                 
                 // If we found appended text, add it as a separate text part
                 if (appendedText) {
@@ -381,18 +383,20 @@ export class ApiManager {
         return messages.map(msg => {
             const parts = [];
             
-            // Process all parts (text, thought, image)
+            // Process all parts (text, thought, image with optional thoughtSignature)
             msg.parts.forEach(part => {
                 if (part.type === 'text' || part.type === 'thought') {
                     if (part.content) parts.push({ text: part.content });
                 } else if (part.type === 'image') {
                     if (part.content) {
-                        parts.push({
+                        const imagePart = {
                             inline_data: {
                                 mime_type: this.getBase64MediaType(part.content),
                                 data: this.simpleBase64Splitter(part.content)
                             }
-                        });
+                        };
+                        if (part.thoughtSignature) imagePart.thoughtSignature = part.thoughtSignature;
+                        parts.push(imagePart);
                     }
                 }
             });
@@ -817,8 +821,13 @@ export class ApiManager {
     
     handleGeminiNonStreamResponse(data, tokenCounter) {
         tokenCounter.update(data.usageMetadata.promptTokenCount, data.usageMetadata.candidatesTokenCount);
-        const thoughts = data.candidates[0].content.parts.find(part => part.thought)?.text || '';
-        const text = data.candidates[0].content.parts.find(part => !part.thought)?.text || '';
+        
+        let thoughts = '', text = '';
+        for (const part of data.candidates[0].content.parts) {
+            if (part.thought) thoughts = part.text || '';
+            else if (part.text) text = part.text;
+        }
+        
         return this.returnMessage([text], thoughts ? [thoughts] : []);
     }
 

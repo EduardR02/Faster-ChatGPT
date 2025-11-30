@@ -83,8 +83,10 @@ export class SidepanelController {
                         if (streamWriter.parts.at(-1).content.length > 0) {
                             streamWriter.nextPart();
                         }
-                        streamWriter.parts.at(-1).content = [msg.content];
-                        streamWriter.parts.at(-1).type = 'image';
+                        const part = streamWriter.parts.at(-1);
+                        part.content = [msg.content];
+                        part.type = 'image';
+                        if (msg.thoughtSignature) part.thoughtSignature = msg.thoughtSignature;
                     } else {
                         streamWriter.processContent(msg.content, msg.type === 'thought');
                     }

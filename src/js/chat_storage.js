@@ -830,6 +830,7 @@ export class ChatStorage {
                         chatId: chatMeta.chatId,
                         title: chatMeta.title,
                         timestamp: chatMeta.timestamp,
+                        renamed: chatMeta.renamed || false,
                         continued_from_chat_id: chatMeta.continued_from_chat_id
                     });
                     fetched++;

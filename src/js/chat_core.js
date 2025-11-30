@@ -219,14 +219,14 @@ export class SidepanelChatCore extends ChatCore {
 
     async updateSaved() {
         if (!this.stateManager.shouldSave) return;
-        await this.chatStorage.updateMessage(this.getChatId(), this.getLength() - 1, this.getLatestMessage());
+        await this.chatStorage.updateMessage(this.getChatId(), this.getLength() - 1, SidepanelChatCore.stripEphemeralParts(this.getLatestMessage()));
     }
 
     async createNewChat(bonus_options = {}, shouldAutoRename = true) {
         // bonus options is for the continued from chat id, and if the chat has been renamed already
         await this.chatStorage.createChatWithMessages(
             this.currentChat.title, 
-            this.currentChat.messages,
+            this.currentChat.messages.map(SidepanelChatCore.stripEphemeralParts),
             bonus_options
         ).then(res => {
             this.currentChat.chatId = res.chatId;
@@ -239,9 +239,19 @@ export class SidepanelChatCore extends ChatCore {
     async addMessagesToExistingChat(count = 1) {
         await this.chatStorage.addMessages(
             this.currentChat.chatId, 
-            this.currentChat.messages.slice(-count), 
+            this.currentChat.messages.slice(-count).map(SidepanelChatCore.stripEphemeralParts), 
             this.currentChat.messages.length - count
         );
+    }
+
+    static stripEphemeralParts(message) {
+        if (!message.contents) return message;
+        return {
+            ...message,
+            contents: message.contents.map(group => 
+                group.map(({ thoughtSignature, ...part }) => part)
+            )
+        };
     }
 
     buildFromDB(dbChat, index = null, secondaryIndex = null, modelKey = null) {
