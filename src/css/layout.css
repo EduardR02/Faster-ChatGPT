@@ -894,6 +894,10 @@ a:visited {
   width: 100%;
 }
 
+.right-align {
+  justify-content: flex-end;
+}
+
 .checkbox.arena-checkbox {
   margin-left: 0;
 }
@@ -1200,9 +1204,12 @@ p {
 .button.delete-arena {
   padding-top: 1px;
   padding-bottom: 1px;
-  margin-left: auto;
   background: #fdaaaa;
   transition: background 0.15s ease;
+}
+
+.right-align .button.delete-arena {
+  margin-left: 0;
 }
 
 .delete-arena.confirm {

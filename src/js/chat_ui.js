@@ -227,6 +227,7 @@ class ChatUI {
         const content = createElementWithClass('div', `image-content ${role}-content`);
 
         const img = document.createElement('img');
+        let retried = false;
 
         // Validate that we have a proper image data URI or URL
         const isValidImage = imageBase64 && (
@@ -245,7 +246,23 @@ class ChatUI {
             img.src = imageBase64;
 
             // Handle image load errors
-            img.onerror = () => {
+            img.onerror = async () => {
+                if (!retried && imageBase64.startsWith('data:image/')) {
+                    retried = true;
+                    try {
+                        const result = await chrome.runtime.sendMessage({
+                            type: 'repair_blob_from_data_url',
+                            dataUrl: imageBase64
+                        });
+                        if (result?.ok && result.dataUrl) {
+                            imageBase64 = result.dataUrl;
+                            img.src = imageBase64;
+                            return;
+                        }
+                    } catch (_) {
+                        // fall through to error UI
+                    }
+                }
                 img.style.display = 'none';
                 const errorDiv = createElementWithClass('div', 'image-error');
                 errorDiv.textContent = 'Failed to load image';

@@ -1,3 +1,5 @@
+import { base64NeedsRepair, sanitizeBase64Image } from './image_utils.js';
+
 export class ChatStorage {
     constructor() {
         this.dbName = 'llm-chats';
@@ -10,6 +12,13 @@ export class ChatStorage {
 
     static isDataUrl(str) {
         return typeof str === 'string' && str.startsWith('data:');
+    }
+
+    static extractBase64Payload(dataUrl) {
+        if (typeof dataUrl !== 'string') return '';
+        const marker = 'base64,';
+        const index = dataUrl.indexOf(marker);
+        return index === -1 ? '' : dataUrl.slice(index + marker.length);
     }
 
     static async computeHash(dataUrl) {
@@ -109,6 +118,95 @@ export class ChatStorage {
         return results;
     }
 
+    async overwriteBlobData(hash, dataUrl) {
+        const db = await this.getDB();
+        const tx = db.transaction('blobs', 'readwrite');
+        const store = tx.objectStore('blobs');
+
+        return new Promise((resolve) => {
+            const req = store.get(hash);
+            req.onsuccess = () => {
+                const existing = req.result;
+                if (existing) {
+                    store.put({ ...existing, data: dataUrl });
+                } else {
+                    store.put({ hash, data: dataUrl, chatIds: [] });
+                }
+                resolve();
+            };
+            req.onerror = () => resolve();
+        });
+    }
+
+    async repairBlobByDataUrl(dataUrl) {
+        if (!ChatStorage.isDataUrl(dataUrl) || !dataUrl.startsWith('data:image/')) {
+            return { repaired: false, dataUrl: null };
+        }
+
+        const mimeType = this.extractMimeFromDataUrl(dataUrl) || 'image/png';
+        const base64 = ChatStorage.extractBase64Payload(dataUrl);
+        const hash = await ChatStorage.computeHash(dataUrl);
+
+        if (!base64NeedsRepair(base64, mimeType)) {
+            return { repaired: false, dataUrl: null };
+        }
+
+        const sanitized = sanitizeBase64Image(base64, mimeType);
+        if (!sanitized || sanitized === base64) {
+            return { repaired: false, dataUrl: null };
+        }
+
+        const cleanedDataUrl = `data:${mimeType};base64,${sanitized}`;
+        await this.overwriteBlobData(hash, cleanedDataUrl);
+        return { repaired: true, dataUrl: cleanedDataUrl };
+    }
+
+    async repairAllBlobs() {
+        try {
+            const db = await this.getDB();
+            if (!db.objectStoreNames.contains('blobs')) return 0;
+
+            const tx = db.transaction('blobs', 'readwrite');
+            const store = tx.objectStore('blobs');
+            let repaired = 0;
+
+            await new Promise((resolve) => {
+                const cursor = store.openCursor();
+                cursor.onsuccess = (e) => {
+                    const c = e.target.result;
+                    if (!c) {
+                        resolve();
+                        return;
+                    }
+                    const blob = c.value;
+                    if (!ChatStorage.isDataUrl(blob.data)) {
+                        c.continue();
+                        return;
+                    }
+                    const mimeType = this.extractMimeFromDataUrl(blob.data) || 'image/png';
+                    const base64 = ChatStorage.extractBase64Payload(blob.data);
+                    if (!base64NeedsRepair(base64, mimeType)) {
+                        c.continue();
+                        return;
+                    }
+                    const sanitized = sanitizeBase64Image(base64, mimeType);
+                    if (sanitized && sanitized !== base64) {
+                        const cleanedDataUrl = `data:${mimeType};base64,${sanitized}`;
+                        c.update({ ...blob, data: cleanedDataUrl });
+                        repaired++;
+                    }
+                    c.continue();
+                };
+                cursor.onerror = () => resolve();
+            });
+
+            return repaired;
+        } catch (error) {
+            console.warn('Failed to repair blobs:', error);
+            return 0;
+        }
+    }
+
     async prepareMessageForStorage(message, chatId, blobStore) {
         const prepared = { ...message };
 
@@ -160,24 +258,17 @@ export class ChatStorage {
         return prepared;
     }
 
-    async resolveMessageImages(message) {
-        if (!message) return message;
+    // Core resolution logic - lookup can be a Map or plain object
+    resolveMessageImagesWithLookup(message, lookup) {
+        if (!message || !lookup) return message;
 
-        // Collect all hashes first
-        const hashes = this.extractImageHashes(message);
-        if (!hashes.length) return message;
-
-        // Batch fetch all blobs in one transaction
-        const blobData = await this.getBlobsBatch(hashes);
-
-        // Shallow clone to avoid mutating original
+        const get = (hash) => lookup instanceof Map ? lookup.get(hash) : lookup[hash];
         const resolved = { ...message };
 
         if (resolved.images?.length) {
-            resolved.images = resolved.images.map(ref => {
-                if (ChatStorage.isDataUrl(ref)) return ref;
-                return blobData.get(ref) ?? ref;
-            });
+            resolved.images = resolved.images.map(ref => 
+                ChatStorage.isDataUrl(ref) ? ref : (get(ref) ?? ref)
+            );
         }
 
         if (resolved.contents?.length) {
@@ -185,7 +276,7 @@ export class ChatStorage {
                 if (!Array.isArray(group)) return group;
                 return group.map(part => {
                     if (part?.type === 'image' && !ChatStorage.isDataUrl(part.content)) {
-                        return { ...part, content: blobData.get(part.content) ?? part.content };
+                        return { ...part, content: get(part.content) ?? part.content };
                     }
                     return part;
                 });
@@ -203,7 +294,7 @@ export class ChatStorage {
                         if (!Array.isArray(group)) return group;
                         return group.map(part => {
                             if (part?.type === 'image' && !ChatStorage.isDataUrl(part.content)) {
-                                return { ...part, content: blobData.get(part.content) ?? part.content };
+                                return { ...part, content: get(part.content) ?? part.content };
                             }
                             return part;
                         });
@@ -213,6 +304,15 @@ export class ChatStorage {
         }
 
         return resolved;
+    }
+
+    // Async version for normal reads (fetches from DB)
+    async resolveMessageImages(message) {
+        if (!message) return message;
+        const hashes = [...new Set(this.extractImageHashes(message))];
+        if (!hashes.length) return message;
+        const blobData = await this.getBlobsBatch(hashes);
+        return this.resolveMessageImagesWithLookup(message, blobData);
     }
 
     extractImageHashes(message) {
@@ -660,7 +760,7 @@ export class ChatStorage {
 
             metaRequest.onsuccess = async () => {
                 try {
-                    const chatId = metaRequest.result;
+                const chatId = metaRequest.result;
                     
                     const preparedMessages = await Promise.all(
                         messages.map(msg => this.prepareMessageForStorage(msg, chatId, blobStore))
@@ -669,36 +769,36 @@ export class ChatStorage {
                     await Promise.all(preparedMessages.map((message, index) =>
                         new Promise((res, rej) => {
                             const req = messageStore.add({
-                                chatId,
-                                messageId: index,
-                                timestamp: Date.now(),
-                                ...message
+                        chatId,
+                        messageId: index,
+                        timestamp: Date.now(),
+                        ...message
                             });
                             req.onsuccess = () => res();
                             req.onerror = () => rej(req.error);
-                        })
+                    })
                     ));
 
-                    const mediaPromises = this.indexImagesFromMessages(chatId, messages, mediaStore);
+                        const mediaPromises = this.indexImagesFromMessages(chatId, messages, mediaStore);
                     await Promise.all(mediaPromises);
 
-                    const searchDoc = ChatStorage.buildSearchDocument({
-                        chatId,
-                        title: chatMeta.title,
-                        timestamp: chatMeta.timestamp,
-                        messages
-                    });
+                        const searchDoc = ChatStorage.buildSearchDocument({
+                            chatId,
+                            title: chatMeta.title,
+                            timestamp: chatMeta.timestamp,
+                            messages
+                        });
                     await new Promise((res, rej) => {
                         const putReq = searchDocsStore.put(searchDoc);
                         putReq.onsuccess = () => res();
                         putReq.onerror = () => rej(putReq.error);
                     });
 
-                    chrome.runtime.sendMessage({
-                        type: 'new_chat_saved',
+                        chrome.runtime.sendMessage({
+                            type: 'new_chat_saved',
                         chat: { chatId, ...chatMeta },
-                        searchDoc
-                    });
+                            searchDoc
+                        });
 
                     resolve({ chatId, ...chatMeta });
                 } catch (err) {
@@ -717,8 +817,8 @@ export class ChatStorage {
         const results = await new Promise(async (resolve, reject) => {
             try {
                 const tx = db.transaction(['messages', 'mediaIndex', 'blobs'], 'readwrite');
-                const store = tx.objectStore('messages');
-                const mediaStore = tx.objectStore('mediaIndex');
+            const store = tx.objectStore('messages');
+            const mediaStore = tx.objectStore('mediaIndex');
                 const blobStore = tx.objectStore('blobs');
 
                 const preparedMessages = await Promise.all(
@@ -727,15 +827,15 @@ export class ChatStorage {
 
                 await Promise.all(preparedMessages.map((message, index) =>
                     new Promise((res, rej) => {
-                        const request = store.add({
-                            chatId,
-                            messageId: startMessageIdIncrementAt + index,
-                            timestamp,
-                            ...message
-                        });
+                    const request = store.add({
+                        chatId,
+                        messageId: startMessageIdIncrementAt + index,
+                        timestamp,
+                        ...message
+                    });
                         request.onsuccess = () => res(request.result);
                         request.onerror = () => rej(request.error);
-                    })
+                })
                 ));
 
                 const mediaPromises = this.indexImagesFromMessages(chatId, messages, mediaStore, startMessageIdIncrementAt);
@@ -780,26 +880,26 @@ export class ChatStorage {
         const result = await new Promise(async (resolve, reject) => {
             try {
                 const tx = db.transaction(['messages', 'mediaIndex', 'blobs'], 'readwrite');
-                const store = tx.objectStore('messages');
-                const mediaStore = tx.objectStore('mediaIndex');
+            const store = tx.objectStore('messages');
+            const mediaStore = tx.objectStore('mediaIndex');
                 const blobStore = tx.objectStore('blobs');
 
                 const prepared = await this.prepareMessageForStorage(message, chatId, blobStore);
 
-                const request = store.put({
-                    chatId,
-                    messageId: messageId,
-                    timestamp,
+            const request = store.put({
+                chatId,
+                messageId: messageId,
+                timestamp,
                     ...prepared
-                });
-                
-                request.onsuccess = () => {
-                    this.replaceMediaEntriesForMessage(mediaStore, chatId, messageId, message)
-                        .then(() => resolve(request.result))
+            });
+            
+            request.onsuccess = () => {
+                this.replaceMediaEntriesForMessage(mediaStore, chatId, messageId, message)
+                    .then(() => resolve(request.result))
                         .catch(() => resolve(request.result));
-                };
-                
-                request.onerror = () => reject(request.error);
+            };
+            
+            request.onerror = () => reject(request.error);
             } catch (err) {
                 reject(err);
             }
@@ -1009,37 +1109,37 @@ export class ChatStorage {
         } else {
             messages = await new Promise((resolve) => {
                 const msgs = [];
-                let collected = 0;
-                const index = messageStore.index('chatId');
-                const cursorRequest = index.openCursor(IDBKeyRange.only(chatId), 'next');
+            let collected = 0;
+            const index = messageStore.index('chatId');
+            const cursorRequest = index.openCursor(IDBKeyRange.only(chatId), 'next');
 
-                cursorRequest.onsuccess = (event) => {
-                    const cursor = event.target.result;
-                    if (!cursor) {
+            cursorRequest.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (!cursor) {
                         resolve(msgs);
-                        return;
-                    }
+                    return;
+                }
 
-                    const messageId = typeof cursor.value?.messageId === 'number' ? cursor.value.messageId : null;
-                    if (typeof messageId === 'number' && messageId < startIndex) {
-                        const skip = startIndex - messageId;
-                        if (skip > 0) {
-                            cursor.advance(skip);
-                        }
-                        return;
+                const messageId = typeof cursor.value?.messageId === 'number' ? cursor.value.messageId : null;
+                if (typeof messageId === 'number' && messageId < startIndex) {
+                    const skip = startIndex - messageId;
+                    if (skip > 0) {
+                        cursor.advance(skip);
                     }
+                    return;
+                }
 
                     msgs.push(cursor.value);
-                    collected++;
-                    if (hasFiniteLimit && collected >= limit) {
+                collected++;
+                if (hasFiniteLimit && collected >= limit) {
                         resolve(msgs);
-                        return;
-                    }
-                    cursor.continue();
-                };
+                    return;
+                }
+                cursor.continue();
+            };
 
-                cursorRequest.onerror = () => resolve([]);
-            });
+            cursorRequest.onerror = () => resolve([]);
+        });
         }
 
         if (resolveImages && messages.length) {
@@ -1199,17 +1299,17 @@ export class ChatStorage {
         // Collect hashes AND delete messages in one pass
         const imageHashes = new Set();
         await new Promise((resolve) => {
-            const request = messageIndex.openCursor(IDBKeyRange.only(chatId));
-            request.onsuccess = (event) => {
-                const cursor = event.target.result;
-                if (cursor) {
+                const request = messageIndex.openCursor(IDBKeyRange.only(chatId));
+                request.onsuccess = (event) => {
+                    const cursor = event.target.result;
+                    if (cursor) {
                     this.extractImageHashes(cursor.value).forEach(h => imageHashes.add(h));
-                    cursor.delete();
-                    cursor.continue();
-                } else {
-                    resolve();
-                }
-            };
+                        cursor.delete();
+                        cursor.continue();
+                    } else {
+                        resolve();
+                    }
+                };
             request.onerror = () => resolve();
         });
 
@@ -1476,9 +1576,10 @@ export class ChatStorage {
                         });
                     }
 
-                    // Resolve images for media indexing (needs full data URLs)
-                    const resolvedMessages = await Promise.all(
-                        messages.map(m => this.resolveMessageImages({ ...m, chatId: newChatId }))
+                    // Resolve images for media indexing - use archive blobs directly to avoid new transaction
+                    const blobLookup = hasBlobs ? archive.blobs : null;
+                    const resolvedMessages = messages.map(m => 
+                        this.resolveMessageImagesWithLookup({ ...m, chatId: newChatId }, blobLookup)
                     );
                     const mediaPromises = this.indexImagesFromMessages(newChatId, resolvedMessages, mediaStore);
                     await Promise.all(mediaPromises);

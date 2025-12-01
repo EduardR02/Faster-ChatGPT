@@ -1,4 +1,5 @@
 import { SettingsManager } from './state_manager.js';
+import { sanitizeBase64Image } from './image_utils.js';
 
 
 export class ApiManager {
@@ -229,36 +230,11 @@ export class ApiManager {
                 messageParts.push({ type: 'text', content: part.text });
             } else if (part.inlineData?.data) {
                 const mimeType = part.inlineData.mimeType || 'image/png';
-                // Fix API bug: Gemini sometimes appends text to base64 image data
-                let imageData = part.inlineData.data;
-                let appendedText = '';
-                
-                // Find last = from the end
-                const lastEquals = imageData.lastIndexOf('=');
-                if (lastEquals !== -1 && lastEquals < imageData.length - 1) {
-                    // There's content after the =, check if it looks like text
-                    const afterEquals = imageData.slice(lastEquals + 1);
-                    if (/[^A-Za-z0-9+/=]/.test(afterEquals)) {
-                        // Contains non-base64 characters, split here
-                        appendedText = afterEquals;
-                        imageData = imageData.slice(0, lastEquals + 1);
-                    }
-                }
-                
-                const imageDataUri = `data:${mimeType};base64,${imageData}`;
+                const base64 = this.sanitizeGeminiImage(part.inlineData.data, mimeType);
+                const imageDataUri = `data:${mimeType};base64,${base64}`;
                 const imagePart = { type: 'image', content: imageDataUri };
                 if (part.thoughtSignature) imagePart.thoughtSignature = part.thoughtSignature;
                 messageParts.push(imagePart);
-                
-                // If we found appended text, add it as a separate text part
-                if (appendedText) {
-                    try {
-                        appendedText = decodeURIComponent(appendedText);
-                    } catch (e) {
-                        // If decoding fails, use as-is
-                    }
-                    messageParts.push({ type: 'text', content: appendedText });
-                }
             }
         }
 
@@ -267,6 +243,10 @@ export class ApiManager {
         }
 
         return messageParts;
+    }
+
+    sanitizeGeminiImage(rawData, mimeType) {
+        return sanitizeBase64Image(rawData || '', mimeType || '');
     }
 
     processFiles(messages) {

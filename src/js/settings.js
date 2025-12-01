@@ -81,6 +81,11 @@ class SettingsUI {
         if (reindexButton) {
             reindexButton.addEventListener('click', () => this.handleReindexRequest(reindexButton));
         }
+
+        const repairImagesButton = document.getElementById('button-repair-images');
+        if (repairImagesButton) {
+            repairImagesButton.addEventListener('click', () => this.handleRepairImagesRequest(repairImagesButton));
+        }
     }
 
     async initializeUI() {
@@ -226,6 +231,56 @@ class SettingsUI {
         } catch (error) {
             console.error('Failed to trigger reindex:', error);
             applyState('Reindex failed', ['reindex-failure']);
+        } finally {
+            button.disabled = false;
+            delete button.dataset.busy;
+            resetState();
+        }
+    }
+
+    async handleRepairImagesRequest(button) {
+        if (button.dataset.busy === 'true') return;
+
+        const span = button.querySelector('span');
+        const readLabel = () => (span ? span.textContent : button.textContent).trim();
+        const writeLabel = (text) => {
+            if (span) {
+                span.textContent = `${text} `;
+            } else {
+                button.textContent = text;
+            }
+        };
+
+        const defaultLabel = button.dataset.defaultLabel || readLabel();
+        button.dataset.defaultLabel = defaultLabel;
+
+        const stateClasses = ['repair-busy', 'repair-success', 'repair-prompt', 'repair-failure', 'confirm'];
+        const applyState = (text, classes = []) => {
+            writeLabel(text);
+            button.classList.remove(...stateClasses);
+            classes.forEach(cls => button.classList.add(cls));
+        };
+
+        const resetState = () => {
+            setTimeout(() => {
+                applyState(defaultLabel);
+            }, 2500);
+        };
+
+        button.dataset.busy = 'true';
+        button.disabled = true;
+        applyState('Repairing...', ['repair-busy']);
+
+        try {
+            const result = await chrome.runtime.sendMessage({ type: 'history_repair_images' });
+            if (result?.ok) {
+                applyState(`Repaired ${result.repaired || 0}`, ['repair-success']);
+            } else {
+                applyState('Open history first to repair', ['repair-prompt']);
+            }
+        } catch (error) {
+            console.error('Failed to trigger repair:', error);
+            applyState('Repair failed', ['repair-failure']);
         } finally {
             button.disabled = false;
             delete button.dataset.busy;

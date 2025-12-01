@@ -311,6 +311,39 @@ function initMessageListeners() {
                     }
                 })();
                 return true;
+            case 'history_repair_images':
+                (async () => {
+                    try {
+                        if (!chatStorage) {
+                            sendResponse({ ok: false, error: 'history_not_ready' });
+                            return;
+                        }
+                        const repaired = await chatStorage.repairAllBlobs();
+                        if (mediaTab && repaired > 0) {
+                            await mediaTab.refreshMedia({ force: true });
+                        }
+                        sendResponse({ ok: true, repaired });
+                    } catch (error) {
+                        console.error('History repair failed:', error);
+                        sendResponse({ ok: false, error: error?.message ?? 'unknown_error' });
+                    }
+                })();
+                return true;
+            case 'repair_blob_from_data_url':
+                (async () => {
+                    try {
+                        if (!chatStorage) {
+                            sendResponse({ ok: false, error: 'history_not_ready' });
+                            return;
+                        }
+                        const { repaired, dataUrl } = await chatStorage.repairBlobByDataUrl(message.dataUrl);
+                        sendResponse({ ok: repaired, dataUrl });
+                    } catch (error) {
+                        console.error('Blob repair failed:', error);
+                        sendResponse({ ok: false, error: error?.message ?? 'unknown_error' });
+                    }
+                })();
+                return true;
         }
     });
 }
@@ -331,6 +364,9 @@ async function handleAppendedMessages(chatId, addedCount, startIndex, message = 
 
     if (mediaTab) {
         mediaTab.deferredForceRefresh = true;
+        if (mediaTab.isMediaTabActive()) {
+            runWhenIdle(() => { void mediaTab.refreshMedia({ incremental: true }); });
+        }
     }
 
     if (chatCore.getChatId() !== chatId) return;
@@ -674,9 +710,13 @@ class MediaTab {
 
     }
 
-    async refreshMedia({ force = false } = {}) {
+    async refreshMedia({ force = false, incremental = false } = {}) {
         if (force) {
             this.deferredForceRefresh = false;
+        }
+
+        if (incremental && this.isMediaTabActive() && this.mediaEntries.length && !force && !this.isLoading) {
+            return this.refreshMediaIncremental();
         }
 
         if (this.isLoading && !force) return;
@@ -755,6 +795,48 @@ class MediaTab {
 
         this.pendingRefresh = false;
         await runLoad();
+    }
+
+    async refreshMediaIncremental() {
+        try {
+            const latest = await this.chatStorage.getAllMedia(MEDIA_DEFAULT_LIMIT, 0);
+            if (!Array.isArray(latest) || latest.length === 0) return;
+
+            const knownIds = new Set(this.mediaEntryMap.keys());
+            const newEntries = latest.filter(e => !knownIds.has(e.id));
+            if (!newEntries.length) return;
+
+            if (newEntries.some(entry => !entry.thumbnail)) {
+                await this.chatStorage.ensureMediaThumbnails(newEntries);
+            }
+
+            newEntries.forEach(entry => this.mediaEntryMap.set(entry.id, entry));
+            const existing = this.mediaEntries.filter(entry => this.mediaEntryMap.has(entry.id) && !newEntries.some(ne => ne.id === entry.id));
+            this.mediaEntries = [...newEntries, ...existing];
+
+            const panel = document.getElementById('media-panel');
+            const grid = document.getElementById('media-grid');
+            if (!panel || !grid) return;
+
+            const filtered = newEntries
+                .filter(entry => this.currentFilter === 'all' || entry.source === this.currentFilter)
+                .filter(entry => !this.invalidMediaIds?.has(entry.id));
+
+            if (!filtered.length) return;
+
+            const sorted = [...filtered].sort((a, b) => {
+                if (this.currentSort === 'asc') {
+                    return (a.timestamp ?? 0) - (b.timestamp ?? 0);
+                }
+                return (b.timestamp ?? 0) - (a.timestamp ?? 0);
+            });
+
+            this.setMediaState(panel, MEDIA_STATE.ready);
+            await this.renderNewMediaEntries(sorted, grid);
+        } catch (error) {
+            console.error('Incremental media refresh failed:', error);
+            this.pendingRefresh = true;
+        }
     }
 
     async reindexMedia() {
@@ -974,6 +1056,21 @@ class MediaTab {
         }
         this.applyMediaDimensions(element, entry);
         return element;
+    }
+
+    async renderNewMediaEntries(entries, grid) {
+        for (const entry of entries) {
+            const element = this.getOrCreateMediaPlaceholder(entry);
+            element.dataset.hydrated = 'false';
+            element.classList.add('media-placeholder');
+            if (entry.thumbnailWidth && entry.thumbnailHeight) {
+                element.dataset.thumbWidth = String(entry.thumbnailWidth);
+                element.dataset.thumbHeight = String(entry.thumbnailHeight);
+            }
+            this.applyMediaDimensions(element, entry);
+            grid.prepend(element);
+            this.scheduleMediaHydration(entry, this.mediaLoadContext);
+        }
     }
 
     scheduleMediaHydration(entry, loadContext = null) {
