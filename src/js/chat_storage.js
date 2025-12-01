@@ -1,8 +1,301 @@
 export class ChatStorage {
     constructor() {
         this.dbName = 'llm-chats';
-        this.dbVersion = 4;  // Combined media + search index migration
+        this.dbVersion = 5;  // Blob storage for images
         this.dbPromise = null;
+        this.migrationRun = false;
+    }
+
+    // ==================== BLOB STORAGE ====================
+
+    static isDataUrl(str) {
+        return typeof str === 'string' && str.startsWith('data:');
+    }
+
+    static async computeHash(dataUrl) {
+        const encoder = new TextEncoder();
+        const data = encoder.encode(dataUrl);
+        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    async storeBlob(blobStore, hash, data, chatId) {
+        return new Promise((resolve) => {
+            const getReq = blobStore.get(hash);
+            getReq.onsuccess = () => {
+                const existing = getReq.result;
+                if (existing) {
+                    if (!existing.chatIds.includes(chatId)) {
+                        existing.chatIds.push(chatId);
+                        blobStore.put(existing);
+                    }
+                    resolve();
+                } else {
+                    blobStore.put({ hash, data, chatIds: [chatId] });
+                    resolve();
+                }
+            };
+            getReq.onerror = () => resolve();
+        });
+    }
+
+    async addBlobRef(blobStore, hash, chatId) {
+        return new Promise((resolve) => {
+            const getReq = blobStore.get(hash);
+            getReq.onsuccess = () => {
+                const blob = getReq.result;
+                if (blob && !blob.chatIds.includes(chatId)) {
+                    blob.chatIds.push(chatId);
+                    blobStore.put(blob);
+                }
+                resolve();
+            };
+            getReq.onerror = () => resolve();
+        });
+    }
+
+    async removeBlobRef(blobStore, hash, chatId) {
+        return new Promise((resolve) => {
+            const getReq = blobStore.get(hash);
+            getReq.onsuccess = () => {
+                const blob = getReq.result;
+                if (!blob) {
+                    resolve();
+                    return;
+                }
+                blob.chatIds = blob.chatIds.filter(id => id !== chatId);
+                if (blob.chatIds.length === 0) {
+                    blobStore.delete(hash);
+                } else {
+                    blobStore.put(blob);
+                }
+                resolve();
+            };
+            getReq.onerror = () => resolve();
+        });
+    }
+
+    async getBlob(hash) {
+        const db = await this.getDB();
+        const tx = db.transaction('blobs', 'readonly');
+        const store = tx.objectStore('blobs');
+        return new Promise((resolve) => {
+            const req = store.get(hash);
+            req.onsuccess = () => resolve(req.result?.data ?? null);
+            req.onerror = () => resolve(null);
+        });
+    }
+
+    async getBlobsBatch(hashes) {
+        if (!hashes.length) return new Map();
+        const db = await this.getDB();
+        const tx = db.transaction('blobs', 'readonly');
+        const store = tx.objectStore('blobs');
+        const results = new Map();
+
+        await Promise.all(hashes.map(hash => new Promise((resolve) => {
+            const req = store.get(hash);
+            req.onsuccess = () => {
+                results.set(hash, req.result?.data ?? null);
+                resolve();
+            };
+            req.onerror = () => {
+                results.set(hash, null);
+                resolve();
+            };
+        })));
+
+        return results;
+    }
+
+    async prepareMessageForStorage(message, chatId, blobStore) {
+        const prepared = { ...message };
+
+        if (prepared.images?.length) {
+            prepared.images = await Promise.all(prepared.images.map(async (img) => {
+                if (!ChatStorage.isDataUrl(img)) return img;
+                const hash = await ChatStorage.computeHash(img);
+                await this.storeBlob(blobStore, hash, img, chatId);
+                return hash;
+            }));
+        }
+
+        if (prepared.contents?.length) {
+            prepared.contents = await Promise.all(prepared.contents.map(async (group) => {
+                if (!Array.isArray(group)) return group;
+                return Promise.all(group.map(async (part) => {
+                    if (part?.type === 'image' && ChatStorage.isDataUrl(part.content)) {
+                        const hash = await ChatStorage.computeHash(part.content);
+                        await this.storeBlob(blobStore, hash, part.content, chatId);
+                        return { ...part, content: hash };
+                    }
+                    return part;
+                }));
+            }));
+        }
+
+        if (prepared.responses) {
+            prepared.responses = { ...prepared.responses };
+            for (const modelKey of ['model_a', 'model_b']) {
+                const modelResp = prepared.responses[modelKey];
+                if (!modelResp?.messages) continue;
+                prepared.responses[modelKey] = {
+                    ...modelResp,
+                    messages: await Promise.all(modelResp.messages.map(async (group) => {
+                        if (!Array.isArray(group)) return group;
+                        return Promise.all(group.map(async (part) => {
+                            if (part?.type === 'image' && ChatStorage.isDataUrl(part.content)) {
+                                const hash = await ChatStorage.computeHash(part.content);
+                                await this.storeBlob(blobStore, hash, part.content, chatId);
+                                return { ...part, content: hash };
+                            }
+                            return part;
+                        }));
+                    }))
+                };
+            }
+        }
+
+        return prepared;
+    }
+
+    async resolveMessageImages(message) {
+        if (!message) return message;
+
+        // Collect all hashes first
+        const hashes = this.extractImageHashes(message);
+        if (!hashes.length) return message;
+
+        // Batch fetch all blobs in one transaction
+        const blobData = await this.getBlobsBatch(hashes);
+
+        // Shallow clone to avoid mutating original
+        const resolved = { ...message };
+
+        if (resolved.images?.length) {
+            resolved.images = resolved.images.map(ref => {
+                if (ChatStorage.isDataUrl(ref)) return ref;
+                return blobData.get(ref) ?? ref;
+            });
+        }
+
+        if (resolved.contents?.length) {
+            resolved.contents = resolved.contents.map(group => {
+                if (!Array.isArray(group)) return group;
+                return group.map(part => {
+                    if (part?.type === 'image' && !ChatStorage.isDataUrl(part.content)) {
+                        return { ...part, content: blobData.get(part.content) ?? part.content };
+                    }
+                    return part;
+                });
+            });
+        }
+
+        if (resolved.responses) {
+            resolved.responses = { ...resolved.responses };
+            for (const modelKey of ['model_a', 'model_b']) {
+                const modelResp = resolved.responses[modelKey];
+                if (!modelResp?.messages) continue;
+                resolved.responses[modelKey] = {
+                    ...modelResp,
+                    messages: modelResp.messages.map(group => {
+                        if (!Array.isArray(group)) return group;
+                        return group.map(part => {
+                            if (part?.type === 'image' && !ChatStorage.isDataUrl(part.content)) {
+                                return { ...part, content: blobData.get(part.content) ?? part.content };
+                            }
+                            return part;
+                        });
+                    })
+                };
+            }
+        }
+
+        return resolved;
+    }
+
+    extractImageHashes(message) {
+        const hashes = [];
+        if (!message) return hashes;
+
+        if (message.images?.length) {
+            for (const ref of message.images) {
+                if (!ChatStorage.isDataUrl(ref)) hashes.push(ref);
+            }
+        }
+
+        if (message.contents?.length) {
+            for (const group of message.contents) {
+                if (!Array.isArray(group)) continue;
+                for (const part of group) {
+                    if (part?.type === 'image' && !ChatStorage.isDataUrl(part.content)) {
+                        hashes.push(part.content);
+                    }
+                }
+            }
+        }
+
+        if (message.responses) {
+            for (const modelKey of ['model_a', 'model_b']) {
+                const modelResp = message.responses[modelKey];
+                if (!modelResp?.messages) continue;
+                for (const group of modelResp.messages) {
+                    if (!Array.isArray(group)) continue;
+                    for (const part of group) {
+                        if (part?.type === 'image' && !ChatStorage.isDataUrl(part.content)) {
+                            hashes.push(part.content);
+                        }
+                    }
+                }
+            }
+        }
+
+        return hashes;
+    }
+
+    async cleanupOrphanedBlobs() {
+        const db = await this.getDB();
+        if (!db.objectStoreNames.contains('blobs')) return { cleaned: 0 };
+
+        const tx = db.transaction(['blobs', 'chatMeta'], 'readwrite');
+        const blobStore = tx.objectStore('blobs');
+        const metaStore = tx.objectStore('chatMeta');
+
+        const existingChatIds = new Set();
+        await new Promise((resolve) => {
+            const req = metaStore.getAllKeys();
+            req.onsuccess = () => {
+                (req.result || []).forEach(id => existingChatIds.add(id));
+                resolve();
+            };
+            req.onerror = () => resolve();
+        });
+
+        let cleaned = 0;
+        await new Promise((resolve) => {
+            const cursor = blobStore.openCursor();
+            cursor.onsuccess = (e) => {
+                const c = e.target.result;
+                if (!c) {
+                    resolve();
+                    return;
+                }
+                const blob = c.value;
+                const validIds = blob.chatIds.filter(id => existingChatIds.has(id));
+                if (validIds.length === 0) {
+                    c.delete();
+                    cleaned++;
+                } else if (validIds.length !== blob.chatIds.length) {
+                    blob.chatIds = validIds;
+                    c.update(blob);
+                }
+                c.continue();
+            };
+            cursor.onerror = () => resolve();
+        });
+
+        return { cleaned };
     }
 
     async getDB() {
@@ -35,6 +328,7 @@ export class ChatStorage {
 
                     db.onclose = () => {
                         this.dbPromise = null;
+                        this.migrationRun = false;
                     };
 
                     db.onversionchange = () => {
@@ -42,6 +336,14 @@ export class ChatStorage {
                     };
 
                     resolve(db);
+
+                    // Run pending migration in background (non-blocking)
+                    if (!this.migrationRun) {
+                        this.migrationRun = true;
+                        this.runPendingMigration().catch(err => {
+                            console.warn('Background migration failed:', err);
+                        });
+                    }
                 };
             });
         }
@@ -94,6 +396,105 @@ export class ChatStorage {
                 db.createObjectStore('searchDocs', { keyPath: 'id' });
             }
         }
+
+        // Version 5: Content-addressed blob storage for images
+        if (oldVersion < 5) {
+            if (!db.objectStoreNames.contains('blobs')) {
+                db.createObjectStore('blobs', { keyPath: 'hash' });
+            }
+            // Migration runs after DB opens via runPendingMigration()
+        }
+    }
+
+    async runPendingMigration() {
+        const db = await this.getDB();
+        if (!db.objectStoreNames.contains('blobs')) return;
+
+        // Check if any messages still have inline data URLs (need migration)
+        const needsMigration = await new Promise((resolve) => {
+            const tx = db.transaction('messages', 'readonly');
+            const store = tx.objectStore('messages');
+            const cursor = store.openCursor();
+            cursor.onsuccess = (e) => {
+                const c = e.target.result;
+                if (!c) {
+                    resolve(false);
+                    return;
+                }
+                const msg = c.value;
+                if (this.messageHasInlineImages(msg)) {
+                    resolve(true);
+                    return;
+                }
+                c.continue();
+            };
+            cursor.onerror = () => resolve(false);
+        });
+
+        if (!needsMigration) return;
+
+        console.log('Migrating images to blob storage...');
+
+        // Process in batches to avoid memory issues
+        const batchSize = 50;
+        let processed = 0;
+
+        while (true) {
+            const tx = db.transaction(['messages', 'blobs'], 'readwrite');
+            const messageStore = tx.objectStore('messages');
+            const blobStore = tx.objectStore('blobs');
+
+            // Get a batch of messages with inline images
+            const batch = await new Promise((resolve) => {
+                const msgs = [];
+                const cursor = messageStore.openCursor();
+                cursor.onsuccess = (e) => {
+                    const c = e.target.result;
+                    if (!c || msgs.length >= batchSize) {
+                        resolve(msgs);
+                        return;
+                    }
+                    if (this.messageHasInlineImages(c.value)) {
+                        msgs.push(c.value);
+                    }
+                    c.continue();
+                };
+                cursor.onerror = () => resolve([]);
+            });
+
+            if (batch.length === 0) break;
+
+            // Process each message
+            for (const msg of batch) {
+                const prepared = await this.prepareMessageForStorage(msg, msg.chatId, blobStore);
+                await new Promise((resolve) => {
+                    messageStore.put(prepared).onsuccess = () => resolve();
+                });
+                processed++;
+            }
+
+            await new Promise((resolve, reject) => {
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => reject(tx.error);
+            });
+        }
+
+        console.log(`Blob migration complete. Processed ${processed} messages.`);
+    }
+
+    messageHasInlineImages(msg) {
+        if (msg.images?.some(img => ChatStorage.isDataUrl(img))) return true;
+        if (msg.contents?.some(group => 
+            Array.isArray(group) && group.some(p => p?.type === 'image' && ChatStorage.isDataUrl(p.content))
+        )) return true;
+        if (msg.responses) {
+            for (const key of ['model_a', 'model_b']) {
+                if (msg.responses[key]?.messages?.some(group =>
+                    Array.isArray(group) && group.some(p => p?.type === 'image' && ChatStorage.isDataUrl(p.content))
+                )) return true;
+            }
+        }
+        return false;
     }
 
     // FIXED: Proper migration using upgrade transaction
@@ -240,11 +641,12 @@ export class ChatStorage {
 
     async createChatWithMessages(title, messages, bonus_options = {}) {
         const db = await this.getDB();
-        const tx = db.transaction(['chatMeta', 'messages', 'mediaIndex', 'searchDocs'], 'readwrite');
+        const tx = db.transaction(['chatMeta', 'messages', 'mediaIndex', 'searchDocs', 'blobs'], 'readwrite');
         const metaStore = tx.objectStore('chatMeta');
         const messageStore = tx.objectStore('messages');
         const mediaStore = tx.objectStore('mediaIndex');
         const searchDocsStore = tx.objectStore('searchDocs');
+        const blobStore = tx.objectStore('blobs');
 
         return new Promise((resolve, reject) => {
             const chatMeta = {
@@ -256,51 +658,52 @@ export class ChatStorage {
 
             const metaRequest = metaStore.add(chatMeta);
 
-            metaRequest.onsuccess = () => {
-                const chatId = metaRequest.result;
-                const messagePromises = messages.map((message, index) =>
-                    messageStore.add({
-                        chatId,
-                        messageId: index,
-                        timestamp: Date.now(),
-                        ...message
-                    })
-                );
+            metaRequest.onsuccess = async () => {
+                try {
+                    const chatId = metaRequest.result;
+                    
+                    const preparedMessages = await Promise.all(
+                        messages.map(msg => this.prepareMessageForStorage(msg, chatId, blobStore))
+                    );
 
-                Promise.all(messagePromises)
-                    .then(() => {
-                        // Track images in media index
-                        const mediaPromises = this.indexImagesFromMessages(chatId, messages, mediaStore);
-                        return Promise.all(mediaPromises);
-                    })
-                    .then(() => new Promise((resolveDoc, rejectDoc) => {
-                        const searchDoc = ChatStorage.buildSearchDocument({
-                            chatId,
-                            title: chatMeta.title,
-                            timestamp: chatMeta.timestamp,
-                            messages
-                        });
-                        const putReq = searchDocsStore.put(searchDoc);
-                        putReq.onsuccess = () => resolveDoc(searchDoc);
-                        putReq.onerror = () => rejectDoc(putReq.error);
-                    }))
-                    .then((searchDoc) => {
-                        // Send message after successful creation
-                        chrome.runtime.sendMessage({
-                            type: 'new_chat_saved',
-                            chat: {
+                    await Promise.all(preparedMessages.map((message, index) =>
+                        new Promise((res, rej) => {
+                            const req = messageStore.add({
                                 chatId,
-                                ...chatMeta,
-                            },
-                            searchDoc
-                        });
+                                messageId: index,
+                                timestamp: Date.now(),
+                                ...message
+                            });
+                            req.onsuccess = () => res();
+                            req.onerror = () => rej(req.error);
+                        })
+                    ));
 
-                        resolve({
-                            chatId,
-                            ...chatMeta
-                        });
-                    })
-                    .catch(reject);
+                    const mediaPromises = this.indexImagesFromMessages(chatId, messages, mediaStore);
+                    await Promise.all(mediaPromises);
+
+                    const searchDoc = ChatStorage.buildSearchDocument({
+                        chatId,
+                        title: chatMeta.title,
+                        timestamp: chatMeta.timestamp,
+                        messages
+                    });
+                    await new Promise((res, rej) => {
+                        const putReq = searchDocsStore.put(searchDoc);
+                        putReq.onsuccess = () => res();
+                        putReq.onerror = () => rej(putReq.error);
+                    });
+
+                    chrome.runtime.sendMessage({
+                        type: 'new_chat_saved',
+                        chat: { chatId, ...chatMeta },
+                        searchDoc
+                    });
+
+                    resolve({ chatId, ...chatMeta });
+                } catch (err) {
+                    reject(err);
+                }
             };
 
             metaRequest.onerror = () => reject(metaRequest.error);
@@ -311,29 +714,36 @@ export class ChatStorage {
         const timestamp = Date.now();
         const db = await this.getDB();
 
-        const results = await new Promise((resolve, reject) => {
-            const tx = db.transaction(['messages', 'mediaIndex'], 'readwrite');
-            const store = tx.objectStore('messages');
-            const mediaStore = tx.objectStore('mediaIndex');
+        const results = await new Promise(async (resolve, reject) => {
+            try {
+                const tx = db.transaction(['messages', 'mediaIndex', 'blobs'], 'readwrite');
+                const store = tx.objectStore('messages');
+                const mediaStore = tx.objectStore('mediaIndex');
+                const blobStore = tx.objectStore('blobs');
 
-            Promise.all(messages.map((message, index) =>
-                new Promise((resolve, reject) => {
-                    const request = store.add({
-                        chatId,
-                        messageId: startMessageIdIncrementAt + index,
-                        timestamp,
-                        ...message
-                    });
-                    request.onsuccess = () => resolve(request.result);
-                    request.onerror = () => reject(request.error);
-                })
-            )).then(() => {
-                // Track images in media index
+                const preparedMessages = await Promise.all(
+                    messages.map(msg => this.prepareMessageForStorage(msg, chatId, blobStore))
+                );
+
+                await Promise.all(preparedMessages.map((message, index) =>
+                    new Promise((res, rej) => {
+                        const request = store.add({
+                            chatId,
+                            messageId: startMessageIdIncrementAt + index,
+                            timestamp,
+                            ...message
+                        });
+                        request.onsuccess = () => res(request.result);
+                        request.onerror = () => rej(request.error);
+                    })
+                ));
+
                 const mediaPromises = this.indexImagesFromMessages(chatId, messages, mediaStore, startMessageIdIncrementAt);
-                return Promise.all(mediaPromises);
-            }).then(() => {
+                await Promise.all(mediaPromises);
                 resolve();
-            }).catch(reject);
+            } catch (err) {
+                reject(err);
+            }
         });
 
         await this.updateChatOption(chatId, { timestamp });
@@ -367,25 +777,32 @@ export class ChatStorage {
         const timestamp = Date.now();
         const db = await this.getDB();
 
-        const result = await new Promise((resolve, reject) => {
-            const tx = db.transaction(['messages', 'mediaIndex'], 'readwrite');
-            const store = tx.objectStore('messages');
-            const mediaStore = tx.objectStore('mediaIndex');
+        const result = await new Promise(async (resolve, reject) => {
+            try {
+                const tx = db.transaction(['messages', 'mediaIndex', 'blobs'], 'readwrite');
+                const store = tx.objectStore('messages');
+                const mediaStore = tx.objectStore('mediaIndex');
+                const blobStore = tx.objectStore('blobs');
 
-            const request = store.put({
-                chatId,
-                messageId: messageId,
-                timestamp,
-                ...message
-            });
-            
-            request.onsuccess = () => {
-                this.replaceMediaEntriesForMessage(mediaStore, chatId, messageId, message)
-                    .then(() => resolve(request.result))
-                    .catch(() => resolve(request.result)); // Don't fail on media index errors
-            };
-            
-            request.onerror = () => reject(request.error);
+                const prepared = await this.prepareMessageForStorage(message, chatId, blobStore);
+
+                const request = store.put({
+                    chatId,
+                    messageId: messageId,
+                    timestamp,
+                    ...prepared
+                });
+                
+                request.onsuccess = () => {
+                    this.replaceMediaEntriesForMessage(mediaStore, chatId, messageId, message)
+                        .then(() => resolve(request.result))
+                        .catch(() => resolve(request.result));
+                };
+                
+                request.onerror = () => reject(request.error);
+            } catch (err) {
+                reject(err);
+            }
         });
 
         await this.updateChatOption(chatId, { timestamp });
@@ -483,19 +900,24 @@ export class ChatStorage {
         return indexed;
     }
 
-    async getMessage(chatId, messageId) {
+    async getMessage(chatId, messageId, { resolveImages = true } = {}) {
         const db = await this.getDB();
         const tx = db.transaction(['messages'], 'readonly');
         const store = tx.objectStore('messages');
 
-        return new Promise((resolve, reject) => {
+        const msg = await new Promise((resolve, reject) => {
             const request = store.get([chatId, messageId]);
             request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
         });
+
+        if (msg && resolveImages) {
+            return this.resolveMessageImages(msg);
+        }
+        return msg;
     }
 
-    async getMessagesBatch(keys) {
+    async getMessagesBatch(keys, { resolveImages = true } = {}) {
         try {
             if (!Array.isArray(keys) || keys.length === 0) {
                 return new Map();
@@ -532,7 +954,7 @@ export class ChatStorage {
             const tx = db.transaction(['messages'], 'readonly');
             const store = tx.objectStore('messages');
 
-            return await new Promise((resolve, reject) => {
+            const rawResults = await new Promise((resolve, reject) => {
                 const results = new Map();
 
                 for (const { chatId, messageId, compositeKey } of normalized) {
@@ -548,13 +970,22 @@ export class ChatStorage {
                 tx.oncomplete = () => resolve(results);
                 tx.onerror = () => reject(tx.error);
             });
+
+            if (resolveImages) {
+                const resolved = new Map();
+                for (const [key, msg] of rawResults) {
+                    resolved.set(key, msg ? await this.resolveMessageImages(msg) : null);
+                }
+                return resolved;
+            }
+            return rawResults;
         } catch (error) {
             console.error('Error in getMessagesBatch:', error);
             return new Map();
         }
     }
 
-    async getMessages(chatId, startIndex = 0, limit) {
+    async getMessages(chatId, startIndex = 0, limit, { resolveImages = true } = {}) {
         const db = await this.getDB();
         const tx = db.transaction(['messages'], 'readonly');
         const messageStore = tx.objectStore('messages');
@@ -562,6 +993,7 @@ export class ChatStorage {
         const hasFiniteLimit = Number.isInteger(limit) && limit > 0;
         const hasValidStart = Number.isInteger(startIndex) && startIndex >= 0;
 
+        let messages;
         if (hasFiniteLimit && hasValidStart) {
             const requests = [];
             for (let offset = 0; offset < limit; offset++) {
@@ -573,42 +1005,47 @@ export class ChatStorage {
                 }));
             }
             const results = await Promise.all(requests);
-            return results.filter(Boolean);
+            messages = results.filter(Boolean);
+        } else {
+            messages = await new Promise((resolve) => {
+                const msgs = [];
+                let collected = 0;
+                const index = messageStore.index('chatId');
+                const cursorRequest = index.openCursor(IDBKeyRange.only(chatId), 'next');
+
+                cursorRequest.onsuccess = (event) => {
+                    const cursor = event.target.result;
+                    if (!cursor) {
+                        resolve(msgs);
+                        return;
+                    }
+
+                    const messageId = typeof cursor.value?.messageId === 'number' ? cursor.value.messageId : null;
+                    if (typeof messageId === 'number' && messageId < startIndex) {
+                        const skip = startIndex - messageId;
+                        if (skip > 0) {
+                            cursor.advance(skip);
+                        }
+                        return;
+                    }
+
+                    msgs.push(cursor.value);
+                    collected++;
+                    if (hasFiniteLimit && collected >= limit) {
+                        resolve(msgs);
+                        return;
+                    }
+                    cursor.continue();
+                };
+
+                cursorRequest.onerror = () => resolve([]);
+            });
         }
 
-        return new Promise((resolve) => {
-            const messages = [];
-            let collected = 0;
-            const index = messageStore.index('chatId');
-            const cursorRequest = index.openCursor(IDBKeyRange.only(chatId), 'next');
-
-            cursorRequest.onsuccess = (event) => {
-                const cursor = event.target.result;
-                if (!cursor) {
-                    resolve(messages);
-                    return;
-                }
-
-                const messageId = typeof cursor.value?.messageId === 'number' ? cursor.value.messageId : null;
-                if (typeof messageId === 'number' && messageId < startIndex) {
-                    const skip = startIndex - messageId;
-                    if (skip > 0) {
-                        cursor.advance(skip);
-                    }
-                    return;
-                }
-
-                messages.push(cursor.value);
-                collected++;
-                if (hasFiniteLimit && collected >= limit) {
-                    resolve(messages);
-                    return;
-                }
-                cursor.continue();
-            };
-
-            cursorRequest.onerror = () => resolve([]);
-        });
+        if (resolveImages && messages.length) {
+            return Promise.all(messages.map(m => this.resolveMessageImages(m)));
+        }
+        return messages;
     }
 
     async getChatLength(chatId) {
@@ -624,13 +1061,13 @@ export class ChatStorage {
         });
     }
 
-    async loadChat(chatId, messageLimit = null) {
+    async loadChat(chatId, messageLimit = null, { resolveImages = true } = {}) {
         const db = await this.getDB();
         const tx = db.transaction(['messages', 'chatMeta'], 'readonly');
         const messageStore = tx.objectStore('messages');
         const metaStore = tx.objectStore('chatMeta');
 
-        return new Promise((resolve) => {
+        const result = await new Promise((resolve) => {
             const messages = [];
             let count = 0;
 
@@ -659,15 +1096,20 @@ export class ChatStorage {
                 resolve({ messages: [] });
             };
         });
+
+        if (resolveImages && result.messages?.length) {
+            result.messages = await Promise.all(result.messages.map(m => this.resolveMessageImages(m)));
+        }
+        return result;
     }
 
-    async getLatestMessages(chatId, limit) {
+    async getLatestMessages(chatId, limit, { resolveImages = true } = {}) {
         const db = await this.getDB();
         const tx = db.transaction(['messages'], 'readonly');
         const messageStore = tx.objectStore('messages');
 
-        return new Promise((resolve) => {
-            const messages = [];
+        const messages = await new Promise((resolve) => {
+            const msgs = [];
             let count = 0;
 
             const index = messageStore.index('chatId');
@@ -677,12 +1119,11 @@ export class ChatStorage {
                 const cursor = event.target.result;
 
                 if (!cursor || count >= limit) {
-                    // Reverse to maintain chronological order
-                    resolve(messages.reverse());
+                    resolve(msgs.reverse());
                     return;
                 }
 
-                messages.push(cursor.value);
+                msgs.push(cursor.value);
                 count++;
                 cursor.continue();
             };
@@ -691,6 +1132,11 @@ export class ChatStorage {
                 resolve([]);
             };
         });
+
+        if (resolveImages && messages.length) {
+            return Promise.all(messages.map(m => this.resolveMessageImages(m)));
+        }
+        return messages;
     }
 
     async renameChat(chatId, newTitle, announceUpdate = false) {
@@ -739,29 +1185,36 @@ export class ChatStorage {
 
     async deleteChat(chatId) {
         const db = await this.getDB();
-        const tx = db.transaction(['messages', 'chatMeta', 'mediaIndex', 'searchDocs'], 'readwrite');
+        const tx = db.transaction(['messages', 'chatMeta', 'mediaIndex', 'searchDocs', 'blobs'], 'readwrite');
 
         const messageStore = tx.objectStore('messages');
         const metaStore = tx.objectStore('chatMeta');
         const mediaStore = tx.objectStore('mediaIndex');
         const searchDocsStore = tx.objectStore('searchDocs');
+        const blobStore = tx.objectStore('blobs');
 
         const messageIndex = messageStore.index('chatId');
         const mediaIndex = mediaStore.index('chatId');
 
+        // Collect hashes AND delete messages in one pass
+        const imageHashes = new Set();
+        await new Promise((resolve) => {
+            const request = messageIndex.openCursor(IDBKeyRange.only(chatId));
+            request.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (cursor) {
+                    this.extractImageHashes(cursor.value).forEach(h => imageHashes.add(h));
+                    cursor.delete();
+                    cursor.continue();
+                } else {
+                    resolve();
+                }
+            };
+            request.onerror = () => resolve();
+        });
+
+        // Delete media entries, metadata, search doc in parallel
         await Promise.all([
-            new Promise((resolve) => {
-                const request = messageIndex.openCursor(IDBKeyRange.only(chatId));
-                request.onsuccess = (event) => {
-                    const cursor = event.target.result;
-                    if (cursor) {
-                        cursor.delete();
-                        cursor.continue();
-                    } else {
-                        resolve();
-                    }
-                };
-            }),
             new Promise((resolve) => {
                 const request = mediaIndex.openCursor(IDBKeyRange.only(chatId));
                 request.onsuccess = (event) => {
@@ -775,16 +1228,15 @@ export class ChatStorage {
                 };
             }),
             new Promise((resolve) => {
-                const request = metaStore.delete(chatId);
-                request.onsuccess = () => resolve();
-                request.onerror = () => resolve();
+                metaStore.delete(chatId).onsuccess = () => resolve();
             }),
             new Promise((resolve) => {
-                const request = searchDocsStore.delete(chatId);
-                request.onsuccess = () => resolve();
-                request.onerror = () => resolve();
+                searchDocsStore.delete(chatId).onsuccess = () => resolve();
             })
         ]);
+
+        // Remove chatId from blob references, delete orphaned blobs
+        await Promise.all([...imageHashes].map(hash => this.removeBlobRef(blobStore, hash, chatId)));
     }
 
     // FIXED: getChatCount uses 'chatMeta'
@@ -856,17 +1308,20 @@ export class ChatStorage {
 
     async exportChats(options = { pretty: false }) {
         const db = await this.getDB();
-        const tx = db.transaction(['chatMeta', 'messages'], 'readonly');
+        const stores = ['chatMeta', 'messages'];
+        if (db.objectStoreNames.contains('blobs')) stores.push('blobs');
+        const tx = db.transaction(stores, 'readonly');
         const metaStore = tx.objectStore('chatMeta');
         const messageStore = tx.objectStore('messages');
+        const blobStore = stores.includes('blobs') ? tx.objectStore('blobs') : null;
     
         const archive = {
             exportedAt: new Date().toISOString(),
             schemaVersion: this.dbVersion,
+            blobs: {},
             chats: {}
         };
     
-        // Function to iterate through a cursor and return a Promise
         const iterateCursor = (store, indexName, keyRange, processItem) => {
             return new Promise((resolve, reject) => {
                 const request = indexName
@@ -881,11 +1336,14 @@ export class ChatStorage {
                         processItem(cursor.value);
                         cursor.continue();
                     } else {
-                        resolve(); // No more items
+                        resolve();
                     }
                 };
             });
         };
+
+        // Collect all used hashes
+        const usedHashes = new Set();
     
         // 1. Fetch all chat metadata
         await iterateCursor(metaStore, null, null, (chatMeta) => {
@@ -895,10 +1353,20 @@ export class ChatStorage {
             };
         });
     
-        // 2. Fetch messages for each chat
+        // 2. Fetch messages for each chat, collect hashes
         for (const chatId in archive.chats) {
-            await iterateCursor(messageStore, 'chatId', IDBKeyRange.only(parseInt(chatId, 10)), (message) => { // Parse chatId to number
+            await iterateCursor(messageStore, 'chatId', IDBKeyRange.only(parseInt(chatId, 10)), (message) => {
                 archive.chats[chatId].messages.push(message);
+                this.extractImageHashes(message).forEach(h => usedHashes.add(h));
+            });
+        }
+
+        // 3. Export only used blobs
+        if (blobStore && usedHashes.size > 0) {
+            await iterateCursor(blobStore, null, null, (blob) => {
+                if (usedHashes.has(blob.hash)) {
+                    archive.blobs[blob.hash] = blob.data;
+                }
             });
         }
     
@@ -911,9 +1379,10 @@ export class ChatStorage {
             if (!archive?.chats) throw new Error("Invalid archive format");
     
             const db = await this.getDB();
-            const needsMigration = archive.schemaVersion < 3; // NEW: Version check
+            const needsV3Migration = archive.schemaVersion < 3;
+            const hasBlobs = archive.blobs && Object.keys(archive.blobs).length > 0;
+            const needsBlobConversion = archive.schemaVersion < 5 && !hasBlobs;
             
-            // Fingerprint check outside transaction to avoid version contention
             const existingChats = await this.getChatMetadata(Infinity);
             const existingIdsByFingerprint = new Map(
                 existingChats.map(c => [`${c.title}::${c.timestamp}`, c.chatId])
@@ -923,7 +1392,7 @@ export class ChatStorage {
             const chatQueue = [];
 
             Object.values(archive.chats).forEach(rawChat => {
-                const chat = needsMigration ? this.migrateImportedChat(rawChat) : rawChat;
+                const chat = needsV3Migration ? this.migrateImportedChat(rawChat) : rawChat;
                 const fingerprint = `${chat.title}::${chat.timestamp}`;
                 const existingId = existingIdsByFingerprint.get(fingerprint);
 
@@ -931,16 +1400,33 @@ export class ChatStorage {
                     if (chat.chatId !== undefined && chat.chatId !== null) {
                         idRemap.set(chat.chatId, existingId);
                     }
-                    return; // skip duplicates
+                    return;
                 }
 
                 chatQueue.push(chat);
             });
 
-            const tx = db.transaction(['chatMeta', 'messages', 'mediaIndex'], 'readwrite');
+            const tx = db.transaction(['chatMeta', 'messages', 'mediaIndex', 'blobs'], 'readwrite');
             const metaStore = tx.objectStore('chatMeta');
             const messageStore = tx.objectStore('messages');
             const mediaStore = tx.objectStore('mediaIndex');
+            const blobStore = tx.objectStore('blobs');
+
+            // Import blobs from archive first (if present)
+            if (hasBlobs) {
+                for (const [hash, data] of Object.entries(archive.blobs)) {
+                    await new Promise((resolve) => {
+                        const getReq = blobStore.get(hash);
+                        getReq.onsuccess = () => {
+                            if (!getReq.result) {
+                                blobStore.put({ hash, data, chatIds: [] });
+                            }
+                            resolve();
+                        };
+                        getReq.onerror = () => resolve();
+                    });
+                }
+            }
 
             let importedCount = 0;
             const pendingLinkUpdates = [];
@@ -969,14 +1455,32 @@ export class ChatStorage {
                     idRemap.set(newChatId, newChatId);
                     pendingLinkUpdates.push({ targetId: newChatId, originalParentId: continued_from_chat_id });
 
-                    await Promise.all(messages.map(msg =>
-                        new Promise((resolve) => {
-                            messageStore.add({ ...msg, chatId: newChatId }).onsuccess = resolve;
-                        })
-                    ));
+                    // Process messages - convert inline images to hashes if needed
+                    for (const msg of messages) {
+                        let prepared;
+                        if (needsBlobConversion) {
+                            prepared = await this.prepareMessageForStorage(msg, newChatId, blobStore);
+                        } else if (hasBlobs) {
+                            // Update blob refs with new chatId
+                            const hashes = this.extractImageHashes(msg);
+                            for (const hash of hashes) {
+                                await this.addBlobRef(blobStore, hash, newChatId);
+                            }
+                            prepared = msg;
+                        } else {
+                            prepared = msg;
+                        }
+                        
+                        await new Promise((resolve) => {
+                            messageStore.add({ ...prepared, chatId: newChatId }).onsuccess = resolve;
+                        });
+                    }
 
-                    // Index media from imported messages
-                    const mediaPromises = this.indexImagesFromMessages(newChatId, messages, mediaStore);
+                    // Resolve images for media indexing (needs full data URLs)
+                    const resolvedMessages = await Promise.all(
+                        messages.map(m => this.resolveMessageImages({ ...m, chatId: newChatId }))
+                    );
+                    const mediaPromises = this.indexImagesFromMessages(newChatId, resolvedMessages, mediaStore);
                     await Promise.all(mediaPromises);
 
                     importedCount++;
@@ -1761,19 +2265,28 @@ export class ChatStorage {
 /* Expected object shapes for reference:
 {
     chatMeta: {
-        id: string,
+        chatId: autoincrement,
         timestamp: number,
         title: string,
+        renamed: boolean,
+        continued_from_chat_id: number | null
     },
     
+    blob: {
+        hash: string,           // SHA-256 hash of image data (also the key)
+        data: string,           // Full data URL (data:image/...)
+        chatIds: number[]       // Which chats reference this blob
+    },
+    
+    // In storage: images are hashes. At runtime: resolved to full data URLs.
     regularMessage: {
         chatId: autoincrement,
         messageId: autoincrement,
         timestamp: number,
         role: 'user' | 'assistant' | 'system',
-        contents: [ { type: 'text'|'thought'|'image', content: string, model?: string }[] ]  // Latest is current, previous are regenerations. 'image' type for AI-generated images (content is data URI)
-        images?: string[] // Optional, user-uploaded images only (stored as data URIs)
-        files?: {filename: string, content: string}[]   // Optional, user only (array of objects in case duplicate filenames)
+        contents: [ { type: 'text'|'thought'|'image', content: string, model?: string }[] ]  // 'image' content is hash in storage, data URL at runtime
+        images?: string[]       // User images: hashes in storage, data URLs at runtime
+        files?: {filename: string, content: string}[]
     },
     
     arenaMessage: {
