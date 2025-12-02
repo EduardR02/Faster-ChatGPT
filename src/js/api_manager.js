@@ -51,7 +51,7 @@ export class ApiManager {
         requestOptions.signal = abortController.signal;
 
         // Determine timeout duration (longer for "thinking" models)
-        const timeoutDuration = (streamWriter?.thinkingModelWithCounter || streamWriter?.isThinkingModel) ? 60000 : 15000;
+        const timeoutDuration = (streamWriter?.thinkingModelWithCounter || streamWriter?.isThinkingModel) ? 120000 : 30000;
         const timeoutId = setTimeout(() => {
             abortController.abort();
         }, timeoutDuration);
@@ -108,7 +108,7 @@ export class ApiManager {
         if (!abortController) abortController = new AbortController();
         requestOptions.signal = abortController.signal;
 
-        const timeoutDuration = 60000; // 60 seconds for image generation
+        const timeoutDuration = 120000; // 2 minutes for image generation
         const timeoutId = setTimeout(() => {
             abortController.abort();
         }, timeoutDuration);

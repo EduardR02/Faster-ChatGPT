@@ -229,6 +229,14 @@ class ChatUI {
         const img = document.createElement('img');
         let retried = false;
 
+        const addError = (message) => {
+            img.style.display = 'none';
+            const errorDiv = createElementWithClass('div', 'image-error');
+            errorDiv.textContent = message;
+            errorDiv.style.cssText = 'padding: 1em; color: #e06c75; background: #282c34; border: 1px solid #e06c75; border-radius: 4px; text-align: center;';
+            content.appendChild(errorDiv);
+        };
+
         // Validate that we have a proper image data URI or URL
         const isValidImage = imageBase64 && (
             imageBase64.startsWith('data:image/') ||
@@ -237,11 +245,7 @@ class ChatUI {
         );
 
         if (!isValidImage) {
-            // Show error message instead of broken image
-            const errorDiv = createElementWithClass('div', 'image-error');
-            errorDiv.textContent = 'Invalid image data';
-            errorDiv.style.cssText = 'padding: 1em; color: #e06c75; background: #282c34; border: 1px solid #e06c75; border-radius: 4px; text-align: center;';
-            content.appendChild(errorDiv);
+            addError('Invalid image data');
         } else {
             img.src = imageBase64;
 
@@ -263,11 +267,7 @@ class ChatUI {
                         // fall through to error UI
                     }
                 }
-                img.style.display = 'none';
-                const errorDiv = createElementWithClass('div', 'image-error');
-                errorDiv.textContent = 'Failed to load image';
-                errorDiv.style.cssText = 'padding: 1em; color: #e06c75; background: #282c34; border: 1px solid #e06c75; border-radius: 4px; text-align: center;';
-                content.appendChild(errorDiv);
+                addError('Failed to load image');
             };
 
             content.appendChild(img);

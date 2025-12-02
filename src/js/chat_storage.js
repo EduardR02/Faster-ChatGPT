@@ -29,60 +29,68 @@ export class ChatStorage {
         return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     }
 
+    async getBlobStore(blobStore = null, mode = 'readwrite') {
+        if (blobStore) {
+            return { store: blobStore, done: Promise.resolve() };
+        }
+
+        const db = await this.getDB();
+        const tx = db.transaction('blobs', mode);
+        return {
+            store: tx.objectStore('blobs'),
+            done: new Promise((resolve) => {
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => resolve();
+                tx.onabort = () => resolve();
+            })
+        };
+    }
+
     async storeBlob(blobStore, hash, data, chatId) {
-        return new Promise((resolve) => {
-            const getReq = blobStore.get(hash);
-            getReq.onsuccess = () => {
-                const existing = getReq.result;
-                if (existing) {
-                    if (!existing.chatIds.includes(chatId)) {
-                        existing.chatIds.push(chatId);
-                        blobStore.put(existing);
-                    }
-                    resolve();
-                } else {
-                    blobStore.put({ hash, data, chatIds: [chatId] });
-                    resolve();
+        const { store, done } = await this.getBlobStore(blobStore);
+        const getReq = store.get(hash);
+        getReq.onsuccess = () => {
+            const existing = getReq.result;
+            if (existing) {
+                if (!existing.chatIds.includes(chatId)) {
+                    existing.chatIds.push(chatId);
+                    store.put(existing);
                 }
-            };
-            getReq.onerror = () => resolve();
-        });
+            } else {
+                store.put({ hash, data, chatIds: [chatId] });
+            }
+        };
+        return done;
     }
 
     async addBlobRef(blobStore, hash, chatId) {
-        return new Promise((resolve) => {
-            const getReq = blobStore.get(hash);
-            getReq.onsuccess = () => {
-                const blob = getReq.result;
-                if (blob && !blob.chatIds.includes(chatId)) {
-                    blob.chatIds.push(chatId);
-                    blobStore.put(blob);
-                }
-                resolve();
-            };
-            getReq.onerror = () => resolve();
-        });
+        const { store, done } = await this.getBlobStore(blobStore);
+        const getReq = store.get(hash);
+        getReq.onsuccess = () => {
+            const blob = getReq.result;
+            if (blob && !blob.chatIds.includes(chatId)) {
+                blob.chatIds.push(chatId);
+                store.put(blob);
+            }
+        };
+        return done;
     }
 
     async removeBlobRef(blobStore, hash, chatId) {
-        return new Promise((resolve) => {
-            const getReq = blobStore.get(hash);
-            getReq.onsuccess = () => {
-                const blob = getReq.result;
-                if (!blob) {
-                    resolve();
-                    return;
-                }
+        const { store, done } = await this.getBlobStore(blobStore);
+        const getReq = store.get(hash);
+        getReq.onsuccess = () => {
+            const blob = getReq.result;
+            if (blob) {
                 blob.chatIds = blob.chatIds.filter(id => id !== chatId);
                 if (blob.chatIds.length === 0) {
-                    blobStore.delete(hash);
+                    store.delete(hash);
                 } else {
-                    blobStore.put(blob);
+                    store.put(blob);
                 }
-                resolve();
-            };
-            getReq.onerror = () => resolve();
-        });
+            }
+        };
+        return done;
     }
 
     async getBlob(hash) {
@@ -540,14 +548,12 @@ export class ChatStorage {
         let processed = 0;
 
         while (true) {
-            const tx = db.transaction(['messages', 'blobs'], 'readwrite');
-            const messageStore = tx.objectStore('messages');
-            const blobStore = tx.objectStore('blobs');
-
-            // Get a batch of messages with inline images
+            // Get a batch of messages with inline images (readonly tx to keep it short-lived)
             const batch = await new Promise((resolve) => {
                 const msgs = [];
-                const cursor = messageStore.openCursor();
+                const tx = db.transaction('messages', 'readonly');
+                const store = tx.objectStore('messages');
+                const cursor = store.openCursor();
                 cursor.onsuccess = (e) => {
                     const c = e.target.result;
                     if (!c || msgs.length >= batchSize) {
@@ -564,18 +570,21 @@ export class ChatStorage {
 
             if (batch.length === 0) break;
 
-            // Process each message
+            const preparedBatch = [];
             for (const msg of batch) {
-                const prepared = await this.prepareMessageForStorage(msg, msg.chatId, blobStore);
-                await new Promise((resolve) => {
-                    messageStore.put(prepared).onsuccess = () => resolve();
-                });
-                processed++;
+                preparedBatch.push(await this.prepareMessageForStorage(msg, msg.chatId));
             }
 
-            await new Promise((resolve, reject) => {
-                tx.oncomplete = () => resolve();
-                tx.onerror = () => reject(tx.error);
+            const writeTx = db.transaction('messages', 'readwrite');
+            const messageStore = writeTx.objectStore('messages');
+            preparedBatch.forEach((prepared) => {
+                messageStore.put(prepared);
+                processed++;
+            });
+            await new Promise((resolve) => {
+                writeTx.oncomplete = () => resolve();
+                writeTx.onerror = () => resolve();
+                writeTx.onabort = () => resolve();
             });
         }
 
@@ -741,109 +750,120 @@ export class ChatStorage {
 
     async createChatWithMessages(title, messages, bonus_options = {}) {
         const db = await this.getDB();
-        const tx = db.transaction(['chatMeta', 'messages', 'mediaIndex', 'searchDocs', 'blobs'], 'readwrite');
-        const metaStore = tx.objectStore('chatMeta');
-        const messageStore = tx.objectStore('messages');
-        const mediaStore = tx.objectStore('mediaIndex');
-        const searchDocsStore = tx.objectStore('searchDocs');
-        const blobStore = tx.objectStore('blobs');
+        const chatMeta = {
+            title,
+            timestamp: Date.now(),
+            renamed: bonus_options.renamed || false,
+            continued_from_chat_id: bonus_options.continued_from_chat_id || null
+        };
 
-        return new Promise((resolve, reject) => {
-            const chatMeta = {
-                title,
-                timestamp: Date.now(),
-                renamed: bonus_options.renamed || false,
-                continued_from_chat_id: bonus_options.continued_from_chat_id || null
-            };
-
+        const chatId = await new Promise((resolve, reject) => {
+            const tx = db.transaction('chatMeta', 'readwrite');
+            const metaStore = tx.objectStore('chatMeta');
             const metaRequest = metaStore.add(chatMeta);
-
-            metaRequest.onsuccess = async () => {
-                try {
-                const chatId = metaRequest.result;
-                    
-                    const preparedMessages = await Promise.all(
-                        messages.map(msg => this.prepareMessageForStorage(msg, chatId, blobStore))
-                    );
-
-                    await Promise.all(preparedMessages.map((message, index) =>
-                        new Promise((res, rej) => {
-                            const req = messageStore.add({
-                        chatId,
-                        messageId: index,
-                        timestamp: Date.now(),
-                        ...message
-                            });
-                            req.onsuccess = () => res();
-                            req.onerror = () => rej(req.error);
-                    })
-                    ));
-
-                        const mediaPromises = this.indexImagesFromMessages(chatId, messages, mediaStore);
-                    await Promise.all(mediaPromises);
-
-                        const searchDoc = ChatStorage.buildSearchDocument({
-                            chatId,
-                            title: chatMeta.title,
-                            timestamp: chatMeta.timestamp,
-                            messages
-                        });
-                    await new Promise((res, rej) => {
-                        const putReq = searchDocsStore.put(searchDoc);
-                        putReq.onsuccess = () => res();
-                        putReq.onerror = () => rej(putReq.error);
-                    });
-
-                        chrome.runtime.sendMessage({
-                            type: 'new_chat_saved',
-                        chat: { chatId, ...chatMeta },
-                            searchDoc
-                        });
-
-                    resolve({ chatId, ...chatMeta });
-                } catch (err) {
-                    reject(err);
-                }
-            };
-
+            metaRequest.onsuccess = () => resolve(metaRequest.result);
             metaRequest.onerror = () => reject(metaRequest.error);
         });
+
+        const preparedMessages = await Promise.all(
+            messages.map(msg => this.prepareMessageForStorage(msg, chatId))
+        );
+
+        const messagesTx = db.transaction('messages', 'readwrite');
+        const messageStore = messagesTx.objectStore('messages');
+        const messagePromises = preparedMessages.map((message, index) => new Promise((res, rej) => {
+            const req = messageStore.add({
+                chatId,
+                messageId: index,
+                timestamp: Date.now(),
+                ...message
+            });
+            req.onsuccess = () => res();
+            req.onerror = () => rej(req.error);
+        }));
+
+        await Promise.all(messagePromises);
+        await new Promise((resolve, reject) => {
+            messagesTx.oncomplete = () => resolve();
+            messagesTx.onerror = () => reject(messagesTx.error);
+            messagesTx.onabort = () => reject(messagesTx.error);
+        });
+
+        const mediaTx = db.transaction('mediaIndex', 'readwrite');
+        const mediaStore = mediaTx.objectStore('mediaIndex');
+        const mediaPromises = this.indexImagesFromMessages(chatId, messages, mediaStore);
+        if (mediaPromises.length) {
+            await Promise.all(mediaPromises);
+        }
+        await new Promise((resolve) => {
+            mediaTx.oncomplete = () => resolve();
+            mediaTx.onerror = () => resolve();
+            mediaTx.onabort = () => resolve();
+        });
+
+        const searchDoc = ChatStorage.buildSearchDocument({
+            chatId,
+            title: chatMeta.title,
+            timestamp: chatMeta.timestamp,
+            messages
+        });
+        await new Promise((res, rej) => {
+            const tx = db.transaction('searchDocs', 'readwrite');
+            const searchDocsStore = tx.objectStore('searchDocs');
+            const putReq = searchDocsStore.put(searchDoc);
+            putReq.onsuccess = () => res();
+            putReq.onerror = () => rej(putReq.error);
+        });
+
+        chrome.runtime.sendMessage({
+            type: 'new_chat_saved',
+            chat: { chatId, ...chatMeta },
+            searchDoc
+        });
+
+        return { chatId, ...chatMeta };
     }
 
     async addMessages(chatId, messages, startMessageIdIncrementAt) {
-        const timestamp = Date.now();
         const db = await this.getDB();
+        const timestamp = Date.now();
 
-        const results = await new Promise(async (resolve, reject) => {
-            try {
-                const tx = db.transaction(['messages', 'mediaIndex', 'blobs'], 'readwrite');
-            const store = tx.objectStore('messages');
-            const mediaStore = tx.objectStore('mediaIndex');
-                const blobStore = tx.objectStore('blobs');
+        const preparedMessages = await Promise.all(
+            messages.map(msg => this.prepareMessageForStorage(msg, chatId))
+        );
 
-                const preparedMessages = await Promise.all(
-                    messages.map(msg => this.prepareMessageForStorage(msg, chatId, blobStore))
-                );
+        const tx = db.transaction('messages', 'readwrite');
+        const store = tx.objectStore('messages');
 
-                await Promise.all(preparedMessages.map((message, index) =>
-                    new Promise((res, rej) => {
-                    const request = store.add({
-                        chatId,
-                        messageId: startMessageIdIncrementAt + index,
-                        timestamp,
-                        ...message
-                    });
-                        request.onsuccess = () => res(request.result);
-                        request.onerror = () => rej(request.error);
-                })
-                ));
+        const results = await Promise.all(preparedMessages.map((message, index) =>
+            new Promise((res, rej) => {
+                const request = store.add({
+                    chatId,
+                    messageId: startMessageIdIncrementAt + index,
+                    timestamp,
+                    ...message
+                });
+                request.onsuccess = () => res(request.result);
+                request.onerror = () => rej(request.error);
+            })
+        ));
 
-                const mediaPromises = this.indexImagesFromMessages(chatId, messages, mediaStore, startMessageIdIncrementAt);
-                await Promise.all(mediaPromises);
-                resolve();
-            } catch (err) {
-                reject(err);
-            }
+        await new Promise((resolve, reject) => {
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error);
+        });
+
+        const mediaTx = db.transaction('mediaIndex', 'readwrite');
+        const mediaStore = mediaTx.objectStore('mediaIndex');
+        const mediaPromises = this.indexImagesFromMessages(chatId, messages, mediaStore, startMessageIdIncrementAt);
+        if (mediaPromises.length) {
+            await Promise.all(mediaPromises);
+        }
+        await new Promise((resolve) => {
+            mediaTx.oncomplete = () => resolve();
+            mediaTx.onerror = () => resolve();
+            mediaTx.onabort = () => resolve();
         });
 
         await this.updateChatOption(chatId, { timestamp });
@@ -877,33 +897,29 @@ export class ChatStorage {
         const timestamp = Date.now();
         const db = await this.getDB();
 
-        const result = await new Promise(async (resolve, reject) => {
-            try {
-                const tx = db.transaction(['messages', 'mediaIndex', 'blobs'], 'readwrite');
-            const store = tx.objectStore('messages');
-            const mediaStore = tx.objectStore('mediaIndex');
-                const blobStore = tx.objectStore('blobs');
+        const prepared = await this.prepareMessageForStorage(message, chatId);
 
-                const prepared = await this.prepareMessageForStorage(message, chatId, blobStore);
+        const tx = db.transaction('messages', 'readwrite');
+        const store = tx.objectStore('messages');
 
+        const result = await new Promise((resolve, reject) => {
             const request = store.put({
                 chatId,
                 messageId: messageId,
                 timestamp,
-                    ...prepared
+                ...prepared
             });
-            
-            request.onsuccess = () => {
-                this.replaceMediaEntriesForMessage(mediaStore, chatId, messageId, message)
-                    .then(() => resolve(request.result))
-                        .catch(() => resolve(request.result));
-            };
-            
+            request.onsuccess = () => resolve(request.result);
             request.onerror = () => reject(request.error);
-            } catch (err) {
-                reject(err);
-            }
         });
+
+        await new Promise((resolve, reject) => {
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+            tx.onabort = () => reject(tx.error);
+        });
+
+        await this.replaceMediaEntriesForMessage(null, chatId, messageId, message).catch(() => {});
 
         await this.updateChatOption(chatId, { timestamp });
         await this.refreshSearchDoc(chatId);
@@ -919,6 +935,13 @@ export class ChatStorage {
 
     // Helper to replace media entries for a message (delete old, add new)
     async replaceMediaEntriesForMessage(mediaStore, chatId, messageId, message) {
+        let tx = null;
+        if (!mediaStore) {
+            const db = await this.getDB();
+            tx = db.transaction('mediaIndex', 'readwrite');
+            mediaStore = tx.objectStore('mediaIndex');
+        }
+
         // Find all existing media entries for this message
         const entriesToDelete = await new Promise((resolve) => {
             const entries = [];
@@ -949,7 +972,17 @@ export class ChatStorage {
 
         // Add new entries
         const mediaPromises = this.indexImagesFromMessages(chatId, [message], mediaStore, messageId);
-        await Promise.all(mediaPromises);
+        if (mediaPromises.length) {
+            await Promise.all(mediaPromises);
+        }
+
+        if (tx) {
+            await new Promise((resolve) => {
+                tx.oncomplete = () => resolve();
+                tx.onerror = () => resolve();
+                tx.onabort = () => resolve();
+            });
+        }
     }
 
     async indexAllMediaFromExistingMessages(batchSize = 25) {
@@ -1285,37 +1318,34 @@ export class ChatStorage {
 
     async deleteChat(chatId) {
         const db = await this.getDB();
-        const tx = db.transaction(['messages', 'chatMeta', 'mediaIndex', 'searchDocs', 'blobs'], 'readwrite');
-
-        const messageStore = tx.objectStore('messages');
-        const metaStore = tx.objectStore('chatMeta');
-        const mediaStore = tx.objectStore('mediaIndex');
-        const searchDocsStore = tx.objectStore('searchDocs');
-        const blobStore = tx.objectStore('blobs');
-
-        const messageIndex = messageStore.index('chatId');
-        const mediaIndex = mediaStore.index('chatId');
 
         // Collect hashes AND delete messages in one pass
         const imageHashes = new Set();
         await new Promise((resolve) => {
-                const request = messageIndex.openCursor(IDBKeyRange.only(chatId));
-                request.onsuccess = (event) => {
-                    const cursor = event.target.result;
-                    if (cursor) {
+            const tx = db.transaction('messages', 'readwrite');
+            const messageStore = tx.objectStore('messages');
+            const messageIndex = messageStore.index('chatId');
+            const request = messageIndex.openCursor(IDBKeyRange.only(chatId));
+            request.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (cursor) {
                     this.extractImageHashes(cursor.value).forEach(h => imageHashes.add(h));
-                        cursor.delete();
-                        cursor.continue();
-                    } else {
-                        resolve();
-                    }
-                };
+                    cursor.delete();
+                    cursor.continue();
+                } else {
+                    resolve();
+                }
+            };
             request.onerror = () => resolve();
+            tx.onabort = () => resolve();
         });
 
-        // Delete media entries, metadata, search doc in parallel
+        // Delete media entries, metadata, search doc in parallel (separate transactions to avoid long-lived tx)
         await Promise.all([
             new Promise((resolve) => {
+                const tx = db.transaction('mediaIndex', 'readwrite');
+                const mediaStore = tx.objectStore('mediaIndex');
+                const mediaIndex = mediaStore.index('chatId');
                 const request = mediaIndex.openCursor(IDBKeyRange.only(chatId));
                 request.onsuccess = (event) => {
                     const cursor = event.target.result;
@@ -1326,17 +1356,29 @@ export class ChatStorage {
                         resolve();
                     }
                 };
+                request.onerror = () => resolve();
+                tx.onabort = () => resolve();
             }),
             new Promise((resolve) => {
-                metaStore.delete(chatId).onsuccess = () => resolve();
+                const tx = db.transaction('chatMeta', 'readwrite');
+                const metaStore = tx.objectStore('chatMeta');
+                const req = metaStore.delete(chatId);
+                req.onsuccess = () => resolve();
+                req.onerror = () => resolve();
+                tx.onabort = () => resolve();
             }),
             new Promise((resolve) => {
-                searchDocsStore.delete(chatId).onsuccess = () => resolve();
+                const tx = db.transaction('searchDocs', 'readwrite');
+                const searchDocsStore = tx.objectStore('searchDocs');
+                const req = searchDocsStore.delete(chatId);
+                req.onsuccess = () => resolve();
+                req.onerror = () => resolve();
+                tx.onabort = () => resolve();
             })
         ]);
 
         // Remove chatId from blob references, delete orphaned blobs
-        await Promise.all([...imageHashes].map(hash => this.removeBlobRef(blobStore, hash, chatId)));
+        await Promise.all([...imageHashes].map(hash => this.removeBlobRef(null, hash, chatId)));
     }
 
     // FIXED: getChatCount uses 'chatMeta'
