@@ -215,28 +215,15 @@ export class ApiManager {
 
         // Update token counter if usage info is available
         if (data.usageMetadata) {
+            const thoughtsTokens = data.usageMetadata.thoughtsTokenCount || 0;
             tokenCounter.update(
                 data.usageMetadata.promptTokenCount || 0,
-                data.usageMetadata.candidatesTokenCount || 0
+                (data.usageMetadata.candidatesTokenCount || 0) + thoughtsTokens
             );
         }
 
         // Process all parts (text and/or images)
-        const parts = candidate.content?.parts || [];
-        const messageParts = [];
-
-        for (const part of parts) {
-            if (part.text) {
-                messageParts.push({ type: 'text', content: part.text });
-            } else if (part.inlineData?.data) {
-                const mimeType = part.inlineData.mimeType || 'image/png';
-                const base64 = this.sanitizeGeminiImage(part.inlineData.data, mimeType);
-                const imageDataUri = `data:${mimeType};base64,${base64}`;
-                const imagePart = { type: 'image', content: imageDataUri };
-                if (part.thoughtSignature) imagePart.thoughtSignature = part.thoughtSignature;
-                messageParts.push(imagePart);
-            }
-        }
+        const messageParts = this.mapGeminiContentParts(candidate.content?.parts);
 
         if (messageParts.length === 0) {
             throw new Error("No content in response");
@@ -247,6 +234,28 @@ export class ApiManager {
 
     sanitizeGeminiImage(rawData, mimeType) {
         return sanitizeBase64Image(rawData || '', mimeType || '');
+    }
+
+    mapGeminiContentParts(parts) {
+        const messageParts = [];
+        for (const part of parts || []) {
+            if (part.text !== undefined) {
+                const entry = {
+                    type: part.thought ? 'thought' : 'text',
+                    content: part.text || ''
+                };
+                if (part.thoughtSignature) entry.thoughtSignature = part.thoughtSignature;
+                messageParts.push(entry);
+            } else if (part.inlineData?.data) {
+                const mimeType = part.inlineData.mimeType || 'image/png';
+                const base64 = this.sanitizeGeminiImage(part.inlineData.data, mimeType);
+                const imageDataUri = `data:${mimeType};base64,${base64}`;
+                const imagePart = { type: 'image', content: imageDataUri };
+                if (part.thoughtSignature) imagePart.thoughtSignature = part.thoughtSignature;
+                messageParts.push(imagePart);
+            }
+        }
+        return messageParts;
     }
 
     processFiles(messages) {
@@ -353,8 +362,9 @@ export class ApiManager {
 
     // Helper to extract text content from parts array
     extractTextContent(msg) {
+        if (!msg?.parts) return '';
         return msg.parts
-            .filter(part => part.type === 'text' || part.type === 'thought')
+            .filter(part => part.type === 'text' && part.content !== undefined && part.content !== null)
             .map(part => part.content)
             .join('\n');
     }
@@ -362,26 +372,28 @@ export class ApiManager {
     formatMessagesForGemini(messages) {
         return messages.map(msg => {
             const parts = [];
-            
-            // Process all parts (text, thought, image with optional thoughtSignature)
-            msg.parts.forEach(part => {
-                if (part.type === 'text' || part.type === 'thought') {
-                    if (part.content) parts.push({ text: part.content });
-                } else if (part.type === 'image') {
-                    if (part.content) {
-                        const imagePart = {
-                            inline_data: {
-                                mime_type: this.getBase64MediaType(part.content),
-                                data: this.simpleBase64Splitter(part.content)
-                            }
-                        };
-                        if (part.thoughtSignature) imagePart.thoughtSignature = part.thoughtSignature;
-                        parts.push(imagePart);
-                    }
+
+            (msg.parts || []).forEach(part => {
+                if (part.type === 'image' && part.content) {
+                    const imagePart = {
+                        inline_data: {
+                            mime_type: this.getBase64MediaType(part.content),
+                            data: this.simpleBase64Splitter(part.content)
+                        }
+                    };
+                    if (part.thoughtSignature) imagePart.thoughtSignature = part.thoughtSignature;
+                    parts.push(imagePart);
+                    return;
+                }
+
+                // Gemini expects text parts; include a signature if present even if content is empty
+                if (part.type === 'text' || part.thoughtSignature) {
+                    const entry = { text: part.content ?? '' };
+                    if (part.thoughtSignature) entry.thoughtSignature = part.thoughtSignature;
+                    parts.push(entry);
                 }
             });
-            
-            // User-uploaded images (separate field)
+
             if (msg.images) {
                 msg.images.forEach(img => {
                     if (img) {
@@ -394,15 +406,14 @@ export class ApiManager {
                     }
                 });
             }
-            
-            // Safety check: ensure at least one part exists
+
             if (parts.length === 0) {
                 parts.push({ text: '' });
             }
-            
+
             return {
                 role: msg.role === RoleEnum.assistant ? "model" : "user",
-                parts: parts
+                parts
             };
         });
     }
@@ -800,15 +811,13 @@ export class ApiManager {
     }
     
     handleGeminiNonStreamResponse(data, tokenCounter) {
-        tokenCounter.update(data.usageMetadata.promptTokenCount, data.usageMetadata.candidatesTokenCount);
-        
-        let thoughts = '', text = '';
-        for (const part of data.candidates[0].content.parts) {
-            if (part.thought) thoughts = part.text || '';
-            else if (part.text) text = part.text;
-        }
-        
-        return this.returnMessage([text], thoughts ? [thoughts] : []);
+        const usage = data.usageMetadata || {};
+        const thoughtsTokens = usage.thoughtsTokenCount || 0;
+        tokenCounter.update(usage.promptTokenCount, (usage.candidatesTokenCount || 0) + thoughtsTokens);
+
+        const candidate = data.candidates?.[0];
+        const messageParts = this.mapGeminiContentParts(candidate?.content?.parts);
+        return messageParts.length ? messageParts : this.returnMessage(['']);
     }
 
     handleDeepseekNonStreamResponse(data, tokenCounter) {
@@ -1177,13 +1186,20 @@ export class ApiManager {
 
     handleGeminiStreamData(parsed, tokenCounter, streamWriter) {
         parsed.candidates?.[0]?.content.parts?.forEach(contentDict => {
-            if (contentDict.text) {
+            if (contentDict.text !== undefined) {
                 streamWriter.processContent(contentDict.text, !!contentDict.thought);
+            }
+            if (contentDict.thoughtSignature && streamWriter?.parts?.length) {
+                streamWriter.parts.at(-1).thoughtSignature = contentDict.thoughtSignature;
             }
         });
 
         if (parsed.usageMetadata && parsed.usageMetadata.promptTokenCount) {
-            tokenCounter.update(parsed.usageMetadata.promptTokenCount, parsed.usageMetadata.candidatesTokenCount);
+            const thoughtsTokens = parsed.usageMetadata.thoughtsTokenCount || 0;
+            tokenCounter.update(
+                parsed.usageMetadata.promptTokenCount,
+                (parsed.usageMetadata.candidatesTokenCount || 0) + thoughtsTokens
+            );
         }
     }
 

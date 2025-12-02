@@ -94,6 +94,9 @@ export class SidepanelController {
                         if (msg.thoughtSignature) part.thoughtSignature = msg.thoughtSignature;
                     } else {
                         streamWriter.processContent(msg.content, msg.type === 'thought');
+                        if (msg.thoughtSignature) {
+                            streamWriter.parts.at(-1).thoughtSignature = msg.thoughtSignature;
+                        }
                     }
                 });
             }
