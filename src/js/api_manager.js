@@ -262,14 +262,28 @@ export class ApiManager {
         return messages.map(({ files, ...rest }) => {
             if (!files?.length) return rest;
             
-            // Append files to the last text part
-            const parts = [...rest.parts];
-            const lastTextPart = parts.findLast(p => p.type === 'text' || p.type === 'thought');
-            if (lastTextPart) {
-                lastTextPart.content += `\n\nfiles:\n${files.map(f => 
-                    `${f.name}:\n<|file_start|>${f.content}<|file_end|>`
-                ).join("\n")}`;
+            // Append files to the last text part (never attach to thoughts)
+            const parts = Array.isArray(rest.parts) ? [...rest.parts] : [];
+            const filesBlock = `files:\n${files.map(f =>
+                `${f.name}:\n<|file_start|>${f.content ?? ''}<|file_end|>`
+            ).join("\n")}`;
+
+            let targetIndex = -1;
+            for (let i = parts.length - 1; i >= 0; i--) {
+                if (parts[i]?.type === 'text') {
+                    targetIndex = i;
+                    break;
+                }
             }
+
+            if (targetIndex >= 0) {
+                const current = parts[targetIndex]?.content || '';
+                const separator = current ? "\n\n" : "";
+                parts[targetIndex] = { ...parts[targetIndex], content: `${current}${separator}${filesBlock}` };
+            } else {
+                parts.push({ type: 'text', content: filesBlock });
+            }
+
             return { ...rest, parts };
         });
     }
