@@ -1392,6 +1392,7 @@ class ChatSearch {
         this.loadingPlaceholder = 'Loading search...';
         this.initPromise = null;
         this.initializing = false;
+        this.readyResolvers = [];
         this.init();
     }
 
@@ -1422,13 +1423,17 @@ class ChatSearch {
         this.initializing = true;
         if (input) input.placeholder = this.loadingPlaceholder;
 
+        const onReady = this.waitUntilReady().then(() => {
+            if (input) input.placeholder = previousPlaceholder;
+            const pendingQuery = input?.value ?? '';
+            if (pendingQuery.trim() && this.miniSearch) {
+                this.handleSearch(pendingQuery);
+            }
+        });
+
         this.initPromise = (async () => {
             try {
                 await this.initSearch();
-                const pendingQuery = input?.value ?? '';
-                if (pendingQuery.trim() && this.miniSearch) {
-                    this.handleSearch(pendingQuery);
-                }
             } catch (error) {
                 console.error('Search initialization failed:', error);
             } finally {
@@ -1437,13 +1442,27 @@ class ChatSearch {
             }
         })();
 
-        return this.initPromise;
+        return Promise.race([this.initPromise, onReady]);
+    }
+
+    signalReady() {
+        if (this.initialised) return;
+        this.initialised = true;
+        if (this.readyResolvers.length) {
+            this.readyResolvers.forEach(resolver => resolver());
+            this.readyResolvers = [];
+        }
+    }
+
+    waitUntilReady() {
+        if (this.initialised) return Promise.resolve();
+        return new Promise(resolve => this.readyResolvers.push(resolve));
     }
 
     async initSearch() {
         if (typeof window.MiniSearch === 'undefined') {
             console.warn('MiniSearch library not loaded, search will be disabled');
-            this.initialised = true;
+            this.signalReady();
             await this.processPendingOperations();
             return;
         }
@@ -1499,10 +1518,20 @@ class ChatSearch {
         try {
             if (!successfullyLoadedFromCache || !this.miniSearch) {
                 const rebuildStart = now();
-                await this.rebuildIndex(null, initStart);
+                await this.rebuildIndex(null, initStart, { persist: false });
                 const rebuildDuration = formatDuration(rebuildStart);
                 this.indexStale = false;
-                console.log(`Search index rebuilt (load=${fetchDuration}, hydrate=${hydrateDuration}, rebuild=${rebuildDuration})`);
+                this.signalReady();
+                await this.processPendingOperations();
+                const persistStart = now();
+                void Promise.all([
+                    chatStorage.putSearchDocs(this.allChats),
+                    this.persistIndex()
+                ]).then(() => {
+                    console.log(`Search index rebuilt (load=${fetchDuration}, hydrate=${hydrateDuration}, rebuild=${rebuildDuration}, persist=${formatDuration(persistStart)})`);
+                }).catch((error) => {
+                    console.error('Search persistence after rebuild failed:', error);
+                });
                 return;
             }
 
@@ -1510,17 +1539,22 @@ class ChatSearch {
             const { changed, summary } = await this.syncIndexWithDocs(indexMetadata);
             const syncDuration = formatDuration(syncStart);
 
+            this.signalReady();
+            await this.processPendingOperations();
+
             if (changed) {
                 const persistStart = now();
-                await this.persistIndex();
-                const persistDuration = formatDuration(persistStart);
-                console.log(`Search index synchronised (${summary}) load=${fetchDuration}, hydrate=${hydrateDuration}, sync=${syncDuration}, persist=${persistDuration}`);
+                void this.persistIndex().then(() => {
+                    console.log(`Search index synchronised (${summary}) load=${fetchDuration}, hydrate=${hydrateDuration}, sync=${syncDuration}, persist=${formatDuration(persistStart)}`);
+                }).catch(error => {
+                    console.error('Search index persist failed after sync:', error);
+                });
             } else {
                 console.log(`Search loaded from storage with ${snapshotCount} chats (no changes) load=${fetchDuration}, hydrate=${hydrateDuration}, sync=${syncDuration}`);
             }
-        } finally {
-            this.initialised = true;
-            await this.processPendingOperations();
+        } catch (error) {
+            console.error('Search initialization failed:', error);
+            throw error;
         }
     }
 
@@ -1901,7 +1935,7 @@ class ChatSearch {
         return storedDocsSnapshot;
     }
 
-    async rebuildIndex(metadata = null, startOverride = null) {
+    async rebuildIndex(metadata = null, startOverride = null, { persist = true } = {}) {
         const buildStart = startOverride ?? now();
         const metaList = metadata || await chatStorage.getChatMetadata(Infinity, 0);
 
@@ -1923,8 +1957,10 @@ class ChatSearch {
         this.miniSearch = this.createMiniSearch();
         this.miniSearch.addAll(this.allChats);
 
-        await chatStorage.putSearchDocs(this.allChats);
-        await this.persistIndex();
+        if (persist) {
+            await chatStorage.putSearchDocs(this.allChats);
+            await this.persistIndex();
+        }
 
         console.log(`Search built with ${this.allChats.length} chats in ${formatDuration(buildStart)}`);
     }
