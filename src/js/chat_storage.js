@@ -93,25 +93,16 @@ export class ChatStorage {
         return done;
     }
 
-    async getBlob(hash) {
-        const db = await this.getDB();
-        const tx = db.transaction('blobs', 'readonly');
-        const store = tx.objectStore('blobs');
-        return new Promise((resolve) => {
-            const req = store.get(hash);
-            req.onsuccess = () => resolve(req.result?.data ?? null);
-            req.onerror = () => resolve(null);
-        });
-    }
+    async getBlobs(hashes) {
+        const list = Array.isArray(hashes) ? hashes : [hashes];
+        if (!list.length) return new Map();
 
-    async getBlobsBatch(hashes) {
-        if (!hashes.length) return new Map();
         const db = await this.getDB();
         const tx = db.transaction('blobs', 'readonly');
         const store = tx.objectStore('blobs');
         const results = new Map();
 
-        await Promise.all(hashes.map(hash => new Promise((resolve) => {
+        await Promise.all(list.map(hash => new Promise((resolve) => {
             const req = store.get(hash);
             req.onsuccess = () => {
                 results.set(hash, req.result?.data ?? null);
@@ -124,6 +115,15 @@ export class ChatStorage {
         })));
 
         return results;
+    }
+
+    async getBlob(hash) {
+        const map = await this.getBlobs(hash);
+        return map.get(hash) ?? null;
+    }
+
+    async getBlobsBatch(hashes) {
+        return this.getBlobs(hashes);
     }
 
     async overwriteBlobData(hash, dataUrl) {
@@ -217,13 +217,21 @@ export class ChatStorage {
 
     async prepareMessageForStorage(message, chatId, blobStore) {
         const prepared = { ...message };
+        const hashCache = new Map();
+        const toHash = async (dataUrl) => {
+            if (!ChatStorage.isDataUrl(dataUrl)) return { ref: dataUrl, hashed: false };
+            if (hashCache.has(dataUrl)) return hashCache.get(dataUrl);
+            const hash = await ChatStorage.computeHash(dataUrl);
+            await this.storeBlob(blobStore, hash, dataUrl, chatId);
+            const entry = { ref: hash, hashed: true };
+            hashCache.set(dataUrl, entry);
+            return entry;
+        };
 
         if (prepared.images?.length) {
             prepared.images = await Promise.all(prepared.images.map(async (img) => {
-                if (!ChatStorage.isDataUrl(img)) return img;
-                const hash = await ChatStorage.computeHash(img);
-                await this.storeBlob(blobStore, hash, img, chatId);
-                return hash;
+                const { ref } = await toHash(img);
+                return ref;
             }));
         }
 
@@ -231,10 +239,9 @@ export class ChatStorage {
             prepared.contents = await Promise.all(prepared.contents.map(async (group) => {
                 if (!Array.isArray(group)) return group;
                 return Promise.all(group.map(async (part) => {
-                    if (part?.type === 'image' && ChatStorage.isDataUrl(part.content)) {
-                        const hash = await ChatStorage.computeHash(part.content);
-                        await this.storeBlob(blobStore, hash, part.content, chatId);
-                        return { ...part, content: hash };
+                    if (part?.type === 'image') {
+                        const { ref, hashed } = await toHash(part.content);
+                        return hashed ? { ...part, content: ref } : part;
                     }
                     return part;
                 }));
@@ -251,10 +258,9 @@ export class ChatStorage {
                     messages: await Promise.all(modelResp.messages.map(async (group) => {
                         if (!Array.isArray(group)) return group;
                         return Promise.all(group.map(async (part) => {
-                            if (part?.type === 'image' && ChatStorage.isDataUrl(part.content)) {
-                                const hash = await ChatStorage.computeHash(part.content);
-                                await this.storeBlob(blobStore, hash, part.content, chatId);
-                                return { ...part, content: hash };
+                            if (part?.type === 'image') {
+                                const { ref, hashed } = await toHash(part.content);
+                                return hashed ? { ...part, content: ref } : part;
                             }
                             return part;
                         }));
@@ -319,7 +325,7 @@ export class ChatStorage {
         if (!message) return message;
         const hashes = [...new Set(this.extractImageHashes(message))];
         if (!hashes.length) return message;
-        const blobData = await this.getBlobsBatch(hashes);
+        const blobData = await this.getBlobs(hashes);
         return this.resolveMessageImagesWithLookup(message, blobData);
     }
 

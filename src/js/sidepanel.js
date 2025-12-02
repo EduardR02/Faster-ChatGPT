@@ -19,7 +19,8 @@ class SidepanelApp {
         this.chatStorage = new ChatStorage();
 
         this.chatUI = new SidepanelChatUI({
-            stateManager: this.stateManager
+            stateManager: this.stateManager,
+            continueFunc: (index, secondaryIndex, modelChoice = null) => this.continueFromCurrent(index, secondaryIndex, modelChoice)
         });
 
         this.controller = new SidepanelController({
@@ -70,6 +71,20 @@ class SidepanelApp {
 
     async initPrompt(context) {
         await this.controller.initPrompt(context);
+    }
+
+    continueFromCurrent(index, secondaryIndex = null, modelChoice = null) {
+        const options = {
+            chatId: this.controller.chatCore.getChatId(),
+            index,
+            secondaryIndex,
+            modelChoice,
+            pendingUserMessage: this.controller.collectPendingUserMessage()
+        };
+        if (!options.chatId) {
+            options.systemPrompt = this.controller.chatCore.getSystemPrompt();
+        }
+        void this.handleReconstructChat(options);
     }
 
     initArenaToggleButton() {
@@ -206,6 +221,13 @@ class SidepanelApp {
         // here i decided to prioritize the clicked message, but it could be changed to prioritize the "pending" message
         if (lastMessage?.role !== "user") lastMessage = options.pendingUserMessage;  // important
         this.handleIfLastUserMessage(lastMessage || options.pendingUserMessage);
+
+        const latest = this.controller.chatCore.getLatestMessage();
+        if (latest?.role === 'assistant' && !latest.responses) {
+            const latestPart = latest.contents?.at(-1)?.at(-1);
+            const model = latestPart?.model || this.stateManager.getSetting('current_model');
+            this.chatUI.addRegenerateFooterToLastMessage(() => this.controller.regenerateResponse(model));
+        }
     }
 
     handleIfLastUserMessage(lastMessage) {

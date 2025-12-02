@@ -1,4 +1,4 @@
-import { createElementWithClass, formatContent, update_textfield_height, highlightCodeBlocks } from './utils.js';
+import { createElementWithClass, formatContent, update_textfield_height, highlightCodeBlocks, Footer } from './utils.js';
 
 
 class ChatUI {
@@ -26,7 +26,7 @@ class ChatUI {
 
     // Core message creation methods
     createMessage(role, parts = [], options = {}) {
-        const { files, images, messageId, ...prefixOptions } = options;
+        const { files, images, messageId, allowContinue = true, ...prefixOptions } = options;
         if (parts.length > 0 && parts.at(-1).model) prefixOptions.model = parts.at(-1).model;
         const messageBlock = createElementWithClass('div', `${role}-message`);
         
@@ -35,7 +35,7 @@ class ChatUI {
             messageBlock.dataset.messageId = messageId;
         }
 
-        const prefixWrapper = this.createPrefixWrapper(role, prefixOptions);
+        const prefixWrapper = this.createPrefixWrapper(role, { ...prefixOptions, allowContinue });
         const messageWrapper = this.createMessageWrapper(role, parts, { files, images });
 
         messageBlock.appendChild(prefixWrapper);
@@ -66,7 +66,7 @@ class ChatUI {
         prefix.textContent = this.generatePrefixText(role, options);
 
         wrapper.appendChild(prefix);
-        if (options.continueFunc) {
+        if (options.continueFunc && options.allowContinue !== false) {
             const button = this.createContinueButton(options.continueFunc);
             wrapper.appendChild(button);
         }
@@ -394,10 +394,12 @@ export class SidepanelChatUI extends ChatUI {
         const {
             inputWrapperId = '.textarea-wrapper',
             scrollElementId = 'conversation',
+            continueFunc = null,
             ...baseOptions
         } = options;
 
         super(baseOptions);
+        this.continueFunc = continueFunc;
 
         // Scroll behavior
         this.scrollToElement = document.getElementById(scrollElementId);
@@ -711,8 +713,8 @@ export class SidepanelChatUI extends ChatUI {
         return this.activeMessageDivs;
     }
 
-    regenerateResponse(model, isRegeneration = true, hideModels = true) {
-        const newMessage = this.createMessage('assistant', [], { model, isRegeneration, hideModels });
+    regenerateResponse(model, isRegeneration = true, hideModels = true, continueFunc = undefined, allowContinue = true) {
+        const newMessage = this.createMessage('assistant', [], { model, isRegeneration, hideModels, continueFunc, allowContinue });
         if (this.stateManager.isArenaModeActive) {
             const modelIndex = this.stateManager.getModelIndex(model);
             if (modelIndex === -1) return null;
@@ -730,7 +732,10 @@ export class SidepanelChatUI extends ChatUI {
     buildChat(chat) {
         // Hide models and disable continue buttons for sidepanel
         this.shouldScroll = false;
-        super.buildChat(chat, { hideModels: !this.stateManager.getSetting('show_model_name') });
+        super.buildChat(chat, { 
+            hideModels: !this.stateManager.getSetting('show_model_name'),
+            continueFunc: this.continueFunc || undefined
+        });
         this.shouldScroll = true;
         this.updateChatHeader(chat.title);
         this.scrollIntoView();
@@ -758,6 +763,57 @@ export class SidepanelChatUI extends ChatUI {
         if (this.shouldScroll) {
             this.scrollToElement.scrollIntoView(false);
         }
+    }
+
+    addRegenerateFooterToLastMessage(regenHandler) {
+        const lastMessage = this.conversationDiv.lastElementChild;
+        if (!lastMessage || !lastMessage.classList.contains('assistant-message')) return;
+        if (lastMessage.querySelector('.message-footer')) return;
+
+        const content = lastMessage.querySelector('.message-content:last-of-type') ||
+            lastMessage.querySelector('.image-content:last-of-type') ||
+            lastMessage.querySelector('.message-wrapper');
+        if (!content) return;
+
+        const footer = new Footer(0, 0, false, () => false, regenHandler);
+        footer.create(content);
+    }
+
+    ensureContinueButton(messageElement, continueFunc) {
+        const prefixWrapper = messageElement.querySelector('.history-prefix-wrapper');
+        if (!prefixWrapper) return;
+        if (prefixWrapper.querySelector('.continue-conversation-button')) return;
+        const button = this.createContinueButton(continueFunc);
+        prefixWrapper.appendChild(button);
+    }
+
+    addContinueButtonAt(index, continueFunc) {
+        if (continueFunc == null) return;
+        const target = this.conversationDiv.children[index];
+        if (!target) return;
+        this.ensureContinueButton(target, continueFunc);
+    }
+
+    renderContinueForAssistant(index, isLatest, secondaryIndex = 0, modelKey = null) {
+        if (!this.continueFunc) return;
+        if (isLatest) return; // never on the live tail message
+        const func = () => this.continueFunc(index, secondaryIndex, modelKey);
+        this.addContinueButtonAt(index, func);
+    }
+
+    addRegenerateFooterToLastMessage(regenHandler) {
+        const lastMessage = this.conversationDiv.lastElementChild;
+        if (!lastMessage || !lastMessage.classList.contains('assistant-message')) return;
+        if (lastMessage.querySelector('.message-footer')) return;
+
+        const content =
+            lastMessage.querySelector('.message-content:last-of-type') ||
+            lastMessage.querySelector('.image-content:last-of-type') ||
+            lastMessage.querySelector('.message-wrapper');
+        if (!content) return;
+
+        const footer = new Footer(0, 0, false, () => false, regenHandler);
+        footer.create(content);
     }
 
     initScrollListener() {
@@ -934,8 +990,9 @@ export class SidepanelChatUI extends ChatUI {
     getContentDiv(model) {
         const container = this.getActiveMessageElement(model);
         if (!container) return null;
-        const nodes = container.querySelectorAll('.message-content');
-        return nodes[nodes.length - 1];
+        const candidates = container.querySelectorAll('.message-content, .image-content');
+        if (candidates.length) return candidates[candidates.length - 1];
+        return container.querySelector('.message-wrapper') || null;
     }
 
     updateChatHeader(title) {

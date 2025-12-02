@@ -22,6 +22,11 @@ export class SidepanelController {
         this.chatCore = new SidepanelChatCore(chatStorage, stateManager, this.chatUI.getChatHeader());
     }
 
+    getContinueFunc(messageIndex, secondaryIndex = 0, modelKey = null) {
+        if (!this.chatUI.continueFunc) return undefined;
+        return () => this.chatUI.continueFunc(messageIndex, secondaryIndex, modelKey);
+    }
+
     initStates(chatName) {
         this.handleDefaultArenaChoice();
         this.stateManager.resetChatState();
@@ -123,6 +128,13 @@ export class SidepanelController {
             // For normal mode, save with display name; for arena keep logical id for routing
             const saveModel = this.stateManager.isArenaModeActive ? model : displayModelName;
             await this.saveResponseMessage(streamWriter.parts, saveModel, isRegen);
+
+            const latest = this.chatCore.getLatestMessage();
+            if (!this.stateManager.isArenaModeActive && this.chatUI.continueFunc && latest?.role === 'assistant' && !latest.responses) {
+                const messageIndex = this.chatCore.getLength() - 1;
+                const secondaryIndex = latest.contents?.length ? latest.contents.length - 1 : 0;
+                this.chatUI.renderContinueForAssistant(messageIndex, true, secondaryIndex);
+            }
             // Thinking loop routing must use logical model id
             this.handleThinkingMode(model, isRegen);
         }
@@ -197,7 +209,11 @@ export class SidepanelController {
 
     handleThinkingMode(model, isRegen) {
         if (this.stateManager.isInactive(model)) return;
-        this.chatUI.regenerateResponse(model, isRegen);
+        const latest = this.chatCore.getLatestMessage();
+        const secondaryIndex = latest?.contents?.length ?? 0;
+        const messageIndex = Math.max(this.chatCore.getLength() - 1, 0);
+        const continueFunc = this.getContinueFunc(messageIndex, secondaryIndex);
+        this.chatUI.regenerateResponse(model, isRegen, true, continueFunc, false);
         this.makeApiCall(model, isRegen);
     }
 
@@ -211,7 +227,9 @@ export class SidepanelController {
         } else {
             this.stateManager.initThinkingState();
             const model = this.stateManager.getSetting('current_model');
-            this.chatUI.addMessage('assistant', [], { model, hideModels: !this.stateManager.getSetting('show_model_name')});
+            const nextIndex = this.chatCore.getLength();
+            const continueFunc = this.getContinueFunc(nextIndex, 0);
+            this.chatUI.addMessage('assistant', [], { model, hideModels: !this.stateManager.getSetting('show_model_name'), continueFunc, allowContinue: false });
             await this.makeApiCall(model);
         }
     }
@@ -228,7 +246,9 @@ export class SidepanelController {
         this.stateManager.initArenaResponse(model1, model2);
         this.stateManager.initThinkingState();
         this.chatCore.initThinkingChat();   // needs to be before initArena so that the thinking chat exists when the message is added
-        this.chatUI.createArenaMessage();
+        const messageIndex = this.chatCore.getLength();
+        const continueFunc = this.getContinueFunc(messageIndex);
+        this.chatUI.createArenaMessage(null, { continueFunc, messageIndex });
         this.chatCore.initArena(model1, model2);
         
         await Promise.all([
@@ -269,8 +289,17 @@ export class SidepanelController {
         if (!text) return;
         this.chatUI.setTextareaText('');
         this.handleDefaultArenaChoice();
+        const latestBefore = this.chatCore.getLatestMessage();
+        if (latestBefore?.role === 'assistant' && !latestBefore.responses && this.chatUI.continueFunc) {
+            const messageIndex = this.chatCore.getLength() - 1;
+            const secondaryIndex = latestBefore.contents?.length ? latestBefore.contents.length - 1 : 0;
+            this.chatUI.renderContinueForAssistant(messageIndex, false, secondaryIndex);
+        }
         this.chatCore.addUserMessage(text);
-        this.chatUI.addMessage('user', this.chatCore.getLatestMessage().contents.at(-1));
+        const idx = this.chatCore.getLength() - 1;
+        const latest = this.chatCore.getLatestMessage();
+        const continueFunc = this.getContinueFunc(idx, latest.contents.length - 1);
+        this.chatUI.addMessage('user', latest.contents.at(-1), { continueFunc });
         this.chatUI.removeRegenerateButtons();
         this.chatUI.removeCurrentRemoveMediaButtons();
         this.initApiCall();
@@ -311,7 +340,11 @@ export class SidepanelController {
             this.stateManager.getSetting('current_model');
 
             const hideModels = !this.stateManager.getSetting('show_model_name') || this.stateManager.isArenaModeActive;
-        this.chatUI.regenerateResponse(actualModel, true, hideModels); 
+        const latest = this.chatCore.getLatestMessage();
+        const secondaryIndex = latest?.contents?.length ?? 0;
+        const messageIndex = Math.max(this.chatCore.getLength() - 1, 0);
+        const continueFunc = this.getContinueFunc(messageIndex, secondaryIndex);
+        this.chatUI.regenerateResponse(actualModel, true, hideModels, continueFunc, false); 
             
         if (this.stateManager.isArenaModeActive && this.stateManager.thinkingMode) {
             this.chatCore.initThinkingChat();
