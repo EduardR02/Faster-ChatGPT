@@ -1119,6 +1119,7 @@ export class HistoryChatUI extends ChatUI {
 
         this.mode = 'history';
         this.searchRenderedIds = new Set();
+        this.searchDividerCache = new Map();
         this.requestMoreSearchResults = null;
 
         this.paginator = this.createPaginator();
@@ -1397,11 +1398,13 @@ export class HistoryChatUI extends ChatUI {
 
     clearSearchResults() {
         this.historyList.querySelectorAll('.history-sidebar-item[data-search-temp="true"]').forEach(item => item.remove());
+        this.historyList.querySelectorAll('.history-divider[data-search-temp="true"]').forEach(divider => divider.remove());
         this._setSearchMatch(this._getHistoryItems(), null);
         this._setSearchMatch(this._getDividers(), null);
         this.historyList.querySelector('.search-no-results')?.remove();
         this.historyList.querySelector('.search-counter')?.remove();
         this.searchRenderedIds.clear();
+        this.searchDividerCache.clear();
     }
 
     setSearchLoader(loader) {
@@ -1454,11 +1457,13 @@ export class HistoryChatUI extends ChatUI {
         results.forEach(({ doc, id }) => {
             const idStr = `${id}`;
             let item = this.getHistoryItem(idStr);
+            const category = this.getDateCategorySafe(doc?.timestamp);
+
             if (!item && doc) item = this.createSearchTempItem(doc);
             if (item) {
                 item.dataset.searchMatch = 'true';
                 item.classList.remove('search-hidden');
-                if (item.dataset.searchTemp !== 'true') this.revealDividerForItem(item);
+                this.ensureSearchDividerForItem(item, category);
             }
         });
 
@@ -1507,6 +1512,8 @@ export class HistoryChatUI extends ChatUI {
         }
 
         const counter = createElementWithClass('div', 'search-counter', text);
+        counter.setAttribute('role', 'status');
+        counter.setAttribute('aria-live', 'polite');
         this.historyList.prepend(counter);
     }
 
@@ -1599,6 +1606,44 @@ export class HistoryChatUI extends ChatUI {
 
     createDateDivider(category) {
         return createElementWithClass('div', 'history-divider', category);
+    }
+
+    ensureSearchDividerForItem(item, category) {
+        const targetCategory = category || 'Unknown';
+        const cached = this.searchDividerCache.get(targetCategory);
+
+        if (cached && cached.isConnected) {
+            cached.dataset.searchMatch = 'true';
+            cached.classList.remove('search-hidden');
+            return;
+        }
+
+        // Check if there is already a matching divider immediately before
+        const prev = item.previousElementSibling;
+        if (prev?.classList.contains('history-divider') && prev.textContent === targetCategory) {
+            prev.dataset.searchMatch = 'true';
+            prev.classList.remove('search-hidden');
+            this.searchDividerCache.set(targetCategory, prev);
+            return;
+        }
+
+        const divider = this.createDateDivider(targetCategory);
+        divider.dataset.searchTemp = 'true';
+        divider.dataset.searchMatch = 'true';
+        divider.classList.remove('search-hidden');
+        this.searchDividerCache.set(targetCategory, divider);
+        this.historyList.insertBefore(divider, item);
+    }
+
+    getDateCategorySafe(timestamp) {
+        if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
+            return this.getDateCategory(timestamp);
+        }
+        const parsed = Number(timestamp);
+        if (Number.isFinite(parsed)) {
+            return this.getDateCategory(parsed);
+        }
+        return 'Unknown';
     }
 
 

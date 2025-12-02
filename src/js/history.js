@@ -1386,34 +1386,66 @@ class ChatSearch {
         this.searchDisplayOffset = 0;
         this.currentDisplayItems = [];
         this.handleResultsScroll = this.handleResultsScroll.bind(this);
+        this.searchInput = null;
+        this.clearBtn = null;
+        this.defaultPlaceholder = 'Search chats...';
+        this.loadingPlaceholder = 'Loading search...';
+        this.initPromise = null;
+        this.initializing = false;
         this.init();
     }
 
     init() {
-        const searchInput = document.getElementById('history-search');
-        const clearBtn = document.getElementById('search-clear');
+        this.searchInput = document.getElementById('history-search');
+        this.clearBtn = document.getElementById('search-clear');
 
-        searchInput.addEventListener('input', (e) => this.handleSearch(e.target.value));
-        clearBtn.addEventListener('click', () => {
-            searchInput.value = '';
+        if (!this.searchInput || !this.clearBtn) return;
+
+        this.defaultPlaceholder = this.searchInput.placeholder || 'Search chats...';
+        const triggerInit = () => { void this.ensureSearchInitialized(); };
+
+        this.searchInput.addEventListener('focus', triggerInit);
+        this.searchInput.addEventListener('click', triggerInit);
+        this.searchInput.addEventListener('input', (e) => this.handleSearch(e.target.value));
+
+        this.clearBtn.addEventListener('click', () => {
+            this.searchInput.value = '';
             this.clearSearch();
         });
+    }
 
-        const scheduleInit = () => runWhenIdle(() => { void this.initSearch(); });
+    async ensureSearchInitialized() {
+        if (this.initialised || this.initializing) return this.initPromise;
 
-        if (document.readyState === 'complete' || document.readyState === 'interactive') {
-            scheduleInit();
-        } else {
-            document.addEventListener('DOMContentLoaded', scheduleInit, { once: true });
-        }
+        const input = this.searchInput || document.getElementById('history-search');
+        const previousPlaceholder = input?.placeholder || this.defaultPlaceholder;
+        this.initializing = true;
+        if (input) input.placeholder = this.loadingPlaceholder;
+
+        this.initPromise = (async () => {
+            try {
+                await this.initSearch();
+                const pendingQuery = input?.value ?? '';
+                if (pendingQuery.trim() && this.miniSearch) {
+                    this.handleSearch(pendingQuery);
+                }
+            } catch (error) {
+                console.error('Search initialization failed:', error);
+            } finally {
+                this.initializing = false;
+                if (input) input.placeholder = previousPlaceholder;
+            }
+        })();
+
+        return this.initPromise;
     }
 
     async initSearch() {
         if (typeof window.MiniSearch === 'undefined') {
             console.warn('MiniSearch library not loaded, search will be disabled');
-        this.initialised = true;
-        await this.processPendingOperations();
-        return;
+            this.initialised = true;
+            await this.processPendingOperations();
+            return;
         }
         
         await waitForIdle(0);
