@@ -227,28 +227,32 @@ export function createElementWithClass(type, className, textContent = null) {
 export function set_defaults() {
     const MODELS = {
         openai: {
-            "gpt-4": "GPT-4",
-            "gpt-4-turbo-preview": "GPT-4 Turbo",
-            "chatgpt-4o-latest": "GPT-4o latest",
-            "gpt-4o-mini": "GPT-4o mini"
+            "gpt-5.1": "GPT-5.1",
+            "gpt-5.1-mini": "GPT-5.1 mini"
         },
         anthropic: {
-            "claude-3-5-sonnet-20240620": "Sonnet 3.5",
-            "claude-3-5-sonnet-20241022": "Sonnet 3.5 new"
+            "claude-4.5-opus": "Claude 4.5 Opus",
+            "claude-sonnet-4-5": "Claude 4.5 Sonnet",
+            "claude-4.5-haiku": "Claude 4.5 Haiku",
         },
         gemini: {
-            "gemini-exp-1206": "Gemini Exp 1206",
-            "gemini-2.0-flash-exp": "Gemini Flash 2.0",
-            "gemini-2.5-flash-image-preview": "Nano Banana (Image)"
+            "gemini-3-pro-preview": "Gemini 3 Pro",
+            "gemini-3-pro-image-preview": "Nano Banana Pro",
+            "gemini-2.5-flash": "Gemini 2.5 Flash",
+            "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite",
+            "gemini-2.5-flash-image-preview": "Nano Banana"
         },
         deepseek: {
-            "deepseek-chat": "DeepSeek V3",
-            "deepseek-reasoner": "DeepSeek R1"
+            "deepseek-chat": "DeepSeek V3.2",
+            "deepseek-reasoner": "DeepSeek V3.2 thinking"
         },
         grok: {
-            "grok-3": "Grok 3",
-            "grok-3-mini": "Grok 3 Mini",
-            "grok-4": "Grok 4"
+            "grok-4": "Grok 4",
+            "grok-4.1-fast-reasoning": "Grok 4.1 Fast Reasoning"
+        },
+        kimi: {
+            "kimi-k2-turbo-preview": "Kimi 2 Turbo",
+            "kimi-k2-thinking-turbo": "Kimi 2 Turbo thinking"
         },
         llamacpp: {
             "local-model": "Local Model"
@@ -259,11 +263,11 @@ export function set_defaults() {
         mode: ModeEnum.PromptMode,
         lifetime_input_tokens: 0,
         lifetime_output_tokens: 0,
-        max_tokens: 4000,
+        max_tokens: 16000,
         temperature: 1.0,
-        loop_threshold: 3,
+        loop_threshold: 2,
         reasoning_effort: 'medium',
-        show_model_name: false,     // show model name in chat
+        show_model_name: true,     // show model name in chat
         current_model: anthropic_models[anthropic_models.length - 1],
         models: MODELS,
         api_keys: {},
