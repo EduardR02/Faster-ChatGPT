@@ -51,7 +51,7 @@ export class ApiManager {
         requestOptions.signal = abortController.signal;
 
         // Determine timeout duration (longer for "thinking" models)
-        const timeoutDuration = streamWriter?.thinkingModelWithCounter ? 60000 : 15000;
+        const timeoutDuration = (streamWriter?.thinkingModelWithCounter || streamWriter?.isThinkingModel) ? 60000 : 15000;
         const timeoutId = setTimeout(() => {
             abortController.abort();
         }, timeoutDuration);
