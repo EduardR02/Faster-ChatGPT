@@ -84,7 +84,6 @@ export class SidepanelController {
             if (!streamResponse) {
                 responseResult.forEach(msg => {
                     if (msg.type === 'image') {
-                        // For images, create a new part (don't overwrite current text/thought)
                         if (streamWriter.parts.at(-1).content.length > 0) {
                             streamWriter.nextPart();
                         }
@@ -108,12 +107,8 @@ export class SidepanelController {
             }
         } finally {
             tokenCounter.updateLifetimeTokens();
-            // Always remove by logical model key so arena lookup works
             this.chatUI.removeManualAbortButton(model);
-            // if the response fails or is stopped in thinking mode, the footer should still create a regenerate button,
-            // which due to chatCore management conveniently continues with the thinking chain, discarding the invalid message
             const isThinkingFunc = success ? null : () => false;
-            // Footer actions (thinking/regenerate) must use the logical model id
             await streamWriter.addFooter(this.createMessageFooter(tokenCounter, model, isThinkingFunc));
         }
 
@@ -155,18 +150,16 @@ export class SidepanelController {
         await this.chatCore.addAssistantMessage(message, model);
     }
 
-    handleArenaChoice(choice) {;
+    handleArenaChoice(choice) {
         const currentMessage = this.chatCore.getLatestMessage();
         this.chatUI.removeArenaFooter();
         
-        // Update message state
         const winnerIndex = this.determineWinnerIndex(choice);
         const winner = winnerIndex !== -1 ? this.stateManager.getArenaModel(winnerIndex) : null;
         
         const continued_with = winner ? 
             (winnerIndex === 0 ? "model_a" : "model_b") : 
             "none";
-        // Update UI and state
         this.chatCore.updateArenaMisc(choice, continued_with);
         const [modelA, modelB] = this.stateManager.getArenaModels();
         if (['model_a', 'model_b', 'draw', 'draw(bothbad)'].includes(choice)) {
@@ -176,7 +169,6 @@ export class SidepanelController {
         this.chatUI.resolveArena(choice, currentMessage.continued_with, null, ratings);
         this.stateManager.clearArenaState();
         
-        // Handle continuation
         if (choice === 'no_choice(bothbad)') {
             this.initApiCall();
         }
@@ -248,7 +240,7 @@ export class SidepanelController {
         
         this.stateManager.initArenaResponse(model1, model2);
         this.stateManager.initThinkingState();
-        this.chatCore.initThinkingChat();   // needs to be before initArena so that the thinking chat exists when the message is added
+        this.chatCore.initThinkingChat();
         const messageIndex = this.chatCore.getLength();
         const continueFunc = this.getContinueFunc(messageIndex);
         this.chatUI.createArenaMessage(null, { continueFunc, messageIndex });

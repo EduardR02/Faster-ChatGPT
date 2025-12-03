@@ -200,25 +200,14 @@ export class SidepanelChatCore extends ChatCore {
 
     async saveNew() {
         if (!this.stateManager.shouldSave) return;
-        if (Object.keys(this.continuedChatOptions).length > 0) {
-            const options = this.continuedChatOptions;
-            this.continuedChatOptions = {};
-            if (this.canContinueWithSameChatId(options, this.currentChat.messages[options.index])) {
-                const toAdd = this.currentChat.messages.length - options.fullChatLength;
-                if (toAdd > 0) await this.addMessagesToExistingChat(toAdd);
-                return;
-            }
-            // If can't continue with same ID, create new chat with continued-from reference
-            const bonus_options = { continued_from_chat_id: this.currentChat.chatId, renamed: this.currentChat.renamed || false };
-            await this.createNewChat(bonus_options, false);
-            return;
-        }
+        if (await this.handleContinuedChatSave()) return;
         if (!this.currentChat.chatId) await this.createNewChat();
         else await this.addMessagesToExistingChat();
     }
 
     async updateSaved() {
         if (!this.stateManager.shouldSave) return;
+        await this.handleContinuedChatSave();
         await this.chatStorage.updateMessage(this.getChatId(), this.getLength() - 1, SidepanelChatCore.stripEphemeralParts(this.getLatestMessage()));
     }
 
@@ -363,6 +352,22 @@ export class SidepanelChatCore extends ChatCore {
             for (let i = 0; i < msg1.images.length; i++) {
                 if (msg1.images[i] !== msg2.images[i]) return false;
             }
+        }
+        return true;
+    }
+
+    async handleContinuedChatSave() {
+        if (Object.keys(this.continuedChatOptions).length === 0) return false;
+        const options = this.continuedChatOptions;
+        this.continuedChatOptions = {};
+
+        if (this.canContinueWithSameChatId(options, this.currentChat.messages[options.index])) {
+            const toAdd = this.currentChat.messages.length - options.fullChatLength;
+            if (toAdd > 0) await this.addMessagesToExistingChat(toAdd);
+        } else {
+            // Create a branched chat and preserve the link to the source chat
+            const bonus_options = { continued_from_chat_id: this.currentChat.chatId, renamed: this.currentChat.renamed || false };
+            await this.createNewChat(bonus_options, false);
         }
         return true;
     }

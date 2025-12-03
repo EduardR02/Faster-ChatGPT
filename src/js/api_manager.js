@@ -42,15 +42,10 @@ export class ApiManager {
         const streamResponse = streamWriter !== null;
         messages = this.processFiles(messages);
         const [apiLink, requestOptions] = this.createApiRequest(model, messages, streamResponse, streamWriter, options.localModelOverride);
-        
-        if (!apiLink || !requestOptions) {
-            throw new Error("Invalid API request configuration.");
-        }
 
         if (!abortController) abortController = new AbortController();
         requestOptions.signal = abortController.signal;
 
-        // Determine timeout duration (longer for "thinking" models)
         const timeoutDuration = (streamWriter?.thinkingModelWithCounter || streamWriter?.isThinkingModel) ? 120000 : 30000;
         const timeoutId = setTimeout(() => {
             abortController.abort();
@@ -100,9 +95,6 @@ export class ApiManager {
     async callImageGenerationApi(model, messages, tokenCounter, streamWriter = null, abortController = null) {
         const provider = this.getProviderForModel(model);
         const apiKeys = this.settingsManager.getSetting('api_keys') || {};
-        
-        // Route to the appropriate image generation API
-        // Pass the full messages array for multi-turn conversations
         const [apiLink, requestOptions] = this.createImageApiRequest(provider, model, messages, apiKeys[provider]);
         
         if (!abortController) abortController = new AbortController();
@@ -151,16 +143,9 @@ export class ApiManager {
     }
 
     createImageApiRequest(provider, model, messages, apiKey) {
-        // Router for image generation APIs - each provider has different request formats
-        // Add new providers here following the same pattern
         switch (provider) {
             case 'gemini':
                 return this.createGeminiImageRequest(model, messages, apiKey);
-            // Future image providers can be added here:
-            // case 'openai':
-            //     return this.createOpenAIImageRequest(model, messages, apiKey);  // DALL-E 3 format
-            // case 'anthropic':
-            //     return this.createAnthropicImageRequest(model, messages, apiKey);
             default:
                 throw new Error(`Image generation not supported for provider: ${provider}`);
         }
@@ -170,11 +155,6 @@ export class ApiManager {
         switch (provider) {
             case 'gemini':
                 return this.handleGeminiImageResponse(data, tokenCounter, streamWriter);
-            // Future image providers can be added here:
-            // case 'openai':
-            //     return this.handleOpenAIImageResponse(data, tokenCounter, streamWriter);
-            // case 'anthropic':
-            //     return this.handleAnthropicImageResponse(data, tokenCounter, streamWriter);
             default:
                 throw new Error(`Image generation not supported for provider: ${provider}`);
         }
@@ -207,13 +187,11 @@ export class ApiManager {
     }
 
     handleGeminiImageResponse(data, tokenCounter, streamWriter) {
-        // Nano Banana can output both text and images - handle all parts
         const candidate = data.candidates?.[0];
         if (!candidate) {
             throw new Error("No content was generated");
         }
 
-        // Update token counter if usage info is available
         if (data.usageMetadata) {
             const thoughtsTokens = data.usageMetadata.thoughtsTokenCount || 0;
             tokenCounter.update(
@@ -222,7 +200,6 @@ export class ApiManager {
             );
         }
 
-        // Process all parts (text and/or images)
         const messageParts = this.mapGeminiContentParts(candidate.content?.parts);
 
         if (messageParts.length === 0) {
@@ -317,23 +294,20 @@ export class ApiManager {
         for (const [provider, providerModels] of Object.entries(models)) {
             if (model in providerModels) return provider;
         }
-        return "llamacpp";  // fallback to llamacpp if unknown model, this is intended as local model names are not stored in the settings
+        return "llamacpp";
     }
 
     getGeminiMaxTokens(model) {
-        // Image models have lower output limits
         if (model.includes('image')) {
             return MaxTokens.gemini_image;
         }
-        // Modern Gemini (2.5+) has higher limits
         if (/gemini-[2-9]\.?\d*|gemini-\d{2,}/.test(model)) {
             return MaxTokens.gemini_modern;
         }
-        return MaxTokens.gemini;  // 8,192 for older Gemini models (2.0 and below)
+        return MaxTokens.gemini;
     }
 
     formatMessagesForOpenAI(messages, addImages) {
-        // Note: System message is handled separately as 'instructions' in the /v1/responses API
         return messages.filter(msg => msg.role !== RoleEnum.system).map(msg => {
             const content = [];
             
@@ -368,17 +342,15 @@ export class ApiManager {
             };
         });
 
-        // add message caching
         new_messages.at(-1).content.at(-1).cache_control = { "type": "ephemeral" };
         
         return new_messages;
     }
 
-    // Helper to extract text content from parts array
     extractTextContent(msg) {
         if (!msg?.parts) return '';
         return msg.parts
-            .filter(part => part.type === 'text' && part.content !== undefined && part.content !== null)
+            .filter(part => part.type === 'text' && part.content != null)
             .map(part => part.content)
             .join('\n');
     }
@@ -437,7 +409,6 @@ export class ApiManager {
     }
 
     formatMessagesForGrok(messages) {
-        // Grok uses standard OpenAI format and supports vision - always include images
         return messages.map(msg => {
             const textContent = this.extractTextContent(msg);
 
@@ -457,7 +428,6 @@ export class ApiManager {
     }
 
     formatMessagesForKimi(messages) {
-        // Kimi uses OpenAI-compatible format (text only)
         return messages.map(msg => ({ role: msg.role, content: this.extractTextContent(msg) }));
     }
 
@@ -495,14 +465,13 @@ export class ApiManager {
     }
 
     createOpenAIRequest(model, messages, streamResponse, streamWriter, apiKey) {
-        const webSearchCompatibleModels = ['gpt-4.1', 'gpt-5']; // Add model substrings here
+        const webSearchCompatibleModels = ['gpt-4.1', 'gpt-5'];
         const webSearchExcludedModels = ['gpt-4.1-nano', 'gpt-5-nano'];
         const hasWebSearch = webSearchCompatibleModels.some(m => model.includes(m)) && !webSearchExcludedModels.some(m => model.includes(m));
         const enableWebSearchSetting = this.getWebSearch ? !!this.getWebSearch() : !!this.settingsManager.getSetting('web_search');
         const enableWebSearch = enableWebSearchSetting && hasWebSearch;
         
-        // Use regex to check for 'o' followed by a digit (e.g., o1, o3, o4)
-        const isReasoner = /o\d/.test(model) || model.includes('gpt-5');    // looks like gpt-5 and o3 require "verification" for now, (gpt-5 for streaming), which is just fking 
+        const isReasoner = /o\d/.test(model) || model.includes('gpt-5'); 
         const noImage = model.includes('o1-mini') || model.includes('o1-preview') || model.includes('o3-mini');
 
         const systemMessage = messages.find(msg => msg.role === RoleEnum.system)?.parts?.[0]?.content;
@@ -527,7 +496,6 @@ export class ApiManager {
             stream: streamResponse,
         };
 
-        // Remove null/undefined values from body
         Object.keys(body).forEach(key => (body[key] == null) && delete body[key]);
 
 
@@ -552,14 +520,12 @@ export class ApiManager {
         // Configure thinking for Sonnet 3.7
         let thinkingConfig = null;
         if (isThinking) {
-            // Calculate thinking budget (leave at least 4000 tokens for answer)
             const thinkingBudget = Math.max(1024, maxTokens - 4000);
             thinkingConfig = {
                 type: "enabled",
                 budget_tokens: thinkingBudget
             };
             
-            // Set up thinking UI if using streaming
             if (streamWriter) streamWriter.setThinkingModel();
         }
 
@@ -636,7 +602,6 @@ export class ApiManager {
         const responseType = streamResponse ? "streamGenerateContent" : "generateContent";
         const streamParam = streamResponse ? "alt=sse&" : "";
         
-        // Gemini 3+: thinkingLevel, Gemini 2.5: thinkingBudget (-1 = dynamic)
         let thinkingParams = {};
         if (isGemini3Plus) {
             thinkingParams = { thinking_config: { thinkingLevel: this.getGeminiThinkingLevel(), include_thoughts: true } };
@@ -880,7 +845,6 @@ export class ApiManager {
             if (typeof part === 'string') {
                 if (part) message.push({ type: 'text', content: part });
             } else if (part && typeof part === 'object') {
-                // Part is already an object with type and content
                 message.push(part);
             }
         });
@@ -1038,7 +1002,7 @@ export class ApiManager {
         if (provider) {
             meta.push(`provider=${provider}`);
         }
-        if (status !== undefined && status !== null) {
+        if (status != null) {
             const statusLabel = statusText ? `${status} ${statusText}` : status;
             meta.push(`status=${statusLabel}`);
         }
@@ -1062,7 +1026,7 @@ export class ApiManager {
             if (typeof error === 'string') {
                 return error.trim();
             }
-            if (error === null || error === undefined) {
+            if (error == null) {
                 return '';
             }
             return String(error).trim();
@@ -1125,7 +1089,6 @@ export class ApiManager {
     }
 
     handleOpenAIStreamData(parsed, tokenCounter, streamWriter) {
-        // Handle the new SSE event types from /v1/responses
         switch (parsed.type) {
             case 'response.output_text.delta':
                 if (parsed.delta) {
@@ -1139,11 +1102,7 @@ export class ApiManager {
                     tokenCounter.update(inputTokens, outputTokens);
                 }
                 break;
-            // TODO: Potentially handle other events like 'response.reasoning.delta' if needed
-            // TODO: Handle 'response.web_search_call.started/completed' etc. if UI feedback is desired
-            // TODO: Handle 'response.error' for stream errors
             default:
-                // Ignore other event types for now
                 break;
         }
     }
@@ -1162,7 +1121,6 @@ export class ApiManager {
                         streamWriter.processContent(thinking, true);
                     }
                 } else if (parsed.delta.text) {
-                    // Legacy format support
                     streamWriter.processContent(parsed.delta.text);
                 }
                 break;
@@ -1279,14 +1237,12 @@ export class ApiManager {
     }
 
     handleLlamaCppStreamData(parsed, tokenCounter, streamWriter) {
-        // Handle final chunk with usage info but empty choices
         if (parsed.usage && (!parsed.choices || parsed.choices.length === 0)) {
             tokenCounter.update(parsed.usage.prompt_tokens || 0, parsed.usage.completion_tokens || 0);
             if (parsed.timings) {
                 console.log(`Llama.cpp performance - Speed: ${parsed.timings.predicted_per_second?.toFixed(1)} tokens/sec`);
             }
             
-            // Notify that we can now fetch the model name
             if (streamWriter?.onComplete) {
                 streamWriter.onComplete();
             }

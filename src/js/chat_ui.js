@@ -30,8 +30,7 @@ class ChatUI {
         if (parts.length > 0 && parts.at(-1).model) prefixOptions.model = parts.at(-1).model;
         const messageBlock = createElementWithClass('div', `${role}-message`);
         
-        // Add data-message-id if available
-        if (messageId !== undefined && messageId !== null) {
+        if (messageId != null) {
             messageBlock.dataset.messageId = messageId;
         }
 
@@ -129,7 +128,6 @@ class ChatUI {
             if (continueFunc) new_options.continueFunc = () => continueFunc(index, secIdx);
             if (secIdx !== 0) new_options.isRegeneration = true;
             const messageBlock = this.createMessageWrapperFunc(parts, new_options);
-            // due to system message being directly added / being a "full message"
             if (messageBlock) this.conversationDiv.appendChild(messageBlock);
         });
     }
@@ -139,8 +137,7 @@ class ChatUI {
         const { responses, role } = message || {};
         const messageBlock = createElementWithClass('div', `assistant-message`);
         
-        // Add data-message-id if available
-        if (message.messageId !== undefined && message.messageId !== null) {
+        if (message.messageId != null) {
             messageBlock.dataset.messageId = message.messageId;
         }
         
@@ -237,7 +234,6 @@ class ChatUI {
             content.appendChild(errorDiv);
         };
 
-        // Validate that we have a proper image data URI or URL
         const isValidImage = imageBase64 && (
             imageBase64.startsWith('data:image/') ||
             imageBase64.startsWith('http://') ||
@@ -249,7 +245,6 @@ class ChatUI {
         } else {
             img.src = imageBase64;
 
-            // Handle image load errors
             img.onerror = async () => {
                 if (!retried && imageBase64.startsWith('data:image/')) {
                     retried = true;
@@ -294,7 +289,7 @@ class ChatUI {
         if (onRemove) {
             const removeButton = this.createRemoveFileButton(() => {
                 fileDiv.remove();
-                onRemove();  // handle file logic removal
+                onRemove();
             });
             buttonsWrapper.appendChild(removeButton);
         }
@@ -356,7 +351,6 @@ class ChatUI {
     }
 
     produceNextContentDiv(role, isThought, content = '', type = 'text') {
-        // Handle image content differently
         if (type === 'image') {
             return this.createImageContent(content, role);
         }
@@ -858,7 +852,7 @@ export class SidepanelChatUI extends ChatUI {
             button.onclick = () => {
                 this.removeArenaFooterWithParam(footer);
                 this.removeRegenerateButtons();
-                onChoice(btn.choice);   // this should also call resolve arena after it's done, because here we don't know continued_with yet
+                onChoice(btn.choice);
             };
             this.setupArenaButtonHover(button);
             footer.appendChild(button);
@@ -1000,19 +994,16 @@ export class SidepanelChatUI extends ChatUI {
     }
 
     updateLastMessageModelName(actualModelName) {
-        // Only update if show_model_name is enabled and not in arena mode
         if (!this.stateManager.getSetting('show_model_name') || this.stateManager.isArenaModeActive) {
             return;
         }
         
-        // Find the last assistant message
         const messages = this.conversationDiv.querySelectorAll('.assistant-message');
         const lastMessage = messages[messages.length - 1];
         
         if (lastMessage) {
             const prefixElement = lastMessage.querySelector('.message-prefix');
             if (prefixElement) {
-                // Update with actual model name, preserving any existing icons
                 let newText = actualModelName;
                 if (prefixElement.textContent.includes('🧠')) newText += ' 🧠';
                 if (prefixElement.textContent.includes('💡')) newText += ' 💡';
@@ -1599,7 +1590,7 @@ export class HistoryChatUI extends ChatUI {
 
         if (oldMessageElement) {
             const newMessageElement = this.createArenaMessageWrapperFunc(updatedMessage, { continueFunc: this.continueFunc, messageIndex })[0].parentElement.parentElement;
-            newMessageElement.remove(); // because createArenaMessage adds to conversationDiv
+            newMessageElement.remove();
             this.conversationDiv.replaceChild(newMessageElement, oldMessageElement);
         }
     }

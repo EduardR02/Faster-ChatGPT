@@ -333,11 +333,10 @@ class SidepanelApp {
         textarea.addEventListener('paste', async (e) => {
             const items = Array.from(e.clipboardData.items);
     
-            // Extract all files from the paste event
             const files = items
-                .filter(item => item.kind === 'file') // Ensure it's a file
-                .map(item => item.getAsFile())        // Convert to File objects
-                .filter(file => file !== null);       // Filter out null values
+                .filter(item => item.kind === 'file')
+                .map(item => item.getAsFile())
+                .filter(file => file !== null);
 
             if (files.length > 0) {
                 e.preventDefault();
