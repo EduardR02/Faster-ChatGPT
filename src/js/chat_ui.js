@@ -759,20 +759,6 @@ export class SidepanelChatUI extends ChatUI {
         }
     }
 
-    addRegenerateFooterToLastMessage(regenHandler) {
-        const lastMessage = this.conversationDiv.lastElementChild;
-        if (!lastMessage || !lastMessage.classList.contains('assistant-message')) return;
-        if (lastMessage.querySelector('.message-footer')) return;
-
-        const content = lastMessage.querySelector('.message-content:last-of-type') ||
-            lastMessage.querySelector('.image-content:last-of-type') ||
-            lastMessage.querySelector('.message-wrapper');
-        if (!content) return;
-
-        const footer = new Footer(0, 0, false, () => false, regenHandler);
-        footer.create(content);
-    }
-
     ensureContinueButton(messageElement, continueFunc) {
         const prefixWrapper = messageElement.querySelector('.history-prefix-wrapper');
         if (!prefixWrapper) return;

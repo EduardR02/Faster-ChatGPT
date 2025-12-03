@@ -179,11 +179,13 @@ export class ChatStorage {
             let repaired = 0;
 
             await new Promise((resolve) => {
+                tx.oncomplete = resolve;
+                tx.onerror = resolve;
+                tx.onabort = resolve;
                 const cursor = store.openCursor();
                 cursor.onsuccess = (e) => {
                     const c = e.target.result;
                     if (!c) {
-                        resolve();
                         return;
                     }
                     const blob = c.value;
@@ -205,7 +207,6 @@ export class ChatStorage {
                     }
                     c.continue();
                 };
-                cursor.onerror = () => resolve();
             });
 
             return repaired;
@@ -215,16 +216,16 @@ export class ChatStorage {
         }
     }
 
-    async prepareMessageForStorage(message, chatId, blobStore) {
+    async prepareMessageForStorage(message, chatId, blobStore, hashCache = null) {
         const prepared = { ...message };
-        const hashCache = new Map();
+        const cache = hashCache ?? new Map();
         const toHash = async (dataUrl) => {
             if (!ChatStorage.isDataUrl(dataUrl)) return { ref: dataUrl, hashed: false };
-            if (hashCache.has(dataUrl)) return hashCache.get(dataUrl);
+            if (cache.has(dataUrl)) return cache.get(dataUrl);
             const hash = await ChatStorage.computeHash(dataUrl);
             await this.storeBlob(blobStore, hash, dataUrl, chatId);
             const entry = { ref: hash, hashed: true };
-            hashCache.set(dataUrl, entry);
+            cache.set(dataUrl, entry);
             return entry;
         };
 
@@ -771,8 +772,9 @@ export class ChatStorage {
             metaRequest.onerror = () => reject(metaRequest.error);
         });
 
+        const hashCache = new Map();
         const preparedMessages = await Promise.all(
-            messages.map(msg => this.prepareMessageForStorage(msg, chatId))
+            messages.map(msg => this.prepareMessageForStorage(msg, chatId, null, hashCache))
         );
 
         const messagesTx = db.transaction('messages', 'readwrite');
@@ -834,8 +836,9 @@ export class ChatStorage {
         const db = await this.getDB();
         const timestamp = Date.now();
 
+        const hashCache = new Map();
         const preparedMessages = await Promise.all(
-            messages.map(msg => this.prepareMessageForStorage(msg, chatId))
+            messages.map(msg => this.prepareMessageForStorage(msg, chatId, null, hashCache))
         );
 
         const tx = db.transaction('messages', 'readwrite');
@@ -1331,6 +1334,9 @@ export class ChatStorage {
             const tx = db.transaction('messages', 'readwrite');
             const messageStore = tx.objectStore('messages');
             const messageIndex = messageStore.index('chatId');
+            tx.oncomplete = resolve;
+            tx.onerror = resolve;
+            tx.onabort = resolve;
             const request = messageIndex.openCursor(IDBKeyRange.only(chatId));
             request.onsuccess = (event) => {
                 const cursor = event.target.result;
@@ -1338,12 +1344,8 @@ export class ChatStorage {
                     this.extractImageHashes(cursor.value).forEach(h => imageHashes.add(h));
                     cursor.delete();
                     cursor.continue();
-                } else {
-                    resolve();
                 }
             };
-            request.onerror = () => resolve();
-            tx.onabort = () => resolve();
         });
 
         // Delete media entries, metadata, search doc in parallel (separate transactions to avoid long-lived tx)
@@ -1352,34 +1354,33 @@ export class ChatStorage {
                 const tx = db.transaction('mediaIndex', 'readwrite');
                 const mediaStore = tx.objectStore('mediaIndex');
                 const mediaIndex = mediaStore.index('chatId');
+                tx.oncomplete = resolve;
+                tx.onerror = resolve;
+                tx.onabort = resolve;
                 const request = mediaIndex.openCursor(IDBKeyRange.only(chatId));
                 request.onsuccess = (event) => {
                     const cursor = event.target.result;
                     if (cursor) {
                         cursor.delete();
                         cursor.continue();
-                    } else {
-                        resolve();
                     }
                 };
-                request.onerror = () => resolve();
-                tx.onabort = () => resolve();
             }),
             new Promise((resolve) => {
                 const tx = db.transaction('chatMeta', 'readwrite');
                 const metaStore = tx.objectStore('chatMeta');
+                tx.oncomplete = resolve;
+                tx.onerror = resolve;
+                tx.onabort = resolve;
                 const req = metaStore.delete(chatId);
-                req.onsuccess = () => resolve();
-                req.onerror = () => resolve();
-                tx.onabort = () => resolve();
             }),
             new Promise((resolve) => {
                 const tx = db.transaction('searchDocs', 'readwrite');
                 const searchDocsStore = tx.objectStore('searchDocs');
+                tx.oncomplete = resolve;
+                tx.onerror = resolve;
+                tx.onabort = resolve;
                 const req = searchDocsStore.delete(chatId);
-                req.onsuccess = () => resolve();
-                req.onerror = () => resolve();
-                tx.onabort = () => resolve();
             })
         ]);
 

@@ -412,17 +412,35 @@ class SidepanelApp {
     }
 
     async urlToBase64(url) {
+        const MAX_BYTES = 20_000_000;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
         try {
-            const response = await fetch(url);
+            const response = await fetch(url, { signal: controller.signal });
+            clearTimeout(timeoutId);
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+            const headerLength = Number(response.headers.get('content-length'));
+            if (Number.isFinite(headerLength) && headerLength > MAX_BYTES) {
+                throw new Error('image too large');
+            }
+
             const blob = await response.blob();
-            return new Promise(resolve => {
+            if (blob.size > MAX_BYTES) throw new Error('image too large');
+
+            return await new Promise(resolve => {
                 const reader = new FileReader();
                 reader.onload = e => resolve(e.target.result);
                 reader.readAsDataURL(blob);
             });
         } catch (error) {
-            this.chatUI.addErrorMessage(`Error converting image to base64: ${error.message}`);
+            const message = error.name === 'AbortError'
+                ? 'Image fetch timed out'
+                : `Error converting image to base64: ${error.message}`;
+            this.chatUI.addErrorMessage(message);
             return null;
+        } finally {
+            clearTimeout(timeoutId);
         }
     }
 
