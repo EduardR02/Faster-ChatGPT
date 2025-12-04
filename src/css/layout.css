@@ -60,6 +60,7 @@ body {
 .side-panel {
   color: #ffffff;
   padding: 1em;
+  padding-right: 0;
   display: flex;
   flex-direction: column;
   gap: 0.5em;
@@ -80,6 +81,7 @@ body {
   display: grid;
   grid-template-columns: min-content 1fr min-content 1fr min-content;
   align-items: center;
+  padding-right: 1em;
 }
 
 .button-footer-center-group {
@@ -1133,6 +1135,7 @@ p {
   position: relative;
   display: flex;
   flex-direction: column;
+  padding-right: 1em;
 }
 
 .image-content {
@@ -1296,7 +1299,7 @@ p {
   position: absolute;
   padding-top: 10px;
   padding-bottom: 10px;
-  right: 10px;
+  right: calc(10px + 1em);
   z-index: 2;
 
   display: flex;
@@ -1814,13 +1817,14 @@ p {
 
 .tab-bar-container {
     flex-shrink: 0;
+    padding-right: 1em;
 }
 
 .tab-bar {
     display: flex;
     align-items: center;
     gap: 4px;
-    padding: 4px 4px 0;
+    padding: 0;
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-width: none;
@@ -1837,7 +1841,7 @@ p {
     align-items: center;
     gap: 4px;
     padding: 6px 8px;
-    background: #21252b;
+    background: #17141D;
     border: 1px solid transparent;
     border-bottom: none;
     border-radius: 6px 6px 0 0;
@@ -1849,12 +1853,12 @@ p {
 }
 
 .tab-button:hover {
-    background: #2d3139;
-    border-color: #4b5363;
+    background: #1f1a26;
+    border-color: #3a3145;
 }
 
 .tab-button.active {
-    background: #282c34;
+    background: #211c27;
     border-color: #fdaaaa;
 }
 
@@ -1881,7 +1885,7 @@ p {
     width: 16px;
     height: 16px;
     font-size: 14px;
-    color: #5c6370;
+    color: #78708a;
     border-radius: 3px;
     cursor: pointer;
     transition: background 0.1s ease, color 0.1s ease;
@@ -1930,6 +1934,7 @@ p {
     flex: 1;
     overflow-y: auto;
     overflow-x: hidden;
+    padding-right: 1em;
 }
 
 .tab-content-container.active {

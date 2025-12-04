@@ -378,7 +378,7 @@ class SidepanelApp {
     handleChatRenamed(chatId, title) {
         // Find the tab with this chatId and update its title
         for (const tab of this.tabManager.getAllTabs()) {
-            if (tab.controller.chatCore.getChatId() === chatId) {
+            if (String(tab.controller.chatCore.getChatId()) === String(chatId)) {
                 this.tabManager.updateTabTitle(tab.id, title);
                 break;
             }
