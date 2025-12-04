@@ -387,7 +387,7 @@ export class SidepanelChatUI extends ChatUI {
     constructor(options) {
         const {
             inputWrapperId = '.textarea-wrapper',
-            scrollElementId = 'conversation',
+            scrollElementId = null,
             continueFunc = null,
             ...baseOptions
         } = options;
@@ -396,7 +396,10 @@ export class SidepanelChatUI extends ChatUI {
         this.continueFunc = continueFunc;
 
         // Scroll behavior
-        this.scrollToElement = document.getElementById(scrollElementId);
+        const scrollTarget = scrollElementId
+            ? document.getElementById(scrollElementId)
+            : this.conversationDiv;
+        this.scrollToElement = scrollTarget || this.conversationDiv;
         this.shouldScroll = true;
         this.scrollListenerActive = false;
 
@@ -407,7 +410,9 @@ export class SidepanelChatUI extends ChatUI {
     }
 
     initResize() {
+        if (SidepanelChatUI._resizeListenerAttached) return;
         this.textarea.addEventListener('input', () => this.updateTextareaHeight());
+        SidepanelChatUI._resizeListenerAttached = true;
     }
 
     updateTextareaHeight() {
@@ -744,7 +749,8 @@ export class SidepanelChatUI extends ChatUI {
     }
     
     removeRegenerateButtons() {
-        const buttons = document.querySelectorAll('.regenerate-button');
+        // Scope to this tab's conversation only, not all tabs
+        const buttons = this.conversationDiv.querySelectorAll('.regenerate-button');
         buttons.forEach(button => {
             const parent = button.parentElement;
             button.remove();
@@ -754,9 +760,8 @@ export class SidepanelChatUI extends ChatUI {
 
     // Scroll Handling
     scrollIntoView() {
-        if (this.shouldScroll) {
-            this.scrollToElement.scrollIntoView(false);
-        }
+        if (!this.shouldScroll || !this.scrollToElement) return;
+        this.scrollToElement.scrollTop = this.scrollToElement.scrollHeight;
     }
 
     ensureContinueButton(messageElement, continueFunc) {
@@ -794,11 +799,15 @@ export class SidepanelChatUI extends ChatUI {
 
         const footer = new Footer(0, 0, false, () => false, regenHandler);
         footer.create(content);
+        this.scrollIntoView();
     }
 
     initScrollListener() {
-        if (!this.scrollListenerActive) {
-            window.addEventListener('wheel', this.handleScroll.bind(this));
+        if (!this.scrollListenerActive && this.scrollToElement) {
+            if (!this._handleScrollBound) {
+                this._handleScrollBound = this.handleScroll.bind(this);
+            }
+            this.scrollToElement.addEventListener('wheel', this._handleScrollBound);
             this.scrollListenerActive = true;
         }
         this.shouldScroll = true;
@@ -811,7 +820,7 @@ export class SidepanelChatUI extends ChatUI {
 
         const threshold = 100;
         const distanceFromBottom = Math.abs(
-            this.scrollToElement.scrollHeight - window.scrollY - window.innerHeight
+            this.scrollToElement.scrollHeight - this.scrollToElement.clientHeight - this.scrollToElement.scrollTop
         );
 
         if (!this.shouldScroll && event.deltaY > 0 && distanceFromBottom <= threshold) {
@@ -976,7 +985,11 @@ export class SidepanelChatUI extends ChatUI {
     }
 
     updateChatHeader(title) {
-        document.getElementById('conversation-title').textContent = title;
+        // Find the title element within this chatUI's conversation wrapper
+        const titleEl = this.conversationDiv.querySelector('.conversation-title');
+        if (titleEl) {
+            titleEl.textContent = title;
+        }
     }
 
     updateLastMessageModelName(actualModelName) {
@@ -1001,11 +1014,16 @@ export class SidepanelChatUI extends ChatUI {
     }
 
     getChatHeader() {
-        return document.getElementById('conversation-title');
+        return this.conversationDiv.querySelector('.conversation-title');
     }
 
     clearConversation() {
+        // Preserve the title wrapper when clearing
+        const titleWrapper = this.conversationDiv.querySelector('.title-wrapper');
         super.clearConversation();
+        if (titleWrapper) {
+            this.conversationDiv.prepend(titleWrapper);
+        }
         this.activeMessageDivs = null;
         this.updateChatHeader('conversation');
         this.setTextareaText('');
