@@ -24,7 +24,7 @@
 		"new-chat": {
 			"suggested_key": {
 				"default": "Ctrl+Shift+L",
-				"mac": "Command+Shift+L"
+				"mac": "Command+Shift+K"
 			},
 			"description": "Start new chat"
 		},
