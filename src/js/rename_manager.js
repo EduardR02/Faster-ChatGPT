@@ -139,8 +139,8 @@ export class SidepanelRenameManager extends StorageRenameManager {
     }
 
     autoRename(chatId, contentDiv) {
-        if (!this.stateManager.getSetting('auto_rename')) return;
-        this.renameSingleChat(chatId, contentDiv);
+        if (!this.stateManager.getSetting('auto_rename')) return null;
+        return this.renameSingleChat(chatId, contentDiv);
     }
 }
 

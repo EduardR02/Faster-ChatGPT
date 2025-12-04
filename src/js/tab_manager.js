@@ -107,7 +107,8 @@ export class TabManager {
             stateManager: this.createTabStateProxy(tabState),
             chatUI: chatUI,
             apiManager: this.apiManager,
-            chatStorage: this.chatStorage
+            chatStorage: this.chatStorage,
+            onTitleChange: (newTitle) => this.updateTabTitle(tabId, newTitle)
         });
 
         const tab = {

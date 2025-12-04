@@ -9,7 +9,8 @@ export class SidepanelController {
             stateManager,
             chatUI,
             apiManager,
-            chatStorage
+            chatStorage,
+            onTitleChange = null
         } = options;
 
         this.stateManager = stateManager;
@@ -19,7 +20,12 @@ export class SidepanelController {
         this.renameManager = new SidepanelRenameManager(chatStorage);
         this.arenaRatingManager = new ArenaRatingManager();
         this.arenaRatingManager.initDB();
-        this.chatCore = new SidepanelChatCore(chatStorage, stateManager, this.chatUI.getChatHeader());
+        this.chatCore = new SidepanelChatCore(
+            chatStorage,
+            stateManager,
+            this.chatUI.getChatHeader(),
+            onTitleChange
+        );
     }
 
     getContinueFunc(messageIndex, secondaryIndex = 0, modelKey = null) {

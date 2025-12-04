@@ -72,12 +72,13 @@ export class ChatCore {
 
 
 export class SidepanelChatCore extends ChatCore {
-    constructor(chatStorage, stateManager, chatHeader) {
+    constructor(chatStorage, stateManager, chatHeader, onTitleChange = null) {
         super(chatStorage);
         this.stateManager = stateManager;
         this.renameManager = new SidepanelRenameManager(chatStorage);
         this.continuedChatOptions = {};
         this.chatHeader = chatHeader;
+        this.onTitleChange = onTitleChange;
         this.tempMediaId = 0;
         this.pendingMedia = {};
         this.thinkingChat = null;
@@ -220,7 +221,19 @@ export class SidepanelChatCore extends ChatCore {
         ).then(res => {
             this.currentChat.chatId = res.chatId;
             if (shouldAutoRename) {
-                this.renameManager.autoRename(this.currentChat.chatId, this.chatHeader);
+                const renamePromise = this.renameManager.autoRename(this.currentChat.chatId, this.chatHeader);
+                if (renamePromise?.then) {
+                    renamePromise.then(result => {
+                        if (result?.newName) {
+                            this.currentChat.title = result.newName;
+                            if (this.onTitleChange) {
+                                this.onTitleChange(result.newName);
+                            }
+                        }
+                    }).catch(error => {
+                        console.warn('Auto-rename failed:', error);
+                    });
+                }
             }
         });
     }
