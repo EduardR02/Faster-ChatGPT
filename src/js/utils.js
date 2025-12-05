@@ -171,33 +171,17 @@ export function auto_resize_textfield_listener(element_id) {
 
 export function update_textfield_height(inputField) {
     if (!inputField) return;
-    inputField.style.height = 'auto'; // Reset height first
 
-    const topButtonArea = document.querySelector('.chatbox-button-container');
-    const topButtonHeight = topButtonArea ? topButtonArea.offsetHeight : 0;
+    inputField.style.height = 'auto';
+    inputField.style.height = inputField.scrollHeight + 'px';
 
-    // Get the container for bottom-left controls
-    const bottomLeftControls = document.querySelector('.textarea-bottom-left-controls');
-    let bottomOffset = 0;
+    // If max-height is limiting, clientHeight < scrollHeight
+    const needsScroll = inputField.scrollHeight > inputField.clientHeight + 2;
+    inputField.style.overflowY = needsScroll ? 'auto' : 'hidden';
 
-    if (bottomLeftControls) {
-        // Temporarily make visible if needed to measure accurately, then hide back if needed
-        // This is tricky if the sonnet button visibility logic runs separately.
-        // A simpler way is to check if *any* child is visible.
-        const isAnyControlVisible = Array.from(bottomLeftControls.children).some(
-            child => child.offsetParent !== null // Check if element is rendered
-        );
-
-        if (isAnyControlVisible) {
-             // Get the actual rendered height of the container
-             const controlsHeight = bottomLeftControls.offsetHeight;
-             bottomOffset = controlsHeight > 0 ? controlsHeight + 10 : 0; // Use container height + 10px padding
-        }
+    if (needsScroll) {
+        inputField.scrollTop = inputField.scrollHeight;
     }
-
-    // Use the larger of the top buttons height or the scroll height + bottom offset
-    const requiredHeight = Math.max(inputField.scrollHeight + bottomOffset, topButtonHeight);
-    inputField.style.height = requiredHeight + 'px';
 }
 
 

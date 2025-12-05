@@ -500,6 +500,7 @@ body {
   cursor: pointer;
   color: #d4d4d4;
   border-radius: 0.5rem;
+  width: auto; /* Override .unset-button width: 100% */
 }
 
 .unset-button.model-picker-toggle:hover {
@@ -1193,6 +1194,10 @@ p {
 
 .textarea-wrapper .std-input {
   border-radius: 0.75rem;
+  padding-bottom: 2.25rem; /* Space for bottom-left controls */
+  min-height: 5.5rem; /* Space for right + bottom buttons */
+  max-height: 50vh;
+  overflow-y: hidden; /* JS switches to auto when at max-height */
 }
 
 .std-input:focus {
@@ -1437,12 +1442,22 @@ p {
 /* Container for bottom-left controls */
 .textarea-bottom-left-controls {
   position: absolute;
-  bottom: 10px;
-  left: 10px; /* Base padding from the left edge */
+  bottom: 1px;
+  left: 1px;
+  right: 3rem; /* Extend full width minus right buttons */
+  padding: 8px;
   display: flex;
   align-items: center;
-  gap: 5px; /* Space between buttons when both visible */
+  justify-content: flex-start; /* Keep buttons left-aligned */
+  gap: 5px;
   z-index: 2;
+  background: #21252b; /* Match textarea background */
+  border-radius: 0 0 0 0.7rem; /* Match textarea bottom-left corner */
+  pointer-events: none; /* Let clicks through to textarea */
+}
+
+.textarea-bottom-left-controls > * {
+  pointer-events: auto; /* But buttons are clickable */
 }
 
 /* History tabs */
