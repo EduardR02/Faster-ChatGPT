@@ -389,10 +389,14 @@ class SidepanelApp {
     async handleNewSelection(text, url) {
         // Create new tab unless current is empty
         if (!this.tabManager.isCurrentTabEmpty()) {
-            this.tabManager.createTab({
+            const newTab = this.tabManager.createTab({
                 continueFunc: (index, secondaryIndex, modelChoice) =>
                     this.continueFromCurrent(index, secondaryIndex, modelChoice)
             });
+            if (!newTab) {
+                this.getActiveChatUI()?.addErrorMessage("Maximum tabs reached. Close a tab first.");
+                return;
+            }
         }
 
         const controller = this.getActiveController();
@@ -422,10 +426,14 @@ class SidepanelApp {
     handleNewChat() {
         // Create new tab only if current tab has content
         if (!this.tabManager.isCurrentTabEmpty()) {
-            this.tabManager.createTab({
+            const newTab = this.tabManager.createTab({
                 continueFunc: (index, secondaryIndex, modelChoice) =>
                     this.continueFromCurrent(index, secondaryIndex, modelChoice)
             });
+            if (!newTab) {
+                this.getActiveChatUI()?.addErrorMessage("Maximum tabs reached. Close a tab first.");
+                return;
+            }
         }
 
         const controller = this.getActiveController();
@@ -445,10 +453,14 @@ class SidepanelApp {
     async handleReconstructChat(options) {
         // Create new tab unless current is empty
         if (!this.tabManager.isCurrentTabEmpty()) {
-            this.tabManager.createTab({
+            const newTab = this.tabManager.createTab({
                 continueFunc: (index, secondaryIndex, modelChoice) =>
                     this.continueFromCurrent(index, secondaryIndex, modelChoice)
             });
+            if (!newTab) {
+                this.getActiveChatUI()?.addErrorMessage("Maximum tabs reached. Close a tab first.");
+                return;
+            }
         }
 
         const controller = this.getActiveController();
@@ -532,7 +544,14 @@ class SidepanelApp {
     async handlePopoutToggle() {
         const controller = this.getActiveController();
         const tabState = this.getActiveTabState();
+        const chatUI = this.getActiveChatUI();
         if (!controller || !tabState) return;
+
+        // Warn if multiple tabs would be lost
+        if (this.tabManager.getTabCount() > 1) {
+            chatUI?.addErrorMessage("Close other tabs before popping out (they would be lost).");
+            return;
+        }
 
         const index = Math.max(controller.chatCore.getLength() - 1, 0);
         const options = {

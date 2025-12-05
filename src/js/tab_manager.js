@@ -126,15 +126,11 @@ export class TabManager {
         // Create tab button
         this.renderTabButton(tab);
         // Ensure newly created tab is visible if tab bar overflows horizontally
-        if (this.tabBar) {
-            this.tabBar.scrollLeft = this.tabBar.scrollWidth;
-        }
+        this.tabBar.scrollLeft = this.tabBar.scrollWidth;
 
-        // Switch to new tab
-        this.switchTab(tabId);
-
-        // Initialize controller states
+        // Initialize controller states before switching (so onTabSwitch has valid state)
         controller.initStates('New Chat');
+        this.switchTab(tabId);
 
         return tab;
     }
@@ -208,6 +204,7 @@ export class TabManager {
 
     switchTab(tabId) {
         if (!this.tabs.has(tabId)) return;
+        if (tabId === this.activeTabId) return; // Already active, no-op
 
         const oldTabId = this.activeTabId;
 

@@ -1,3 +1,4 @@
 *.txt
 .DS_STORE
-.cursor/rules
+.cursor/*
+.claude/*
