@@ -10,7 +10,8 @@ export class SidepanelController {
             chatUI,
             apiManager,
             chatStorage,
-            onTitleChange = null
+            onTitleChange = null,
+            onChatIdChange = null
         } = options;
 
         this.stateManager = stateManager;
@@ -24,7 +25,8 @@ export class SidepanelController {
             chatStorage,
             stateManager,
             this.chatUI.getChatHeader(),
-            onTitleChange
+            onTitleChange,
+            onChatIdChange
         );
     }
 

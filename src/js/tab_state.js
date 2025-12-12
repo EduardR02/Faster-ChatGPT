@@ -307,21 +307,6 @@ export class TabState {
         this.continuedChatOptions = {};
     }
 
-    // ========== Serialization (for persistence) ==========
-
-    serialize() {
-        return {
-            id: this.id,
-            chatId: this.chatId
-        };
-    }
-
-    static deserialize(data, globalStateManager) {
-        const tabState = new TabState(globalStateManager, data.id);
-        tabState.chatId = data.chatId;
-        return tabState;
-    }
-
     // ========== Per-Tab Model Selection ==========
 
     getCurrentModel() {
@@ -350,10 +335,6 @@ export class TabState {
     // SidepanelApp will catch them via subscription and update the active tab
 
     // ========== Utility ==========
-
-    isEmpty() {
-        return !this.chatId;
-    }
 }
 
 export { CHAT_STATE, THINKING_STATE };

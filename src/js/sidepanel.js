@@ -19,6 +19,11 @@ class SidepanelApp {
 
         // Per-tab textarea content storage
         this.tabTextareaContent = new Map();
+        this.sharedUIInitialized = false;
+        this.openedForReconstruct = false;
+        this.startupAt = Date.now();
+        this.startupNewTabId = null;
+        this._markNextTabAsStartupNew = false;
 
         // Initialize TabManager
         this.tabManager = new TabManager({
@@ -44,23 +49,70 @@ class SidepanelApp {
             }
         });
 
-        // Create first tab before setting up event listeners that might use it
-        this.initFirstTab();
         this.initEventListeners();
+
+        this.stateManager.runOnReady(() => {
+            void this.bootstrapTabs();
+        });
     }
 
-    initFirstTab() {
-        // Create the first tab
+    ensureSharedUIInitialized() {
+        if (this.sharedUIInitialized) return;
+        const chatUI = this.getActiveChatUI();
+        if (!chatUI) return;
+        this.initSharedUI(chatUI);
+        this.sharedUIInitialized = true;
+        this.initIncognitoToggle();
+    }
+
+    ensureActiveTab() {
+        if (this.getActiveController()) return;
+
+        // If tabs exist but none is active, activate the first one
+        const existingTabs = this.tabManager.getAllTabs();
+        if (existingTabs.length > 0) {
+            this.tabManager.switchTab(existingTabs[0].id);
+            this.ensureSharedUIInitialized();
+            return;
+        }
+
+        // No tabs exist, create a new one
         const tab = this.tabManager.createTab({
             continueFunc: (index, secondaryIndex, modelChoice) =>
                 this.continueFromCurrent(index, secondaryIndex, modelChoice)
         });
-
-        if (tab) {
-            // Initialize shared UI elements only once (on first tab)
-            // These set up listeners on shared buttons (model picker, thinking toggle, etc.)
-            this.initSharedUI(tab.chatUI);
+        if (tab && this._markNextTabAsStartupNew) {
+            this.startupNewTabId = tab.id;
         }
+        if (tab) this.ensureSharedUIInitialized();
+    }
+
+    async bootstrapTabs() {
+        await this.tabManager.restorePersistedTabs();
+
+        if (!this.openedForReconstruct) {
+            this._markNextTabAsStartupNew = true;
+        }
+        this.ensureActiveTab();
+        this._markNextTabAsStartupNew = false;
+    }
+
+    isTabReallyEmpty(tabId) {
+        const tab = this.tabManager.getAllTabs().find(t => t.id === tabId);
+        if (!tab) return false;
+
+        const chatCore = tab.controller?.chatCore;
+        const hasMessages = chatCore?.hasChatStarted?.() || false;
+        const hasPendingMedia = Object.keys(chatCore?.pendingMedia || {}).length > 0;
+        const hasChatId = !!(chatCore?.getChatId?.() || tab.tabState?.chatId);
+
+        const activeTab = this.getActiveTab();
+        const textareaText = activeTab?.id === tabId
+            ? (document.getElementById('textInput')?.value || '')
+            : (this.tabTextareaContent.get(tabId) || '');
+        const hasText = textareaText.trim().length > 0;
+
+        return !hasMessages && !hasText && !hasPendingMedia && !hasChatId;
     }
 
     initSharedUI(chatUI) {
@@ -234,16 +286,19 @@ class SidepanelApp {
         // Update sonnet thinking toggle (reason button) for this tab's state
         const sonnetThinkButton = document.getElementById('sonnet-thinking-toggle');
         if (sonnetThinkButton && newTab.tabState) {
-            sonnetThinkButton.classList.toggle('active', newTab.tabState.getShouldThink());
+            const model = newTab.tabState.getCurrentModel() || '';
+            const hasReasoningLevels = /o\d/.test(model) || model.includes('gpt-5') ||
+                (/gemini-[3-9]\.?\d*|gemini-\d{2,}/.test(model) && !(model.includes('gemini') && model.includes('image')));
             const reasoningLabel = sonnetThinkButton.querySelector('.reasoning-label');
-            if (reasoningLabel) {
-                const model = newTab.tabState.getCurrentModel() || '';
-                const hasReasoningLevels = /o\d/.test(model) || model.includes('gpt-5') ||
-                    (/gemini-[3-9]\.?\d*|gemini-\d{2,}/.test(model) && !(model.includes('gemini') && model.includes('image')));
-                if (hasReasoningLevels) {
-                    reasoningLabel.textContent = newTab.tabState.getReasoningEffort();
-                    sonnetThinkButton.classList.add('active');
-                }
+
+            if (hasReasoningLevels) {
+                // Reasoning-level models: always active, show effort level
+                sonnetThinkButton.classList.add('active');
+                if (reasoningLabel) reasoningLabel.textContent = newTab.tabState.getReasoningEffort();
+            } else {
+                // Other models: toggle based on shouldThink, clear label
+                sonnetThinkButton.classList.toggle('active', newTab.tabState.getShouldThink());
+                if (reasoningLabel) reasoningLabel.textContent = '';
             }
         }
 
@@ -376,17 +431,16 @@ class SidepanelApp {
     }
 
     handleChatRenamed(chatId, title) {
-        // Find the tab with this chatId and update its title
-        for (const tab of this.tabManager.getAllTabs()) {
-            if (String(tab.controller.chatCore.getChatId()) === String(chatId)) {
-                tab.controller.chatCore.miscUpdate({ title });
-                this.tabManager.updateTabTitle(tab.id, title);
-                break;
-            }
+        const tab = this.tabManager.findTabByChatId(chatId);
+        if (tab) {
+            tab.controller.chatCore.miscUpdate({ title });
+            this.tabManager.updateTabTitle(tab.id, title);
         }
     }
 
     async handleNewSelection(text, url) {
+        this.ensureActiveTab();
+
         // Create new tab unless current is empty
         if (!this.tabManager.isCurrentTabEmpty()) {
             const newTab = this.tabManager.createTab({
@@ -401,7 +455,10 @@ class SidepanelApp {
 
         const controller = this.getActiveController();
         const chatUI = this.getActiveChatUI();
+        const tabState = this.getActiveTabState();
         if (!controller || !chatUI) return;
+
+        if (tabState) tabState.chatId = null;
 
         this.stateManager.subscribeToChatReset("chat", () => this.handleNewSelection(text, url));
         const hostname = new URL(url).hostname;
@@ -424,6 +481,8 @@ class SidepanelApp {
     }
 
     handleNewChat() {
+        this.ensureActiveTab();
+
         // Create new tab only if current tab has content
         if (!this.tabManager.isCurrentTabEmpty()) {
             const newTab = this.tabManager.createTab({
@@ -438,9 +497,11 @@ class SidepanelApp {
 
         const controller = this.getActiveController();
         const chatUI = this.getActiveChatUI();
-        if (!controller || !chatUI) return;
+        const tabState = this.getActiveTabState();
+        if (!controller || !chatUI || !tabState) return;
 
         this.stateManager.subscribeToChatReset("chat", () => this.handleNewChat());
+        tabState.chatId = null;
         controller.initStates("New Chat");
         chatUI.clearConversation();
 
@@ -451,15 +512,48 @@ class SidepanelApp {
     }
 
     async handleReconstructChat(options) {
-        // Create new tab unless current is empty
-        if (!this.tabManager.isCurrentTabEmpty()) {
-            const newTab = this.tabManager.createTab({
-                continueFunc: (index, secondaryIndex, modelChoice) =>
-                    this.continueFromCurrent(index, secondaryIndex, modelChoice)
-            });
-            if (!newTab) {
-                this.getActiveChatUI()?.addErrorMessage("Maximum tabs reached. Close a tab first.");
-                return;
+        this.openedForReconstruct = true;
+        this.ensureActiveTab();
+
+        if (options?.chatId) {
+            const existing = this.tabManager.findTabByChatId(options.chatId);
+            if (existing) {
+                // Tab already open with this chat - just switch to it
+                const maybeCloseStartupNewTab =
+                    this.startupNewTabId &&
+                    this.startupNewTabId !== existing.id &&
+                    Date.now() - this.startupAt < 2000 &&
+                    this.isTabReallyEmpty(this.startupNewTabId);
+
+                this.tabManager.switchTab(existing.id);
+
+                if (maybeCloseStartupNewTab) {
+                    this.tabManager.closeTab(this.startupNewTabId);
+                    this.startupNewTabId = null;
+                }
+                return; // Don't rebuild - tab already has the chat loaded
+            }
+            if (!this.tabManager.isCurrentTabEmpty()) {
+                const newTab = this.tabManager.createTab({
+                    continueFunc: (index, secondaryIndex, modelChoice) =>
+                        this.continueFromCurrent(index, secondaryIndex, modelChoice)
+                });
+                if (!newTab) {
+                    this.getActiveChatUI()?.addErrorMessage("Maximum tabs reached. Close a tab first.");
+                    return;
+                }
+            }
+        } else {
+            // Create new tab unless current is empty
+            if (!this.tabManager.isCurrentTabEmpty()) {
+                const newTab = this.tabManager.createTab({
+                    continueFunc: (index, secondaryIndex, modelChoice) =>
+                        this.continueFromCurrent(index, secondaryIndex, modelChoice)
+                });
+                if (!newTab) {
+                    this.getActiveChatUI()?.addErrorMessage("Maximum tabs reached. Close a tab first.");
+                    return;
+                }
             }
         }
 
@@ -470,6 +564,7 @@ class SidepanelApp {
         if (!controller || !chatUI || !tabState) return;
 
         const newChatName = options.chatId ? "Continued Chat" : "New Chat";
+        if (!options.chatId) tabState.chatId = null;
         controller.initStates(newChatName);
         tabState.isSidePanel = options.isSidePanel === false ? false : true;
 
@@ -481,9 +576,11 @@ class SidepanelApp {
 
         let lastMessage = null;
         if (options.chatId) {
+            const normalizedChatId = Number(options.chatId);
+
             const messageLimit = options.index !== undefined ? options.index + 1 : null;
-            const chat = await this.chatStorage.loadChat(options.chatId, messageLimit);
-            const fullChatLength = await this.chatStorage.getChatLength(options.chatId);
+            const chat = await this.chatStorage.loadChat(normalizedChatId, messageLimit);
+            const fullChatLength = await this.chatStorage.getChatLength(normalizedChatId);
             lastMessage = chat.messages.at(-1);
             const secondaryLength = lastMessage?.contents
                 ? lastMessage.contents.length
@@ -492,6 +589,11 @@ class SidepanelApp {
             controller.chatCore.buildFromDB(chat, null, options.secondaryIndex, options.modelChoice);
             chatUI.updateIncognito(controller.chatCore.hasChatStarted());
             chatUI.buildChat(controller.chatCore.getChat());
+            if (tab?.container) {
+                requestAnimationFrame(() => {
+                    tab.container.scrollTop = tab.container.scrollHeight;
+                });
+            }
 
             const continueOptions = {
                 fullChatLength,
@@ -509,7 +611,8 @@ class SidepanelApp {
             }
 
             // Store chatId in tabState for persistence
-            tabState.chatId = options.chatId;
+            tabState.chatId = normalizedChatId;
+            this.tabManager.schedulePersist();
         }
 
         if (options.systemPrompt) controller.chatCore.insertSystemMessage(options.systemPrompt);
@@ -547,10 +650,22 @@ class SidepanelApp {
         const chatUI = this.getActiveChatUI();
         if (!controller || !tabState) return;
 
-        // Warn if multiple tabs would be lost
-        if (this.tabManager.getTabCount() > 1) {
-            chatUI?.addErrorMessage("Close other tabs before popping out (they would be lost).");
-            return;
+        // Warn if tabs would be lost
+        const tabCount = this.tabManager.getTabCount();
+        if (tabCount > 1) {
+            const persistenceEnabled = this.stateManager.getSetting('persist_tabs') !== false;
+            if (!persistenceEnabled) {
+                chatUI?.addErrorMessage("Close other tabs before popping out (they would be lost).");
+                return;
+            }
+            // Even with persistence, unsaved tabs (no chatId) will be lost
+            const currentTabId = this.getActiveTab()?.id;
+            const unsavedCount = this.tabManager.getAllTabs()
+                .filter(t => t.id !== currentTabId && !this.tabManager.getTabChatId(t)).length;
+            if (unsavedCount > 0) {
+                chatUI?.addErrorMessage(`Close ${unsavedCount} unsaved tab(s) before popping out (drafts aren't persisted).`);
+                return;
+            }
         }
 
         const index = Math.max(controller.chatCore.getLength() - 1, 0);

@@ -72,13 +72,14 @@ export class ChatCore {
 
 
 export class SidepanelChatCore extends ChatCore {
-    constructor(chatStorage, stateManager, chatHeader, onTitleChange = null) {
+    constructor(chatStorage, stateManager, chatHeader, onTitleChange = null, onChatIdChange = null) {
         super(chatStorage);
         this.stateManager = stateManager;
         this.renameManager = new SidepanelRenameManager(chatStorage);
         this.continuedChatOptions = {};
         this.chatHeader = chatHeader;
         this.onTitleChange = onTitleChange;
+        this.onChatIdChange = onChatIdChange;
         this.tempMediaId = 0;
         this.pendingMedia = {};
         this.thinkingChat = null;
@@ -220,6 +221,13 @@ export class SidepanelChatCore extends ChatCore {
             bonus_options
         ).then(res => {
             this.currentChat.chatId = res.chatId;
+            if (this.onChatIdChange) {
+                try {
+                    this.onChatIdChange(res.chatId);
+                } catch (e) {
+                    console.warn('onChatIdChange callback failed:', e);
+                }
+            }
             if (shouldAutoRename) {
                 const renamePromise = this.renameManager.autoRename(this.currentChat.chatId, this.chatHeader);
                 if (renamePromise?.then) {

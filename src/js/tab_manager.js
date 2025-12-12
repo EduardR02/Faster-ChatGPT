@@ -6,11 +6,11 @@
 import { TabState } from './tab_state.js';
 import { SidepanelChatUI } from './chat_ui.js';
 import { SidepanelController } from './sidepanel_controller.js';
-import { SidepanelChatCore } from './chat_core.js';
 import { createElementWithClass } from './utils.js';
 
 const STORAGE_KEY = 'sidekick_open_tabs';
 const MAX_TABS = 20;
+const PERSIST_DEBOUNCE_MS = 250;
 
 export class TabManager {
     constructor(options) {
@@ -36,8 +36,12 @@ export class TabManager {
         this.activeTabId = null;
         this.tabOrder = [];
         this.defaultContinueFunc = null;
+        this._persistTimer = null;
+        this._persistDirty = false;
+        this._isRestoring = false;
 
         this.initTabBar();
+        this.initPersistence();
     }
 
     setDefaultContinueFunc(func) {
@@ -54,6 +58,22 @@ export class TabManager {
         this.tabBarContainer.appendChild(this.tabBar);
     }
 
+    initPersistence() {
+        if (this.globalState?.subscribeToSetting) {
+            this.globalState.subscribeToSetting('persist_tabs', (enabled) => {
+                if (enabled === false) {
+                    void this.clearPersistedTabs();
+                } else {
+                    this.schedulePersist();
+                }
+            });
+        }
+
+        window.addEventListener('pagehide', () => {
+            void this.persistTabsNow();
+        });
+    }
+
     /**
      * Create a new tab with optional initial state
      */
@@ -62,6 +82,11 @@ export class TabManager {
             console.warn('Maximum tabs reached');
             return null;
         }
+
+        const {
+            activate = true,
+            initialTitle = 'New Chat'
+        } = options;
 
         const tabState = new TabState(this.globalState);
         const tabId = tabState.id;
@@ -108,7 +133,13 @@ export class TabManager {
             chatUI: chatUI,
             apiManager: this.apiManager,
             chatStorage: this.chatStorage,
-            onTitleChange: (newTitle) => this.updateTabTitle(tabId, newTitle)
+            onTitleChange: (newTitle) => this.updateTabTitle(tabId, newTitle),
+            onChatIdChange: (chatId) => {
+                const tab = this.tabs.get(tabId);
+                if (!tab) return;
+                tab.tabState.chatId = chatId;
+                this.schedulePersist();
+            }
         });
 
         const tab = {
@@ -117,7 +148,7 @@ export class TabManager {
             chatUI,
             controller,
             container,
-            title: 'New Chat'
+            title: initialTitle
         };
 
         this.tabs.set(tabId, tab);
@@ -129,8 +160,13 @@ export class TabManager {
         this.tabBar.scrollLeft = this.tabBar.scrollWidth;
 
         // Initialize controller states before switching (so onTabSwitch has valid state)
-        controller.initStates('New Chat');
-        this.switchTab(tabId);
+        controller.initStates(initialTitle);
+        this.updateTabTitle(tabId, initialTitle);
+        if (activate) {
+            this.switchTab(tabId);
+        }
+
+        this.schedulePersist();
 
         return tab;
     }
@@ -247,6 +283,8 @@ export class TabManager {
             this.onTabClose(tabId);
         }
 
+        this.schedulePersist();
+
         // If this was the active tab, switch to another
         if (this.activeTabId === tabId) {
             this.activeTabId = null;
@@ -300,8 +338,6 @@ export class TabManager {
         if (contentTitle) {
             contentTitle.textContent = tab.title;
         }
-
-        this.persistTabs();
     }
 
     /**
@@ -315,8 +351,9 @@ export class TabManager {
         const hasMessages = chatCore.hasChatStarted();
         const hasText = tab.chatUI.getTextareaText().trim().length > 0;
         const hasPendingMedia = Object.keys(chatCore.pendingMedia || {}).length > 0;
+        const hasAssociatedChat = !!(chatCore.getChatId() || tab.tabState.chatId);
 
-        return !hasMessages && !hasText && !hasPendingMedia;
+        return !hasMessages && !hasText && !hasPendingMedia && !hasAssociatedChat;
     }
 
     /**
@@ -349,75 +386,153 @@ export class TabManager {
 
     // ========== Persistence ==========
 
-    async persistTabs() {
-        const shouldPersist = await this.shouldPersistTabs();
-        if (!shouldPersist) return;
-
-        const data = {
-            activeTabId: this.activeTabId,
-            tabs: this.tabOrder.map(tabId => {
-                const tab = this.tabs.get(tabId);
-                return {
-                    id: tabId,
-                    chatId: tab.controller.chatCore.getChatId(),
-                    title: tab.title
-                };
-            }).filter(t => t.chatId) // Only persist tabs with saved chats
-        };
-
-        chrome.storage.local.set({ [STORAGE_KEY]: data });
+    isTabPersistenceEnabled() {
+        if (!this.globalState?.isReady) return false;
+        return this.globalState.getSetting('persist_tabs') !== false;
     }
 
-    async restoreTabs() {
-        const shouldPersist = await this.shouldPersistTabs();
-        if (!shouldPersist) {
-            this.createTab();
-            return;
+    getTabChatId(tab) {
+        return tab?.controller?.chatCore?.getChatId() ?? tab?.tabState?.chatId ?? null;
+    }
+
+    findTabByChatId(chatId) {
+        if (chatId == null) return null;
+        // Coerce to number for consistent comparison (DB uses numbers)
+        const targetId = Number(chatId);
+        if (!Number.isFinite(targetId)) return null;
+        for (const tab of this.tabs.values()) {
+            if (this.getTabChatId(tab) === targetId) return tab;
         }
+        return null;
+    }
 
-        const result = await chrome.storage.local.get([STORAGE_KEY]);
-        const data = result[STORAGE_KEY];
-
-        if (!data || !data.tabs || data.tabs.length === 0) {
-            this.createTab();
-            return;
-        }
-
-        // Restore tabs
-        for (const tabData of data.tabs) {
-            const tab = this.createTab();
-            if (tab && tabData.chatId) {
-                tab.tabState.chatId = tabData.chatId;
-                this.updateTabTitle(tab.id, tabData.title);
-                // Reconstruct chat will be called after by the app
+    buildPersistedState() {
+        const seen = new Set();
+        const chatIds = [];
+        for (const tabId of this.tabOrder) {
+            const chatId = this.getTabChatId(this.tabs.get(tabId));
+            if (chatId != null && !seen.has(chatId)) {
+                seen.add(chatId);
+                chatIds.push(chatId);
             }
         }
+        return { chatIds };
+    }
 
-        // Switch to previously active tab
-        if (data.activeTabId && this.tabs.has(data.activeTabId)) {
-            this.switchTab(data.activeTabId);
+    schedulePersist() {
+        if (this._isRestoring) return;
+        if (!this.isTabPersistenceEnabled()) return;
+
+        this._persistDirty = true;
+        if (this._persistTimer) return;
+
+        this._persistTimer = setTimeout(() => {
+            this._persistTimer = null;
+            void this.persistTabsNow();
+        }, PERSIST_DEBOUNCE_MS);
+    }
+
+    async persistTabsNow() {
+        if (this._persistTimer) {
+            clearTimeout(this._persistTimer);
+            this._persistTimer = null;
+        }
+        if (!this._persistDirty) return;
+        this._persistDirty = false;
+
+        if (!this.isTabPersistenceEnabled()) return;
+
+        const data = this.buildPersistedState();
+        if (!data.chatIds.length) {
+            await this.clearPersistedTabs();
+            return;
+        }
+        await chrome.storage.local.set({ [STORAGE_KEY]: data });
+    }
+
+    async clearPersistedTabs() {
+        if (this._persistTimer) {
+            clearTimeout(this._persistTimer);
+            this._persistTimer = null;
+        }
+        this._persistDirty = false;
+        await chrome.storage.local.remove([STORAGE_KEY]);
+    }
+
+    async restorePersistedTabs() {
+        if (!this.isTabPersistenceEnabled()) return;
+
+        this._isRestoring = true;
+        try {
+            const result = await chrome.storage.local.get([STORAGE_KEY]);
+            const chatIds = result[STORAGE_KEY]?.chatIds;
+            if (!Array.isArray(chatIds) || chatIds.length === 0) return;
+
+            // Get existing chatIds to avoid duplicates
+            const existing = new Set();
+            for (const tab of this.tabs.values()) {
+                const id = this.getTabChatId(tab);
+                if (id != null) existing.add(id);
+            }
+
+            // Filter to new chats only, respecting max tabs
+            const toRestore = [];
+            for (const chatId of chatIds) {
+                if (chatId == null || existing.has(chatId)) continue;
+                existing.add(chatId);
+                toRestore.push(chatId);
+                if (this.tabs.size + toRestore.length >= MAX_TABS) break;
+            }
+            if (toRestore.length === 0) return;
+
+            // Create tabs and load chats in parallel
+            const loadPromises = toRestore.map(chatId => {
+                const tab = this.createTab({ activate: false, initialTitle: 'Loading...' });
+                if (!tab) return Promise.resolve();
+                tab.tabState.chatId = chatId;
+                return this.loadChatIntoTab(tab.id, chatId).catch(() => {});
+            });
+
+            const tabCountAfterCreate = this.tabs.size;
+            await Promise.allSettled(loadPromises);
+
+            // Persist if any tabs were closed (failed to load) to prune stale chatIds
+            if (this.tabs.size < tabCountAfterCreate) {
+                this._persistDirty = true;
+            }
+        } catch (e) {
+            console.warn('Failed to restore tabs:', e);
+        } finally {
+            this._isRestoring = false;
+            if (this._persistDirty) {
+                void this.persistTabsNow();
+            }
         }
     }
 
-    async shouldPersistTabs() {
-        const result = await chrome.storage.local.get(['persist_tabs']);
-        return result.persist_tabs !== false; // Default to true
-    }
+    async loadChatIntoTab(tabId, chatId) {
+        const tab = this.tabs.get(tabId);
+        if (!tab) return;
 
-    async loadRestoredChats() {
-        for (const [tabId, tab] of this.tabs) {
-            if (tab.tabState.chatId) {
-                try {
-                    const chat = await this.chatStorage.loadChat(tab.tabState.chatId);
-                    if (chat) {
-                        tab.controller.chatCore.buildFromDB(chat);
-                        tab.chatUI.buildChat(tab.controller.chatCore.getChat());
-                        this.updateTabTitle(tabId, chat.title);
-                    }
-                } catch (e) {
-                    console.warn(`Failed to restore chat for tab ${tabId}:`, e);
+        try {
+            const chat = await this.chatStorage.loadChat(chatId);
+            if (!chat?.chatId || !this.tabs.has(tabId)) return;
+            if (tab.tabState.chatId !== chat.chatId) return; // Tab was reassigned
+
+            tab.controller.initStates(chat.title || 'Chat');
+            tab.controller.chatCore.buildFromDB(chat);
+            tab.chatUI.updateIncognito(tab.controller.chatCore.hasChatStarted());
+            tab.chatUI.buildChat(tab.controller.chatCore.getChat());
+            tab.tabState.chatId = chat.chatId;
+            this.updateTabTitle(tabId, chat.title || 'Chat');
+            requestAnimationFrame(() => {
+                if (this.tabs.has(tabId)) {
+                    tab.container.scrollTop = tab.container.scrollHeight;
                 }
-            }
+            });
+        } catch (e) {
+            console.warn(`Failed to restore chat ${chatId}:`, e);
+            if (this.tabs.has(tabId)) this.closeTab(tabId);
         }
     }
 
@@ -430,4 +545,6 @@ export class TabManager {
     getAllTabs() {
         return Array.from(this.tabs.values());
     }
+
+    // NOTE: no explicit cancel needed; restore applies only if tabState.chatId matches.
 }

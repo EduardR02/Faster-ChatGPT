@@ -27,7 +27,7 @@ class SettingsUI {
             },
             checkboxes: [
                 'show_model_name', 'close_on_deselect', 'stream_response',
-                'arena_mode', 'auto_rename', 'web_search'
+                'arena_mode', 'auto_rename', 'web_search', 'persist_tabs'
             ]
         };
 
@@ -103,7 +103,8 @@ class SettingsUI {
         });
 
         this.settingsConfig.checkboxes.forEach(id => {
-            document.getElementById(id).checked = this.stateManager.getSetting(id) || false;
+            const value = this.stateManager.getSetting(id);
+            document.getElementById(id).checked = id === 'persist_tabs' ? value !== false : !!value;
         });
 
         ['arena', 'rename'].forEach(mode => document.getElementById(`${mode}_select`).checked = false);
