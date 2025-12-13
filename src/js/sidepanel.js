@@ -577,9 +577,24 @@ class SidepanelApp {
         let lastMessage = null;
         if (options.chatId) {
             const normalizedChatId = Number(options.chatId);
+            if (!Number.isFinite(normalizedChatId)) {
+                chatUI?.addErrorMessage("Invalid chat ID");
+                return;
+            }
 
             const messageLimit = options.index !== undefined ? options.index + 1 : null;
-            const chat = await this.chatStorage.loadChat(normalizedChatId, messageLimit);
+            let chat;
+            try {
+                chat = await this.chatStorage.loadChat(normalizedChatId, messageLimit);
+            } catch (e) {
+                console.warn('Failed to load chat:', e);
+                chatUI?.addErrorMessage("Failed to load chat");
+                return;
+            }
+            if (!chat?.messages) {
+                chatUI?.addErrorMessage("Chat not found");
+                return;
+            }
             const fullChatLength = await this.chatStorage.getChatLength(normalizedChatId);
             lastMessage = chat.messages.at(-1);
             const secondaryLength = lastMessage?.contents

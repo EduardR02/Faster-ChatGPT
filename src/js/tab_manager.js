@@ -516,7 +516,8 @@ export class TabManager {
 
         try {
             const chat = await this.chatStorage.loadChat(chatId);
-            if (!chat?.chatId || !this.tabs.has(tabId)) return;
+            if (!this.tabs.has(tabId)) return; // Tab was closed during load
+            if (!chat?.chatId) throw new Error('Chat not found');
             if (tab.tabState.chatId !== chat.chatId) return; // Tab was reassigned
 
             tab.controller.initStates(chat.title || 'Chat');
