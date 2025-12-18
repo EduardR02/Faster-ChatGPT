@@ -8,6 +8,7 @@ const apiDisplayNames = {
     deepseek: 'DeepSeek',
     grok: 'Grok',
     kimi: 'Kimi',
+    mistral: 'Mistral',
     llamacpp: 'Llamacpp'
 };
 
@@ -18,6 +19,7 @@ class SettingsUI {
         this.apiProviders = Object.keys(apiDisplayNames);
         this.currentAPIProvider = this.apiProviders[0];
         this.dummyRowsOnInit = document.getElementsByClassName('models-dummy').length;
+        this.selectModes = ['arena', 'rename', 'transcription'];
 
         this.settingsConfig = {
             inputs: {
@@ -48,12 +50,14 @@ class SettingsUI {
         document.getElementById('button-model-provider-select').addEventListener('click', (e) => this.cycleAPIProvider(e.target));
         document.getElementById('button-add-model').addEventListener('click', () => this.addModel());
         document.getElementById('button-remove-models').addEventListener('click', () => this.removeModel());
+        this.initMicrophoneButton();
         
         // Mode toggles
         document.getElementById('arena_mode').addEventListener('change', () => this.handleModeToggle('arena'));
         document.getElementById('auto_rename').addEventListener('change', () => this.handleModeToggle('rename'));
         document.getElementById('arena_select').addEventListener('change', () => this.handleSelectToggle('arena'));
         document.getElementById('rename_select').addEventListener('change', () => this.handleSelectToggle('rename'));
+        document.getElementById('transcription_select').addEventListener('change', () => this.handleSelectToggle('transcription'));
 
         // Radio groups
         new Map([
@@ -97,6 +101,35 @@ class SettingsUI {
         this.updateModelCheckboxes();
     }
 
+    initMicrophoneButton() {
+        const button = document.getElementById('enable-microphone');
+        const span = button.querySelector('span');
+        const setText = (text) => span.textContent = `${text} `;
+
+        const updateFromState = async () => {
+            const status = await navigator.permissions.query({ name: 'microphone' }).catch(() => null);
+            if (status?.state === 'granted') setText('Microphone ✓');
+            else if (status?.state === 'denied') setText('Microphone Blocked');
+            else setText('Allow Microphone');
+        };
+
+        updateFromState();
+
+        button.addEventListener('click', async () => {
+            button.disabled = true;
+            setText('…');
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                stream.getTracks().forEach(t => t.stop());
+                setText('Microphone ✓');
+            } catch (error) {
+                setText(error?.name === 'NotAllowedError' ? 'Microphone Blocked' : 'Microphone Error');
+            } finally {
+                button.disabled = false;
+            }
+        });
+    }
+
     initInputValues() {
         Object.entries(this.settingsConfig.inputs).forEach(([id, { parser, default: def }]) => {
             document.getElementById(id).value = this.stateManager.getSetting(id) ?? def;
@@ -107,7 +140,7 @@ class SettingsUI {
             document.getElementById(id).checked = id === 'persist_tabs' ? value !== false : !!value;
         });
 
-        ['arena', 'rename'].forEach(mode => document.getElementById(`${mode}_select`).checked = false);
+        this.selectModes.forEach(mode => document.getElementById(`${mode}_select`).checked = false);
     }
 
     initModels() {
@@ -148,6 +181,9 @@ class SettingsUI {
             case 'rename':
                 this.stateManager.queueSettingChange('auto_rename_model', input.id);
                 break;
+            case 'transcription':
+                this.stateManager.queueSettingChange('transcription_model', input.id);
+                break;
             case 'normal':
                 this.stateManager.queueSettingChange('current_model', input.id);
                 break;
@@ -159,9 +195,7 @@ class SettingsUI {
         const selectToggle = document.getElementById(`${mode}_select`);
     
         if (isEnabled) {
-            selectToggle.checked = true;
-            const otherMode = mode === 'arena' ? 'rename' : 'arena';
-            document.getElementById(`${otherMode}_select`).checked = false;
+            this.setSelectMode(mode);
         }
     
         this.stateManager.queueSettingChange(
@@ -172,14 +206,23 @@ class SettingsUI {
         this.updateModelCheckboxes();
     }
     
+    setSelectMode(mode) {
+        this.selectModes.forEach(selectMode => {
+            const toggle = document.getElementById(`${selectMode}_select`);
+            if (toggle) toggle.checked = selectMode === mode;
+        });
+    }
+
     handleSelectToggle(mode) {
         const selectToggle = document.getElementById(`${mode}_select`);
-        
-        // If enabling this select, disable the other one
-        if (selectToggle.checked) {
-            const otherMode = mode === 'arena' ? 'rename' : 'arena';
-            document.getElementById(`${otherMode}_select`).checked = false;
-        }        
+        if (selectToggle?.checked) {
+            this.selectModes
+                .filter(other => other !== mode)
+                .forEach(other => {
+                    const otherToggle = document.getElementById(`${other}_select`);
+                    if (otherToggle) otherToggle.checked = false;
+                });
+        }
         this.updateModelCheckboxes();
     }
     
@@ -294,7 +337,7 @@ class SettingsUI {
         const currentMode = this.getCurrentMode();
     
         modelCheckboxes.forEach(input => {
-            input.classList.remove('arena-models', 'rename-model');
+            input.classList.remove('arena-models', 'rename-model', 'transcription-model');
     
             // Change input type based on mode
             const newType = currentMode === 'arena' ? 'checkbox' : 'radio';
@@ -309,13 +352,23 @@ class SettingsUI {
                 case 'rename':
                     input.classList.add('rename-model');
                     break;
+                case 'transcription':
+                    break;
             }
         });
         if (currentMode !== 'arena') {
-            const selectedModel = currentMode === 'rename' ? 
-                this.stateManager.getSetting('auto_rename_model') :
-                this.stateManager.getSetting('current_model');
-            const selectedInput = document.getElementById(selectedModel);
+            modelCheckboxes.forEach(input => {
+                input.checked = false;
+            });
+
+            const selectedModel =
+                currentMode === 'rename'
+                    ? (this.stateManager.getSetting('auto_rename_model') || this.stateManager.getSetting('current_model'))
+                : currentMode === 'transcription'
+                    ? this.stateManager.getSetting('transcription_model')
+                    : this.stateManager.getSetting('current_model');
+
+            const selectedInput = selectedModel ? document.getElementById(selectedModel) : null;
             if (selectedInput) selectedInput.checked = true;
         }
     }
@@ -323,6 +376,7 @@ class SettingsUI {
     getCurrentMode() {
         if (document.getElementById('arena_select').checked) return 'arena';
         if (document.getElementById('rename_select').checked) return 'rename';
+        if (document.getElementById('transcription_select').checked) return 'transcription';
         return 'normal';
     }
 

@@ -18,6 +18,15 @@ class SidepanelApp {
         this.startupNewTabId = null;
         this._markNextTabAsStartupNew = false;
 
+        this.voice = {
+            recorder: null,
+            stream: null,
+            chunks: [],
+            recordingTabId: null,
+            mimeType: null,
+            busy: false,
+        };
+
         // Initialize TabManager
         this.tabManager = new TabManager({
             globalState: this.stateManager,
@@ -26,7 +35,7 @@ class SidepanelApp {
             tabBarContainer: document.getElementById('tab-bar-container'),
             tabContentContainer: document.getElementById('tab-content-area'),
             onTabSwitch: (newTab, oldTabId) => this.handleTabSwitch(newTab, oldTabId),
-            onTabClose: (tabId) => this.tabTextareaContent.delete(tabId)
+            onTabClose: (tabId) => this.handleTabClose(tabId)
         });
 
         // Set default continueFunc for tabs created via + button
@@ -192,6 +201,7 @@ class SidepanelApp {
         this.initArenaToggleButton();
         this.initThinkingModeButton();
         this.initFooterButtons();
+        this.initVoiceTranscription();
         this.initTextareaImageHandling();
         this.setupMessageListeners();
         this.stateManager.subscribeToChatReset("chat", () => this.handleNewChat());
@@ -255,6 +265,10 @@ class SidepanelApp {
         // Save/restore textarea content
         if (oldTabId && oldTabId !== newTab.id) {
             this.tabTextareaContent.set(oldTabId, textarea.value || '');
+
+            if (this.voice.recorder?.state === 'recording' && this.voice.recordingTabId === oldTabId) {
+                void this.stopRecordingAndTranscribe();
+            }
         }
         textarea.value = this.tabTextareaContent.get(newTab.id) ?? '';
         update_textfield_height(textarea);
@@ -314,6 +328,13 @@ class SidepanelApp {
         }
     }
 
+    handleTabClose(tabId) {
+        if (this.voice.recorder?.state === 'recording' && this.voice.recordingTabId === tabId) {
+            void this.stopVoiceRecording();
+        }
+        this.tabTextareaContent.delete(tabId);
+    }
+
     // ========== Toggle Buttons ==========
 
     initArenaToggleButton() {
@@ -343,6 +364,150 @@ class SidepanelApp {
                 button.classList.toggle('thinking-mode-on', tabState.pendingThinkingMode);
             }
         });
+    }
+
+    // ========== Voice Transcription ==========
+
+    initVoiceTranscription() {
+        const button = document.getElementById('voice-transcribe-toggle');
+        if (!button) return;
+
+        const updateButton = () => {
+            const isRecording = this.voice.recorder?.state === 'recording';
+            button.classList.toggle('recording', isRecording);
+            button.classList.toggle('busy', !!this.voice.busy);
+        };
+
+        button.addEventListener('click', () => {
+            if (this.voice.busy) return;
+            if (this.voice.recorder?.state === 'recording') {
+                void this.stopRecordingAndTranscribe();
+            } else {
+                void this.startVoiceRecording();
+            }
+            updateButton();
+        });
+
+        this._updateVoiceButton = updateButton;
+        updateButton();
+    }
+
+    getPreferredAudioMimeType() {
+        return ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg']
+            .find(t => MediaRecorder?.isTypeSupported?.(t)) || '';
+    }
+
+    async startVoiceRecording() {
+        if (this.voice.recorder?.state === 'recording') return;
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const mimeType = this.getPreferredAudioMimeType();
+            const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+
+            this.voice.stream = stream;
+            this.voice.mimeType = recorder.mimeType || mimeType || 'audio/webm';
+            this.voice.recorder = recorder;
+            this.voice.chunks = [];
+            this.voice.recordingTabId = this.getActiveTab()?.id ?? null;
+
+            recorder.addEventListener('dataavailable', (event) => {
+                if (event.data?.size > 0) this.voice.chunks.push(event.data);
+            });
+
+            recorder.start();
+        } catch (error) {
+            const msg = error?.name === 'NotAllowedError'
+                ? 'Microphone permission denied. Open settings → Microphone access → Enable microphone.'
+                : this.apiManager.getUiErrorMessage(error, { prefix: 'Microphone error' });
+            this.getActiveChatUI()?.addErrorMessage(msg);
+            this.cleanupVoiceRecorder();
+        } finally {
+            this._updateVoiceButton?.();
+        }
+    }
+
+    cleanupVoiceRecorder() {
+        this.voice.recorder = null;
+        this.voice.chunks = [];
+        this.voice.mimeType = null;
+        this.voice.recordingTabId = null;
+
+        if (this.voice.stream) {
+            this.voice.stream.getTracks().forEach(track => track.stop());
+            this.voice.stream = null;
+        }
+        this._updateVoiceButton?.();
+    }
+
+    async stopVoiceRecording() {
+        const recorder = this.voice.recorder;
+        if (!recorder) return null;
+
+        const stopped = new Promise(resolve => recorder.addEventListener('stop', resolve, { once: true }));
+        recorder.stop();
+        await stopped;
+
+        const blob = new Blob(this.voice.chunks, { type: this.voice.mimeType || 'audio/webm' });
+        this.cleanupVoiceRecorder();
+        return blob;
+    }
+
+    async stopRecordingAndTranscribe() {
+        const tabId = this.voice.recordingTabId;
+        const audioBlob = await this.stopVoiceRecording();
+        if (!audioBlob || audioBlob.size === 0) return;
+
+        const model = this.stateManager.getSetting('transcription_model');
+        if (!model) {
+            this.getActiveChatUI()?.addErrorMessage('Select a transcription model in settings first.');
+            return;
+        }
+
+        this.voice.busy = true;
+        this._updateVoiceButton?.();
+
+        try {
+            const ext = ['ogg', 'webm', 'wav'].find(e => audioBlob.type.includes(e)) || 'webm';
+            const text = await this.apiManager.transcribeAudio(model, audioBlob, { filename: `audio.${ext}` });
+            if (text) this.applyTranscriptionText(tabId, text);
+        } catch (error) {
+            this.getActiveChatUI()?.addErrorMessage(this.apiManager.getUiErrorMessage(error, { prefix: 'Transcription error' }));
+        } finally {
+            this.voice.busy = false;
+            this._updateVoiceButton?.();
+        }
+    }
+
+    applyTranscriptionText(tabId, text) {
+        const cleaned = String(text || '').trim();
+        if (!cleaned) return;
+
+        if (this.getActiveTab()?.id === tabId) {
+            this.insertTextAtCursor(document.getElementById('textInput'), cleaned);
+            return;
+        }
+        if (!tabId) return;
+        const existing = this.tabTextareaContent.get(tabId) || '';
+        this.tabTextareaContent.set(tabId, existing ? `${existing}\n${cleaned}` : cleaned);
+    }
+
+    insertTextAtCursor(textarea, text) {
+        const start = textarea.selectionStart ?? textarea.value.length;
+        const end = textarea.selectionEnd ?? textarea.value.length;
+
+        const before = textarea.value.slice(0, start);
+        const after = textarea.value.slice(end);
+
+        const needsSpaceBefore = before.length > 0 && !/\s$/.test(before) && text.length > 0 && !/^\s/.test(text);
+        const insertion = `${needsSpaceBefore ? ' ' : ''}${text}`;
+
+        textarea.value = `${before}${insertion}${after}`;
+        const cursor = before.length + insertion.length;
+        textarea.selectionStart = cursor;
+        textarea.selectionEnd = cursor;
+        update_textfield_height(textarea);
+        textarea.focus();
     }
 
     // ========== Footer Buttons ==========

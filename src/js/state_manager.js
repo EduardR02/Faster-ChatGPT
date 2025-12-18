@@ -116,7 +116,7 @@ export class SettingsStateManager extends SettingsManager {
     constructor() {
         super(['api_keys', 'max_tokens', 'temperature', 'loop_threshold', 'current_model', 'close_on_deselect', 'show_model_name',
             'stream_response', 'arena_mode', 'arena_models', 'auto_rename', 'auto_rename_model', 'models', 'reasoning_effort', 'web_search',
-            'persist_tabs'
+            'persist_tabs', 'transcription_model'
         ]);
 
         this.tempState = {
@@ -218,6 +218,11 @@ export class SettingsStateManager extends SettingsManager {
             delete this.pendingChanges.auto_rename_model;
             delete this.pendingChanges.auto_rename;
         }
+
+        if (super.getSetting('transcription_model') === apiName) {
+            updates.transcription_model = null;
+            delete this.pendingChanges.transcription_model;
+        }
         
         const arenaModels = super.getSetting('arena_models');
         if (arenaModels?.includes(apiName)) {
@@ -238,6 +243,10 @@ export class SettingsStateManager extends SettingsManager {
         // clear it so UI falls back to the persisted current_model (or the update above if persisted was removed).
         if (this.pendingChanges.current_model === apiName) {
             delete this.pendingChanges.current_model;
+        }
+
+        if (this.pendingChanges.transcription_model === apiName) {
+            delete this.pendingChanges.transcription_model;
         }
 
         if (Object.keys(updates).length > 0) {
@@ -367,7 +376,7 @@ export class HistoryStateManager extends ArenaStateManager {
 
 export class SidepanelStateManager extends ArenaStateManager {
     constructor(requestedPrompt) {
-        super(['loop_threshold', 'current_model', 'arena_models', 'stream_response', 'arena_mode', 'show_model_name', 'models', 'web_search', 'reasoning_effort', 'persist_tabs']);
+        super(['loop_threshold', 'current_model', 'arena_models', 'stream_response', 'arena_mode', 'show_model_name', 'models', 'web_search', 'reasoning_effort', 'persist_tabs', 'transcription_model']);
 
         // Additional state
         this.state = {

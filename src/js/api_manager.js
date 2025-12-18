@@ -22,6 +22,106 @@ export class ApiManager {
         return model.includes('image') || model.includes('imagen');
     }
 
+    async transcribeAudio(model, audioBlob, options = {}) {
+        if (!model) {
+            throw new Error('Transcription model is not set.');
+        }
+
+        const provider = this.getProviderForModel(model);
+        const apiKeys = this.settingsManager.getSetting('api_keys') || {};
+
+        if (provider === 'llamacpp') {
+            throw new Error('Transcription is not supported for local models.');
+        }
+
+        if (!apiKeys[provider]?.trim()) {
+            throw new Error(`${provider} API key is empty, enter a key in the settings.`);
+        }
+
+        const [apiLink, requestOptions] = this.createTranscriptionRequest(provider, model, audioBlob, apiKeys[provider], options);
+
+        const abortController = new AbortController();
+        requestOptions.signal = abortController.signal;
+        const timeoutId = setTimeout(() => abortController.abort(), 60000);
+
+        try {
+            const response = await fetch(apiLink, requestOptions);
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                const errorDetail = await this.readErrorResponse(response);
+                throw this.createApiError('Transcription failed', {
+                    model,
+                    provider,
+                    status: response.status,
+                    statusText: response.statusText,
+                    detail: errorDetail
+                });
+            }
+
+            const data = await response.json();
+            return (data?.text || '').trim();
+        } catch (error) {
+            clearTimeout(timeoutId);
+            if (error?.name === 'AbortError') {
+                throw this.createApiError('Transcription aborted', {
+                    model,
+                    provider,
+                    detail: 'Timed out after 60 seconds'
+                });
+            }
+            if (error?.isDetailedApiError) {
+                throw error;
+            }
+            throw this.createApiError('Transcription error', {
+                model,
+                provider,
+                detail: error
+            });
+        }
+    }
+
+    createTranscriptionRequest(provider, model, audioBlob, apiKey, options = {}) {
+        switch (provider) {
+            case 'mistral':
+                return this.createMistralTranscriptionRequest(model, audioBlob, apiKey, options);
+            case 'openai':
+                return this.createOpenAITranscriptionRequest(model, audioBlob, apiKey, options);
+            default:
+                throw new Error(`Transcription not supported for provider: ${provider}`);
+        }
+    }
+
+    createMistralTranscriptionRequest(model, audioBlob, apiKey, options = {}) {
+        const filename = options.filename || 'audio.webm';
+        const form = new FormData();
+        form.append('model', model);
+        form.append('file', audioBlob, filename);
+        if (options.language) form.append('language', options.language);
+
+        return ['https://api.mistral.ai/v1/audio/transcriptions', {
+            method: 'POST',
+            credentials: 'omit',
+            headers: { 'Authorization': `Bearer ${apiKey}` },
+            body: form
+        }];
+    }
+
+    createOpenAITranscriptionRequest(model, audioBlob, apiKey, options = {}) {
+        const filename = options.filename || 'audio.webm';
+        const form = new FormData();
+        form.append('model', model);
+        form.append('file', audioBlob, filename);
+        if (options.language) form.append('language', options.language);
+
+        return ['https://api.openai.com/v1/audio/transcriptions', {
+            method: 'POST',
+            credentials: 'omit',
+            headers: { 'Authorization': `Bearer ${apiKey}` },
+            body: form
+        }];
+    }
+
     async callApi(model, messages, tokenCounter, streamWriter = null, abortController = null, options = {}) {
         const provider = this.getProviderForModel(model);
         const apiKeys = this.settingsManager.getSetting('api_keys') || {};
@@ -282,6 +382,8 @@ export class ApiManager {
                 return this.createGrokRequest(model, messages, streamResponse, streamWriter, apiKeys.grok, options);
             case 'kimi':
                 return this.createKimiRequest(model, messages, streamResponse, streamWriter, apiKeys.kimi, options);
+            case 'mistral':
+                return this.createMistralRequest(model, messages, streamResponse, streamWriter, apiKeys.mistral, options);
             case 'llamacpp':
                 return this.createLlamaCppRequest(model, messages, streamResponse, streamWriter, options.localModelOverride);
             default:
@@ -441,6 +543,10 @@ export class ApiManager {
     }
 
     formatMessagesForKimi(messages) {
+        return messages.map(msg => ({ role: msg.role, content: this.extractTextContent(msg) }));
+    }
+
+    formatMessagesForMistral(messages) {
         return messages.map(msg => ({ role: msg.role, content: this.extractTextContent(msg) }));
     }
 
@@ -703,6 +809,26 @@ export class ApiManager {
         }];
     }
 
+    createMistralRequest(model, messages, streamResponse, streamWriter, apiKey) {
+        const maxTokens = Math.min(
+            this.settingsManager.getSetting('max_tokens'),
+            MaxTokens.mistral
+        );
+
+        return ['https://api.mistral.ai/v1/chat/completions', {
+            method: 'POST',
+            credentials: 'omit',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify({
+                model,
+                messages: this.formatMessagesForMistral(messages),
+                max_tokens: maxTokens,
+                temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.mistral),
+                stream: streamResponse
+            })
+        }];
+    }
+
     createLlamaCppRequest(model, messages, streamResponse, streamWriter, override = null) {
         const configuration = override || { raw: model, port: this.localServerPort || 8000 };
         const { raw: modelId, port } = configuration;
@@ -771,6 +897,8 @@ export class ApiManager {
                 return this.handleGrokNonStreamResponse(data, tokenCounter);
             case 'kimi':
                 return this.handleKimiNonStreamResponse(data, tokenCounter);
+            case 'mistral':
+                return this.handleMistralNonStreamResponse(data, tokenCounter);
             case 'llamacpp':
                 return this.handleLlamaCppNonStreamResponse(data, tokenCounter);
             default:
@@ -851,6 +979,41 @@ export class ApiManager {
         const message = data.choices[0].message;
         const thoughts = message.reasoning_content ? [message.reasoning_content] : [];
         return this.returnMessage([message.content], thoughts);
+    }
+
+    handleMistralNonStreamResponse(data, tokenCounter) {
+        if (data?.usage) {
+            tokenCounter.update(data.usage.prompt_tokens, data.usage.completion_tokens);
+        }
+
+        const message = data?.choices?.[0]?.message;
+        const { textParts, thoughtParts } = this.parseMistralContentChunks(message?.content);
+        return this.returnMessage(textParts.length ? textParts : [''], thoughtParts);
+    }
+
+    parseMistralContentChunks(content) {
+        if (typeof content === 'string') return { textParts: [content], thoughtParts: [] };
+        if (!Array.isArray(content)) return { textParts: [], thoughtParts: [] };
+
+        const textParts = [];
+        const thoughtParts = [];
+
+        content.forEach(chunk => {
+            if (!chunk || typeof chunk !== 'object') return;
+            if (chunk.type === 'text' && typeof chunk.text === 'string') {
+                textParts.push(chunk.text);
+                return;
+            }
+            if (chunk.type === 'thinking' && Array.isArray(chunk.thinking)) {
+                chunk.thinking.forEach(item => {
+                    if (item?.type === 'text' && typeof item.text === 'string') {
+                        thoughtParts.push(item.text);
+                    }
+                });
+            }
+        });
+
+        return { textParts, thoughtParts };
     }
 
     async handleLlamaCppNonStreamResponse(data, tokenCounter) {
@@ -1108,6 +1271,9 @@ export class ApiManager {
             case 'kimi':
                 this.handleKimiStreamData(parsed, tokenCounter, streamWriter);
                 break;
+            case 'mistral':
+                this.handleMistralStreamData(parsed, tokenCounter, streamWriter);
+                break;
             case 'llamacpp':
                 this.handleLlamaCppStreamData(parsed, tokenCounter, streamWriter);
                 break;
@@ -1264,6 +1430,40 @@ export class ApiManager {
         }
     }
 
+    handleMistralStreamData(parsed, tokenCounter, streamWriter) {
+        const chunk = parsed?.data ?? parsed;
+        const usage = chunk?.usage;
+        if (usage && streamWriter && !streamWriter._mistralUsageUpdated) {
+            tokenCounter.update(usage.prompt_tokens, usage.completion_tokens);
+            streamWriter._mistralUsageUpdated = true;
+        }
+
+        const delta = chunk?.choices?.[0]?.delta;
+        const content = delta?.content;
+
+        if (typeof content === 'string') {
+            if (content) streamWriter.processContent(content);
+            return;
+        }
+
+        if (!Array.isArray(content)) return;
+
+        content.forEach(item => {
+            if (!item || typeof item !== 'object') return;
+            if (item.type === 'text' && typeof item.text === 'string') {
+                if (item.text) streamWriter.processContent(item.text);
+                return;
+            }
+            if (item.type === 'thinking' && Array.isArray(item.thinking)) {
+                item.thinking.forEach(thoughtChunk => {
+                    if (thoughtChunk?.type === 'text' && typeof thoughtChunk.text === 'string') {
+                        if (thoughtChunk.text) streamWriter.processContent(thoughtChunk.text, true);
+                    }
+                });
+            }
+        });
+    }
+
     handleLlamaCppStreamData(parsed, tokenCounter, streamWriter) {
         if (parsed.usage && (!parsed.choices || parsed.choices.length === 0)) {
             tokenCounter.update(parsed.usage.prompt_tokens || 0, parsed.usage.completion_tokens || 0);
@@ -1361,7 +1561,8 @@ const MaxTemp = {
     gemini: 2.0,
     deepseek: 2.0,
     grok: 2.0,
-    kimi: 1.0
+    kimi: 1.0,
+    mistral: 1.5
 };
 
 const MaxTokens = {
@@ -1376,7 +1577,8 @@ const MaxTokens = {
     deepseek: 8000,
     anthropic_old: 8192,
     grok: 131072,
-    kimi: 262144
+    kimi: 262144,
+    mistral: 32768
 };
 
 // for now decided against of having a "max tokens" for every api, as it varies by model... let the user figure it out :)

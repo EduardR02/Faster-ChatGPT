@@ -345,6 +345,20 @@ body {
   color: #1e1e1e;
 }
 
+.voice-transcribe-toggle.recording {
+  background: #fdaaaa;
+  color: #1e1e1e;
+}
+
+.voice-transcribe-toggle.recording:hover {
+  color: #1e1e1e;
+}
+
+.voice-transcribe-toggle.busy {
+  opacity: 0.65;
+  cursor: progress;
+}
+
 .web-search-toggle {
   padding: 1px 3px;
   height: 18px;

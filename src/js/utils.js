@@ -211,8 +211,8 @@ export function createElementWithClass(type, className, textContent = null) {
 export function set_defaults() {
     const MODELS = {
         openai: {
-            "gpt-5.1": "GPT-5.1",
-            "gpt-5.1-mini": "GPT-5.1 mini"
+            "gpt-5.2": "GPT-5.2",
+            "gpt-5.2-mini": "GPT-5.2 mini"
         },
         anthropic: {
             "claude-4.5-opus": "Claude 4.5 Opus",
@@ -223,13 +223,16 @@ export function set_defaults() {
             "gemini-3-pro-preview": "Gemini 3 Pro",
             "gemini-3-flash-preview": "Gemini 3 Flash",
             "gemini-3-pro-image-preview": "Nano Banana Pro",
-            "gemini-2.5-flash": "Gemini 2.5 Flash",
             "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite",
             "gemini-2.5-flash-image-preview": "Nano Banana"
         },
         deepseek: {
             "deepseek-chat": "DeepSeek V3.2",
             "deepseek-reasoner": "DeepSeek V3.2 thinking"
+        },
+        mistral: {
+            "mistral-large-latest": "Mistral Large",
+            "mistral-small-latest": "Mistral Small"
         },
         grok: {
             "grok-4": "Grok 4",
@@ -254,6 +257,7 @@ export function set_defaults() {
         reasoning_effort: 'medium',
         show_model_name: true,     // show model name in chat
         current_model: anthropic_models[anthropic_models.length - 1],
+        transcription_model: null,
         models: MODELS,
         api_keys: {},
         close_on_deselect: false,
