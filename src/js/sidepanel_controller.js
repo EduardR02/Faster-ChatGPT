@@ -58,14 +58,19 @@ export class SidepanelController {
 
         const streamWriter = this.createStreamWriter(
             this.chatUI.getContentDiv(model),
-            this.stateManager.isArenaModeActive,
-            api_provider
+            this.stateManager.isArenaModeActive
         );
 
         // For local models, fetch the actual model name from the server before making API call
         let actualModelId = model;
         let displayModelName = model;
-        const options = {};
+        const options = {
+            shouldThink: this.stateManager.getShouldThink?.() ?? false,
+            webSearch: this.stateManager.getShouldWebSearch?.() ?? false,
+            reasoningEffort: this.stateManager.getReasoningEffort?.() ?? 'medium',
+            imageAspectRatio: this.stateManager.getImageAspectRatio?.() ?? 'auto',
+            imageResolution: this.stateManager.getImageResolution?.() ?? '2K'
+        };
         if (api_provider === 'llamacpp') {
             const modelInfo = await this.apiManager.getLocalModelConfig();
             actualModelId = modelInfo.raw;
@@ -139,7 +144,7 @@ export class SidepanelController {
             if (!this.stateManager.isArenaModeActive && this.chatUI.continueFunc && latest?.role === 'assistant' && !latest.responses) {
                 const messageIndex = this.chatCore.getLength() - 1;
                 const secondaryIndex = latest.contents?.length ? latest.contents.length - 1 : 0;
-                this.chatUI.renderContinueForAssistant(messageIndex, true, secondaryIndex);
+                this.chatUI.renderContinueForAssistant(messageIndex, secondaryIndex);
             }
             // Thinking loop routing must use logical model id
             this.handleThinkingMode(model, isRegen);
@@ -183,14 +188,13 @@ export class SidepanelController {
     }
 
     // Private methods
-    createStreamWriter(contentDiv, isArenaMode, apiProvider) {
-        if (this.stateManager.getSetting('stream_response') && 
-            (isArenaMode || apiProvider === "gemini")) {
+    createStreamWriter(contentDiv, isArenaMode) {
+        if (this.stateManager.getSetting('stream_response') && isArenaMode) {
             return new StreamWriter(
                 contentDiv,
                 (role, isThought) => this.chatUI.produceNextContentDiv(role, isThought),
                 () => this.chatUI.scrollIntoView(),
-                isArenaMode ? 2500 : 5000
+                2500
             );
         }
         return new StreamWriterSimple(
@@ -296,7 +300,7 @@ export class SidepanelController {
         if (latestBefore?.role === 'assistant' && !latestBefore.responses && this.chatUI.continueFunc) {
             const messageIndex = this.chatCore.getLength() - 1;
             const secondaryIndex = latestBefore.contents?.length ? latestBefore.contents.length - 1 : 0;
-            this.chatUI.renderContinueForAssistant(messageIndex, false, secondaryIndex);
+            this.chatUI.renderContinueForAssistant(messageIndex, secondaryIndex);
         }
         this.chatCore.addUserMessage(text);
         const idx = this.chatCore.getLength() - 1;
@@ -337,6 +341,7 @@ export class SidepanelController {
     }
 
     regenerateResponse(model) {
+        this.chatUI.initScrollListener();
         this.stateManager.updateThinkingMode();
         this.stateManager.initThinkingState(model);
         const actualModel = this.stateManager.isArenaModeActive ? model : 

@@ -402,6 +402,7 @@ export class SidepanelChatUI extends ChatUI {
         this.scrollToElement = scrollTarget || this.conversationDiv;
         this.shouldScroll = true;
         this.scrollListenerActive = false;
+        this._lastProgrammaticScrollTime = 0;
 
         this.activeMessageDivs = null;  // Single div for normal mode, array [modelA, modelB] for arena
         this.inputWrapper = document.querySelector(inputWrapperId);
@@ -721,6 +722,7 @@ export class SidepanelChatUI extends ChatUI {
         } else {
             this.conversationDiv.appendChild(newMessage);
         }
+        this.scrollIntoView();
     }
 
     removeCurrentRemoveMediaButtons() {
@@ -761,7 +763,11 @@ export class SidepanelChatUI extends ChatUI {
     // Scroll Handling
     scrollIntoView() {
         if (!this.shouldScroll || !this.scrollToElement) return;
-        this.scrollToElement.scrollTop = this.scrollToElement.scrollHeight;
+        const el = this.scrollToElement;
+        const targetScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
+        if (Math.abs(el.scrollTop - targetScrollTop) <= 1) return;
+        this._lastProgrammaticScrollTime = performance.now();
+        el.scrollTop = targetScrollTop;
     }
 
     ensureContinueButton(messageElement, continueFunc) {
@@ -779,9 +785,8 @@ export class SidepanelChatUI extends ChatUI {
         this.ensureContinueButton(target, continueFunc);
     }
 
-    renderContinueForAssistant(index, isLatest, secondaryIndex = 0, modelKey = null) {
+    renderContinueForAssistant(index, secondaryIndex = 0, modelKey = null) {
         if (!this.continueFunc) return;
-        if (isLatest) return; // never on the live tail message
         const func = () => this.continueFunc(index, secondaryIndex, modelKey);
         this.addContinueButtonAt(index, func);
     }
@@ -807,25 +812,25 @@ export class SidepanelChatUI extends ChatUI {
             if (!this._handleScrollBound) {
                 this._handleScrollBound = this.handleScroll.bind(this);
             }
-            this.scrollToElement.addEventListener('wheel', this._handleScrollBound);
+            this.scrollToElement.addEventListener('scroll', this._handleScrollBound, { passive: true });
             this.scrollListenerActive = true;
         }
         this.shouldScroll = true;
     }
 
-    handleScroll(event) {
-        if (this.shouldScroll && event.deltaY < 0) {
-            this.shouldScroll = false;
-        }
+    handleScroll() {
+        if (!this.scrollToElement) return;
+        // Ignore scroll events that occur shortly after programmatic scroll
+        // This prevents false "user scrolled" detection from scroll event cascades
+        const timeSinceProgrammaticScroll = performance.now() - this._lastProgrammaticScrollTime;
+        if (timeSinceProgrammaticScroll < 50) return;
 
-        const threshold = 100;
-        const distanceFromBottom = Math.abs(
-            this.scrollToElement.scrollHeight - this.scrollToElement.clientHeight - this.scrollToElement.scrollTop
-        );
-
-        if (!this.shouldScroll && event.deltaY > 0 && distanceFromBottom <= threshold) {
-            this.shouldScroll = true;
-        }
+        const threshold = 5;
+        const distanceFromBottom =
+            this.scrollToElement.scrollHeight -
+            this.scrollToElement.clientHeight -
+            this.scrollToElement.scrollTop;
+        this.shouldScroll = distanceFromBottom <= threshold;
     }
 
     addArenaFooter(onChoice) {
@@ -936,6 +941,9 @@ export class SidepanelChatUI extends ChatUI {
     }
 
     updateIncognito(hasChatStarted = false) {
+        const tabContainer = this.conversationDiv?.closest?.('.tab-content-container');
+        if (tabContainer && !tabContainer.classList.contains('active')) return;
+
         const buttonFooter = document.getElementById('sidepanel-button-footer');
         const incognitoToggle = document.getElementById('incognito-toggle');
         const hoverText = buttonFooter.querySelectorAll('.hover-text');

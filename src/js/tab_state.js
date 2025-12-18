@@ -53,13 +53,8 @@ export class TabState {
         this.isSidePanel = true;
     }
 
-    // Getter for pendingThinkingMode to match old API
     get pendingThinkingMode() {
         return this._pendingThinkingMode;
-    }
-
-    set pendingThinkingMode(value) {
-        this._pendingThinkingMode = value;
     }
 
     // ========== Chat State ==========
@@ -110,7 +105,7 @@ export class TabState {
     }
 
     set thinkingMode(value) {
-        this.pendingThinkingMode = value;
+        this._pendingThinkingMode = value;
     }
 
     updateThinkingMode() {
@@ -122,18 +117,15 @@ export class TabState {
     }
 
     isThinking(model = null) {
-        const state = this.getThinkingState(model);
-        return state === THINKING_STATE.THINKING;
+        return this.getThinkingState(model) === THINKING_STATE.THINKING;
     }
 
     isSolving(model = null) {
-        const state = this.getThinkingState(model);
-        return state === THINKING_STATE.SOLVING;
+        return this.getThinkingState(model) === THINKING_STATE.SOLVING;
     }
 
     isInactive(model = null) {
-        const state = this.getThinkingState(model);
-        return state === THINKING_STATE.INACTIVE;
+        return this.getThinkingState(model) === THINKING_STATE.INACTIVE;
     }
 
     getThinkingState(model) {
@@ -187,6 +179,12 @@ export class TabState {
 
     // ========== Arena Mode ==========
 
+    _requireArena() {
+        if (!this.activeArenaModels || !this.isArenaModeActive) {
+            throw new Error('Active arena models are not set!');
+        }
+    }
+
     updateArenaMode() {
         this.isArenaModeActive = this.globalState.getSetting('arena_mode');
     }
@@ -202,24 +200,17 @@ export class TabState {
     }
 
     getArenaModel(index) {
-        if (!this.activeArenaModels || !this.isArenaModeActive) {
-            throw new Error('Active arena models are not set!');
-        }
+        this._requireArena();
         return this.activeArenaModels[index];
     }
 
     getArenaModelKey(model) {
-        if (!this.activeArenaModels || !this.isArenaModeActive) {
-            throw new Error('Active arena models are not set!');
-        }
+        this._requireArena();
         return this.activeArenaModels.indexOf(model) === 0 ? 'model_a' : 'model_b';
     }
 
     getModelIndex(model) {
-        if (!this.activeArenaModels || !this.isArenaModeActive) {
-            return 0;
-        }
-        return this.activeArenaModels.indexOf(model);
+        return this.activeArenaModels?.indexOf(model) ?? 0;
     }
 
     getArenaModels() {
@@ -265,12 +256,12 @@ export class TabState {
     }
 
     setReasoningEffort(value) {
-        if (!['low', 'medium', 'high'].includes(value)) return;
+        if (!['minimal', 'low', 'medium', 'high', 'xhigh'].includes(value)) return;
         this.reasoningEffort = value;
     }
 
     cycleReasoningEffort() {
-        const order = ['low', 'medium', 'high'];
+        const order = ['minimal', 'low', 'medium', 'high', 'xhigh'];
         const current = this.getReasoningEffort();
         const next = order[(order.indexOf(current) + 1) % order.length];
         this.reasoningEffort = next;

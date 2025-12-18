@@ -5,12 +5,11 @@ import { sanitizeBase64Image } from './image_utils.js';
 export class ApiManager {
     constructor(options = {}) {
         this.settingsManager = new SettingsManager(['api_keys', 'max_tokens', 'temperature', 'models', 'current_model', 'web_search', 'reasoning_effort']);
-        this.lastContentWasRedacted = false;
         this.localServerPort = 8080;
         this.getShouldThink = options.getShouldThink || (() => false);
         this.getWebSearch = options.getWebSearch || null;
         this.getOpenAIReasoningEffort = options.getOpenAIReasoningEffort || (() => this.settingsManager.getSetting('reasoning_effort') || 'medium');
-        this.getGeminiThinkingLevel = options.getGeminiThinkingLevel || (() => this.settingsManager.getSetting('reasoning_effort') || 'medium');
+        this.getGeminiThinkingLevel = options.getGeminiThinkingLevel || ((model) => this.settingsManager.getSetting('reasoning_effort') || 'medium');
         this.getImageAspectRatio = options.getImageAspectRatio || (() => '16:9');
         this.getImageResolution = options.getImageResolution || (() => '2K');
     }
@@ -36,12 +35,12 @@ export class ApiManager {
         }
 
         if (this.isImageModel(model)) {
-            return this.callImageGenerationApi(model, messages, tokenCounter, streamWriter, abortController);
+            return this.callImageGenerationApi(model, messages, tokenCounter, streamWriter, abortController, options);
         }
 
         const streamResponse = streamWriter !== null;
         messages = this.processFiles(messages);
-        const [apiLink, requestOptions] = this.createApiRequest(model, messages, streamResponse, streamWriter, options.localModelOverride);
+        const [apiLink, requestOptions] = this.createApiRequest(model, messages, streamResponse, streamWriter, options);
 
         if (!abortController) abortController = new AbortController();
         requestOptions.signal = abortController.signal;
@@ -92,10 +91,10 @@ export class ApiManager {
         }
     }
 
-    async callImageGenerationApi(model, messages, tokenCounter, streamWriter = null, abortController = null) {
+    async callImageGenerationApi(model, messages, tokenCounter, streamWriter = null, abortController = null, options = {}) {
         const provider = this.getProviderForModel(model);
         const apiKeys = this.settingsManager.getSetting('api_keys') || {};
-        const [apiLink, requestOptions] = this.createImageApiRequest(provider, model, messages, apiKeys[provider]);
+        const [apiLink, requestOptions] = this.createImageApiRequest(provider, model, messages, apiKeys[provider], options);
         
         if (!abortController) abortController = new AbortController();
         requestOptions.signal = abortController.signal;
@@ -142,10 +141,10 @@ export class ApiManager {
         }
     }
 
-    createImageApiRequest(provider, model, messages, apiKey) {
+    createImageApiRequest(provider, model, messages, apiKey, options = {}) {
         switch (provider) {
             case 'gemini':
-                return this.createGeminiImageRequest(model, messages, apiKey);
+                return this.createGeminiImageRequest(model, messages, apiKey, options);
             default:
                 throw new Error(`Image generation not supported for provider: ${provider}`);
         }
@@ -160,14 +159,15 @@ export class ApiManager {
         }
     }
 
-    createGeminiImageRequest(model, messages, apiKey) {
+    createGeminiImageRequest(model, messages, apiKey, options = {}) {
         const formattedMessages = this.formatMessagesForGemini(messages);
         const isGemini3 = /gemini-[3-9]|gemini-\d{2,}/.test(model);
         
-        const aspectRatio = this.getImageAspectRatio();
+        const aspectRatio = options.imageAspectRatio ?? this.getImageAspectRatio();
+        const imageSize = options.imageResolution ?? this.getImageResolution();
         const imageConfig = {
             ...(aspectRatio !== 'auto' && { aspectRatio }),
-            ...(isGemini3 && { imageSize: this.getImageResolution() })
+            ...(isGemini3 && { imageSize })
         };
         
         return [`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
@@ -265,25 +265,25 @@ export class ApiManager {
         });
     }
 
-    createApiRequest(model, messages, streamResponse, streamWriter, localModelOverride = null) {
+    createApiRequest(model, messages, streamResponse, streamWriter, options = {}) {
         const provider = this.getProviderForModel(model);
         const apiKeys = this.settingsManager.getSetting('api_keys');
 
         switch (provider) {
             case 'openai':
-                return this.createOpenAIRequest(model, messages, streamResponse, streamWriter, apiKeys.openai);
+                return this.createOpenAIRequest(model, messages, streamResponse, streamWriter, apiKeys.openai, options);
             case 'anthropic':
-                return this.createAnthropicRequest(model, messages, streamResponse, streamWriter, apiKeys.anthropic);
+                return this.createAnthropicRequest(model, messages, streamResponse, streamWriter, apiKeys.anthropic, options);
             case 'gemini':
-                return this.createGeminiRequest(model, messages, streamResponse, streamWriter, apiKeys.gemini);
+                return this.createGeminiRequest(model, messages, streamResponse, streamWriter, apiKeys.gemini, options);
             case 'deepseek':
-                return this.createDeepseekRequest(model, messages, streamResponse, streamWriter, apiKeys.deepseek);
+                return this.createDeepseekRequest(model, messages, streamResponse, streamWriter, apiKeys.deepseek, options);
             case 'grok':
-                return this.createGrokRequest(model, messages, streamResponse, streamWriter, apiKeys.grok);
+                return this.createGrokRequest(model, messages, streamResponse, streamWriter, apiKeys.grok, options);
             case 'kimi':
-                return this.createKimiRequest(model, messages, streamResponse, streamWriter, apiKeys.kimi);
+                return this.createKimiRequest(model, messages, streamResponse, streamWriter, apiKeys.kimi, options);
             case 'llamacpp':
-                return this.createLlamaCppRequest(model, messages, streamResponse, streamWriter, localModelOverride);
+                return this.createLlamaCppRequest(model, messages, streamResponse, streamWriter, options.localModelOverride);
             default:
                 throw new Error(`Unsupported model provider: ${provider}`);
         }
@@ -305,6 +305,19 @@ export class ApiManager {
             return MaxTokens.gemini_modern;
         }
         return MaxTokens.gemini;
+    }
+
+    clampGeminiThinkingLevel(effort, model) {
+        const isFlash = model.includes('flash');
+
+        if (isFlash) {
+            // Gemini 3 Flash supports: minimal, low, medium, high (clamp xhigh -> high)
+            return effort === 'xhigh' ? 'high' : effort;
+        }
+        // Gemini 3 Pro only supports: low, high
+        // minimal/low -> low, medium/high/xhigh -> high
+        if (effort === 'minimal' || effort === 'low') return 'low';
+        return 'high';
     }
 
     formatMessagesForOpenAI(messages, addImages) {
@@ -464,11 +477,11 @@ export class ApiManager {
         return `\n\n${list}\n`;
     }
 
-    createOpenAIRequest(model, messages, streamResponse, streamWriter, apiKey) {
+    createOpenAIRequest(model, messages, streamResponse, streamWriter, apiKey, options = {}) {
         const webSearchCompatibleModels = ['gpt-4.1', 'gpt-5'];
         const webSearchExcludedModels = ['gpt-4.1-nano', 'gpt-5-nano'];
         const hasWebSearch = webSearchCompatibleModels.some(m => model.includes(m)) && !webSearchExcludedModels.some(m => model.includes(m));
-        const enableWebSearchSetting = this.getWebSearch ? !!this.getWebSearch() : !!this.settingsManager.getSetting('web_search');
+        const enableWebSearchSetting = options.webSearch ?? (this.getWebSearch ? !!this.getWebSearch() : !!this.settingsManager.getSetting('web_search'));
         const enableWebSearch = enableWebSearchSetting && hasWebSearch;
         
         const isReasoner = /o\d/.test(model) || model.includes('gpt-5'); 
@@ -489,7 +502,7 @@ export class ApiManager {
             input: formattedInput,
             ...(systemMessage && { instructions: systemMessage }),
             ...(enableWebSearch && { tools: [{ type: "web_search_preview" }] }),   // tools is only used if model requests it
-            ...(isReasoner && { reasoning: { effort: this.getOpenAIReasoningEffort() } }),  // summary parameter also requires "verification"
+            ...(isReasoner && { reasoning: { effort: options.reasoningEffort ?? this.getOpenAIReasoningEffort() } }),  // summary parameter also requires "verification"
             max_output_tokens: maxOutputTokens,
             // Temperature is not directly settable for reasoning models in /v1/responses it seems, omit for them
             ...(!isReasoner && { temperature: Math.min(this.settingsManager.getSetting('temperature'), MaxTemp.openai) }),
@@ -507,9 +520,9 @@ export class ApiManager {
         }];
     }
 
-    createAnthropicRequest(model, messages, streamResponse, streamWriter, apiKey) {
+    createAnthropicRequest(model, messages, streamResponse, streamWriter, apiKey, options = {}) {
         const canThink = ['3-7-sonnet', 'sonnet-4', 'opus-4'].some(sub => model.includes(sub));
-        const isThinking = canThink && this.getShouldThink();
+        const isThinking = canThink && (options.shouldThink ?? this.getShouldThink());
         const maxTokens = Math.min(
             this.settingsManager.getSetting('max_tokens'),
             model.includes('opus') ? MaxTokens.anthropic :
@@ -531,7 +544,7 @@ export class ApiManager {
 
         const webSearchCompatibleModelSubstrings = ['claude-3-7-sonnet', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest', 'sonnet-4', 'opus-4'];
         const hasWeb = webSearchCompatibleModelSubstrings.some(substring => model.includes(substring));
-        const enableWebSearchSetting = this.getWebSearch ? !!this.getWebSearch() : !!this.settingsManager.getSetting('web_search');
+        const enableWebSearchSetting = options.webSearch ?? (this.getWebSearch ? !!this.getWebSearch() : !!this.settingsManager.getSetting('web_search'));
         const enableWebSearch = enableWebSearchSetting && hasWeb;
         
         messages = this.formatMessagesForAnthropic(messages);
@@ -583,13 +596,13 @@ export class ApiManager {
         }];
     }
 
-    createGeminiRequest(model, messages, streamResponse, streamWriter, apiKey) {
+    createGeminiRequest(model, messages, streamResponse, streamWriter, apiKey, options = {}) {
         const isGemini3Plus = /gemini-[3-9]\.?\d*|gemini-\d{2,}/.test(model);
         const isGemini25 = model.includes('gemini-2.5');
         const isGemini25Pro = isGemini25 && model.includes('pro');
         
         // Gemini 3+: always thinks, Gemini 2.5 Pro: always thinks, Gemini 2.5 Flash: toggle
-        const isThinking = isGemini3Plus || isGemini25Pro || (isGemini25 && this.getShouldThink());
+        const isThinking = isGemini3Plus || isGemini25Pro || (isGemini25 && (options.shouldThink ?? this.getShouldThink()));
         
         if (isThinking && streamWriter) streamWriter.setThinkingModel();
         
@@ -604,7 +617,9 @@ export class ApiManager {
         
         let thinkingParams = {};
         if (isGemini3Plus) {
-            thinkingParams = { thinking_config: { thinkingLevel: this.getGeminiThinkingLevel(), include_thoughts: true } };
+            const rawEffort = options.reasoningEffort ?? this.getGeminiThinkingLevel(model);
+            const thinkingLevel = this.clampGeminiThinkingLevel(rawEffort, model);
+            thinkingParams = { thinking_config: { thinkingLevel, include_thoughts: true } };
         } else if (isThinking) {
             thinkingParams = { thinking_config: { thinkingBudget: -1, include_thoughts: true } };
         }
@@ -626,7 +641,7 @@ export class ApiManager {
         }];
     }
 
-    createGrokRequest(model, messages, streamResponse, streamWriter, apiKey) {
+    createGrokRequest(model, messages, streamResponse, streamWriter, apiKey, options = {}) {
         const isGrok4 = model.includes('grok-4');
         const isNonThinking = model.includes('non-reasoning');
         const canThink = isGrok4 && !isNonThinking;
@@ -643,7 +658,7 @@ export class ApiManager {
             MaxTokens.grok
         );
 
-        const enableWebSearchSetting = this.getWebSearch ? !!this.getWebSearch() : !!this.settingsManager.getSetting('web_search');
+        const enableWebSearchSetting = options.webSearch ?? (this.getWebSearch ? !!this.getWebSearch() : !!this.settingsManager.getSetting('web_search'));
         const enableWebSearch = enableWebSearchSetting && isGrok4;
         
         const requestBody = {
@@ -782,11 +797,24 @@ export class ApiManager {
     }
     
     handleAnthropicNonStreamResponse(data, tokenCounter) {
-        const totalInputTokens = data.usage.input_tokens + 
-            (data.usage.cache_creation_input_tokens || 0) + 
+        const totalInputTokens = data.usage.input_tokens +
+            (data.usage.cache_creation_input_tokens || 0) +
             (data.usage.cache_read_input_tokens || 0);
         tokenCounter.update(totalInputTokens, data.usage.output_tokens);
-        return this.returnMessage([data.content[0].text]);
+
+        const thoughts = [];
+        const textParts = [];
+
+        for (const block of data.content || []) {
+            if (block.type === 'thinking' && block.thinking) {
+                thoughts.push(block.thinking);
+            } else if (block.type === 'text' && block.text) {
+                textParts.push(block.text);
+            }
+            // redacted_thinking blocks are ignored (encrypted, not displayable)
+        }
+
+        return this.returnMessage(textParts, thoughts);
     }
     
     handleGeminiNonStreamResponse(data, tokenCounter) {
@@ -1126,12 +1154,12 @@ export class ApiManager {
                 break;
             case 'content_block_start':
                 if (parsed.content_block && parsed.content_block.type === 'redacted_thinking') {
-                    if (!this.lastContentWasRedacted) {
+                    if (!streamWriter._lastContentWasRedacted) {
                         streamWriter.processContent("\n\n```\n*redacted thinking*\n```\n\n", true);
-                        this.lastContentWasRedacted = true;
+                        streamWriter._lastContentWasRedacted = true;
                     }
                 } else {
-                    this.lastContentWasRedacted = false;
+                    streamWriter._lastContentWasRedacted = false;
                 }
                 break;
             case 'message_start':
@@ -1157,7 +1185,7 @@ export class ApiManager {
     }
 
     handleGeminiStreamData(parsed, tokenCounter, streamWriter) {
-        parsed.candidates?.[0]?.content.parts?.forEach(contentDict => {
+        parsed.candidates?.[0]?.content?.parts?.forEach(contentDict => {
             if (contentDict.text !== undefined) {
                 streamWriter.processContent(contentDict.text, !!contentDict.thought);
             }

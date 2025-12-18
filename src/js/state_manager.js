@@ -623,12 +623,12 @@ export class SidepanelStateManager extends ArenaStateManager {
     }
 
     setReasoningEffort(value) {
-        if (!['low', 'medium', 'high'].includes(value)) return;
+        if (!['minimal', 'low', 'medium', 'high', 'xhigh'].includes(value)) return;
         this.state.reasoningEffort = value;
     }
 
     cycleReasoningEffort() {
-        const order = ['low', 'medium', 'high'];
+        const order = ['minimal', 'low', 'medium', 'high', 'xhigh'];
         const current = this.getReasoningEffort();
         const next = order[(order.indexOf(current) + 1) % order.length];
         this.state.reasoningEffort = next;

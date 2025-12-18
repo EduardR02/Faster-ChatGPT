@@ -7,14 +7,7 @@ import { TabManager } from './tab_manager.js';
 class SidepanelApp {
     constructor() {
         this.stateManager = new SidepanelStateManager('chat_prompt');
-        this.apiManager = new ApiManager({
-            getShouldThink: () => this.getActiveTabState()?.getShouldThink() ?? false,
-            getWebSearch: () => this.getActiveTabState()?.getShouldWebSearch() ?? false,
-            getOpenAIReasoningEffort: () => this.getActiveTabState()?.getReasoningEffort() ?? 'medium',
-            getGeminiThinkingLevel: () => this.getActiveTabState()?.getReasoningEffort() ?? 'medium',
-            getImageAspectRatio: () => this.getActiveTabState()?.getImageAspectRatio() ?? 'auto',
-            getImageResolution: () => this.getActiveTabState()?.getImageResolution() ?? '2K'
-        });
+        this.apiManager = new ApiManager();
         this.chatStorage = new ChatStorage();
 
         // Per-tab textarea content storage
@@ -62,7 +55,6 @@ class SidepanelApp {
         if (!chatUI) return;
         this.initSharedUI(chatUI);
         this.sharedUIInitialized = true;
-        this.initIncognitoToggle();
     }
 
     ensureActiveTab() {
@@ -116,56 +108,47 @@ class SidepanelApp {
     }
 
     initSharedUI(chatUI) {
-        // Create a special proxy for shared UI elements that:
-        // - Routes subscriptions and global settings to globalState
-        // - Routes per-tab toggle operations to the ACTIVE tab
         const globalState = this.stateManager;
-        const getActiveTabState = () => this.tabManager.getActiveTabState();
-
-        const perTabMethods = new Set([
-            'toggleShouldThink', 'getShouldThink', 'setShouldThink',
-            'toggleShouldWebSearch', 'getShouldWebSearch', 'setShouldWebSearch', 'ensureWebSearchInitialized',
-            'cycleReasoningEffort', 'getReasoningEffort', 'setReasoningEffort',
-            'cycleImageAspectRatio', 'getImageAspectRatio',
-            'cycleImageResolution', 'getImageResolution',
-            // Incognito/chat state methods
-            'toggleChatState', 'isChatNormal', 'isChatIncognito', 'isChatConverted', 'resetChatState'
-        ]);
-
-        // Properties that should be read from active tab
-        const perTabProperties = new Set(['shouldSave', 'chatState']);
-
-        const sharedUIStateManager = new Proxy(globalState, {
-            get(target, prop) {
-                // Per-tab methods - delegate to active tab
-                if (perTabMethods.has(prop)) {
-                    const activeTabState = getActiveTabState();
-                    if (activeTabState && prop in activeTabState) {
-                        return activeTabState[prop].bind(activeTabState);
-                    }
+        const sharedState = new Proxy(globalState, {
+            get: (target, prop) => {
+                const active = this.tabManager.getActiveTabState();
+                if (active && prop in active) {
+                    const value = active[prop];
+                    return typeof value === 'function' ? value.bind(active) : value;
                 }
-                // Per-tab properties - read from active tab
-                if (perTabProperties.has(prop)) {
-                    const activeTabState = getActiveTabState();
-                    if (activeTabState && prop in activeTabState) {
-                        return activeTabState[prop];
-                    }
-                }
-                // Everything else goes to globalState
                 const value = target[prop];
                 return typeof value === 'function' ? value.bind(target) : value;
+            },
+            set: (target, prop, value) => {
+                const active = this.tabManager.getActiveTabState();
+                if (active && prop in active) {
+                    active[prop] = value;
+                } else {
+                    target[prop] = value;
+                }
+                return true;
             }
         });
 
-        // Set shared proxy for shared UI - click handlers will capture this reference
-        chatUI.stateManager = sharedUIStateManager;
+        const sharedUI = Object.create(Object.getPrototypeOf(chatUI));
+        sharedUI.stateManager = sharedState;
+        sharedUI.textarea = document.getElementById('textInput');
 
-        chatUI.initSonnetThinking();
-        this.stateManager.runOnReady(() => {
-            chatUI.initWebSearchToggle();
-            chatUI.initImageConfigToggles();
-            chatUI.initModelPicker();
+        sharedUI.initSonnetThinking();
+        globalState.runOnReady(() => {
+            sharedUI.initWebSearchToggle();
+            sharedUI.initImageConfigToggles();
+            sharedUI.initModelPicker();
         });
+
+        const buttonFooter = document.getElementById('sidepanel-button-footer');
+        const incognitoToggle = document.getElementById('incognito-toggle');
+        if (buttonFooter && incognitoToggle) {
+            const hoverText = buttonFooter.querySelectorAll('.hover-text');
+            const hasChatStarted = () => this.getActiveController()?.chatCore?.hasChatStarted?.() || false;
+            sharedUI.setupIncognitoButtonHandlers(incognitoToggle, buttonFooter, hoverText, hasChatStarted);
+            sharedUI.updateIncognitoButtonVisuals(incognitoToggle);
+        }
     }
 
     // ========== Accessor Methods ==========
@@ -184,6 +167,21 @@ class SidepanelApp {
 
     getActiveTab() {
         return this.tabManager.getActiveTab();
+    }
+
+    /**
+     * Creates a new tab if current isn't empty. Returns false if max tabs reached.
+     */
+    createTabIfNeeded() {
+        if (this.tabManager.isCurrentTabEmpty()) return true;
+        const newTab = this.tabManager.createTab({
+            continueFunc: (i, si, mc) => this.continueFromCurrent(i, si, mc)
+        });
+        if (!newTab) {
+            this.getActiveChatUI()?.addErrorMessage("Maximum tabs reached. Close a tab first.");
+            return false;
+        }
+        return true;
     }
 
     // ========== Event Listeners ==========
@@ -252,77 +250,65 @@ class SidepanelApp {
 
     handleTabSwitch(newTab, oldTabId) {
         const textarea = document.getElementById('textInput');
+        const { tabState, chatUI } = newTab;
 
-        // Save old tab's textarea content before switching
+        // Save/restore textarea content
         if (oldTabId && oldTabId !== newTab.id) {
             this.tabTextareaContent.set(oldTabId, textarea.value || '');
         }
-
-        // Restore new tab's textarea content
-        const savedContent = this.tabTextareaContent.get(newTab.id);
-        textarea.value = savedContent !== undefined ? savedContent : '';
+        textarea.value = this.tabTextareaContent.get(newTab.id) ?? '';
         update_textfield_height(textarea);
 
-        // Update incognito button state
+        // Update incognito button
         const incognitoToggle = document.getElementById('incognito-toggle');
-        if (incognitoToggle && newTab.chatUI) {
-            newTab.chatUI.updateIncognitoButtonVisuals(incognitoToggle);
-        }
+        if (incognitoToggle && chatUI) chatUI.updateIncognitoButtonVisuals(incognitoToggle);
 
-        // Update thinking mode button (emoji button)
-        const thinkingButton = document.querySelector('.thinking-mode');
-        if (thinkingButton && newTab.tabState) {
-            thinkingButton.classList.toggle('thinking-mode-on', newTab.tabState.pendingThinkingMode);
-        }
+        if (!tabState) return;
+
+        // Update thinking mode button
+        document.querySelector('.thinking-mode')
+            ?.classList.toggle('thinking-mode-on', tabState.pendingThinkingMode);
 
         // Update arena mode button
+        const isArenaMode = this.stateManager.getSetting('arena_mode');
         const arenaButton = document.querySelector('.arena-toggle-button');
         if (arenaButton) {
-            const isArenaMode = this.stateManager.getSetting('arena_mode');
             arenaButton.textContent = isArenaMode ? '\u{2694}' : '\u{1F916}';
             arenaButton.classList.toggle('arena-mode-on', isArenaMode);
         }
 
-        // Update sonnet thinking toggle (reason button) for this tab's state
-        const sonnetThinkButton = document.getElementById('sonnet-thinking-toggle');
-        if (sonnetThinkButton && newTab.tabState) {
-            const model = newTab.tabState.getCurrentModel() || '';
+        // Update reasoning toggle
+        const sonnetBtn = document.getElementById('sonnet-thinking-toggle');
+        if (sonnetBtn) {
+            const model = tabState.getCurrentModel() || '';
             const hasReasoningLevels = /o\d/.test(model) || model.includes('gpt-5') ||
-                (/gemini-[3-9]\.?\d*|gemini-\d{2,}/.test(model) && !(model.includes('gemini') && model.includes('image')));
-            const reasoningLabel = sonnetThinkButton.querySelector('.reasoning-label');
+                (/gemini-[3-9]\.?\d*|gemini-\d{2,}/.test(model) && !model.includes('image'));
+            const label = sonnetBtn.querySelector('.reasoning-label');
 
             if (hasReasoningLevels) {
-                // Reasoning-level models: always active, show effort level
-                sonnetThinkButton.classList.add('active');
-                if (reasoningLabel) reasoningLabel.textContent = newTab.tabState.getReasoningEffort();
+                const effort = tabState.getReasoningEffort();
+                sonnetBtn.classList.add('active');
+                sonnetBtn.title = `Reasoning: ${effort}`;
+                if (label) label.textContent = effort;
             } else {
-                // Other models: toggle based on shouldThink, clear label
-                sonnetThinkButton.classList.toggle('active', newTab.tabState.getShouldThink());
-                if (reasoningLabel) reasoningLabel.textContent = '';
+                sonnetBtn.classList.toggle('active', tabState.getShouldThink());
+                sonnetBtn.title = 'Reasoning';
+                if (label) label.textContent = 'reason';
             }
         }
 
-        // Update web search toggle for this tab's state
-        const webButton = document.getElementById('web-search-toggle');
-        if (webButton && newTab.tabState) {
-            webButton.classList.toggle('active', newTab.tabState.getShouldWebSearch());
-        }
+        // Update web search toggle
+        document.getElementById('web-search-toggle')
+            ?.classList.toggle('active', tabState.getShouldWebSearch());
 
-        // Update image config toggles
-        const aspectBtn = document.getElementById('image-aspect-toggle');
-        const resBtn = document.getElementById('image-res-toggle');
-        if (aspectBtn && newTab.tabState) {
-            const aspectLabel = aspectBtn.querySelector('.reasoning-label');
-            if (aspectLabel) aspectLabel.textContent = newTab.tabState.getImageAspectRatio();
-        }
-        if (resBtn && newTab.tabState) {
-            const resLabel = resBtn.querySelector('.reasoning-label');
-            if (resLabel) resLabel.textContent = newTab.tabState.getImageResolution();
-        }
+        // Update image config labels
+        const aspectLabel = document.querySelector('#image-aspect-toggle .reasoning-label');
+        const resLabel = document.querySelector('#image-res-toggle .reasoning-label');
+        if (aspectLabel) aspectLabel.textContent = tabState.getImageAspectRatio();
+        if (resLabel) resLabel.textContent = tabState.getImageResolution();
 
-        // Sync globalState.current_model to this tab's model
-        // This triggers all subscriptions (model picker, visibility updates, etc.)
-        const tabModel = newTab.tabState.getCurrentModel();
+        // Sync model to global state
+        const tabModel = tabState.getCurrentModel();
         if (tabModel && tabModel !== this.stateManager.getSetting('current_model')) {
             this.stateManager.updateSettingsLocal({ current_model: tabModel });
         }
@@ -364,7 +350,6 @@ class SidepanelApp {
     initFooterButtons() {
         this.initHistoryButton();
         this.initSettingsButton();
-        this.initIncognitoToggle();
         this.initPopoutToggle();
     }
 
@@ -378,23 +363,6 @@ class SidepanelApp {
         document.getElementById('settings-button').addEventListener('click', () => {
             chrome.runtime.openOptionsPage();
         });
-    }
-
-    initIncognitoToggle() {
-        const buttonFooter = document.getElementById('sidepanel-button-footer');
-        const incognitoToggle = document.getElementById('incognito-toggle');
-        const hoverText = buttonFooter.querySelectorAll('.hover-text');
-
-        const hasChatStarted = () => {
-            const controller = this.getActiveController();
-            return controller ? controller.chatCore.hasChatStarted() : false;
-        };
-
-        const chatUI = this.getActiveChatUI();
-        if (chatUI) {
-            chatUI.setupIncognitoButtonHandlers(incognitoToggle, buttonFooter, hoverText, hasChatStarted);
-            chatUI.updateIncognitoButtonVisuals(incognitoToggle);
-        }
     }
 
     initPopoutToggle() {
@@ -440,18 +408,7 @@ class SidepanelApp {
 
     async handleNewSelection(text, url) {
         this.ensureActiveTab();
-
-        // Create new tab unless current is empty
-        if (!this.tabManager.isCurrentTabEmpty()) {
-            const newTab = this.tabManager.createTab({
-                continueFunc: (index, secondaryIndex, modelChoice) =>
-                    this.continueFromCurrent(index, secondaryIndex, modelChoice)
-            });
-            if (!newTab) {
-                this.getActiveChatUI()?.addErrorMessage("Maximum tabs reached. Close a tab first.");
-                return;
-            }
-        }
+        if (!this.createTabIfNeeded()) return;
 
         const controller = this.getActiveController();
         const chatUI = this.getActiveChatUI();
@@ -466,11 +423,8 @@ class SidepanelApp {
         chatUI.clearConversation();
         chatUI.addSystemMessage(text, `Selected Text - site:${hostname}`);
 
-        // Update tab title
         const tab = this.getActiveTab();
-        if (tab) {
-            this.tabManager.updateTabTitle(tab.id, `Selection from ${hostname}`);
-        }
+        if (tab) this.tabManager.updateTabTitle(tab.id, `Selection from ${hostname}`);
 
         await this.initPrompt({ mode: "selection", text, url });
 
@@ -482,18 +436,7 @@ class SidepanelApp {
 
     handleNewChat() {
         this.ensureActiveTab();
-
-        // Create new tab only if current tab has content
-        if (!this.tabManager.isCurrentTabEmpty()) {
-            const newTab = this.tabManager.createTab({
-                continueFunc: (index, secondaryIndex, modelChoice) =>
-                    this.continueFromCurrent(index, secondaryIndex, modelChoice)
-            });
-            if (!newTab) {
-                this.getActiveChatUI()?.addErrorMessage("Maximum tabs reached. Close a tab first.");
-                return;
-            }
-        }
+        if (!this.createTabIfNeeded()) return;
 
         const controller = this.getActiveController();
         const chatUI = this.getActiveChatUI();
@@ -515,10 +458,10 @@ class SidepanelApp {
         this.openedForReconstruct = true;
         this.ensureActiveTab();
 
-        if (options?.chatId) {
+        // For simple "open chat" (no index), switch to existing tab if found
+        if (options?.chatId && options.index === undefined) {
             const existing = this.tabManager.findTabByChatId(options.chatId);
             if (existing) {
-                // Tab already open with this chat - just switch to it
                 const maybeCloseStartupNewTab =
                     this.startupNewTabId &&
                     this.startupNewTabId !== existing.id &&
@@ -531,31 +474,11 @@ class SidepanelApp {
                     this.tabManager.closeTab(this.startupNewTabId);
                     this.startupNewTabId = null;
                 }
-                return; // Don't rebuild - tab already has the chat loaded
-            }
-            if (!this.tabManager.isCurrentTabEmpty()) {
-                const newTab = this.tabManager.createTab({
-                    continueFunc: (index, secondaryIndex, modelChoice) =>
-                        this.continueFromCurrent(index, secondaryIndex, modelChoice)
-                });
-                if (!newTab) {
-                    this.getActiveChatUI()?.addErrorMessage("Maximum tabs reached. Close a tab first.");
-                    return;
-                }
-            }
-        } else {
-            // Create new tab unless current is empty
-            if (!this.tabManager.isCurrentTabEmpty()) {
-                const newTab = this.tabManager.createTab({
-                    continueFunc: (index, secondaryIndex, modelChoice) =>
-                        this.continueFromCurrent(index, secondaryIndex, modelChoice)
-                });
-                if (!newTab) {
-                    this.getActiveChatUI()?.addErrorMessage("Maximum tabs reached. Close a tab first.");
-                    return;
-                }
+                return;
             }
         }
+
+        if (!this.createTabIfNeeded()) return;
 
         const controller = this.getActiveController();
         const chatUI = this.getActiveChatUI();
