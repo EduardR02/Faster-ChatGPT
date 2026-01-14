@@ -314,10 +314,10 @@ class SidepanelApp {
         }
         
         const arenaToggleButton = document.querySelector('.arena-toggle-button');
-        const isArenaModeEnabled = tabState?.getArenaModeEnabled?.() ?? this.stateManager.getSetting('arena_mode');
+        const isArenaModeActive = tabState?.isArenaModeActive ?? this.stateManager.getSetting('arena_mode');
         if (arenaToggleButton) {
-            arenaToggleButton.textContent = isArenaModeEnabled ? ICON.ARENA : ICON.CHAT;
-            arenaToggleButton.classList.toggle('arena-mode-on', isArenaModeEnabled);
+            arenaToggleButton.textContent = isArenaModeActive ? ICON.ARENA : ICON.CHAT;
+            arenaToggleButton.classList.toggle('arena-mode-on', isArenaModeActive);
         }
 
         const reasoningToggleButton = document.getElementById('sonnet-thinking-toggle');
@@ -358,17 +358,17 @@ class SidepanelApp {
         const arenaToggleButton = document.querySelector('.arena-toggle-button');
 
         const updateButtonState = () => {
-            const isArenaModeEnabled = this.getActiveTabState()?.getArenaModeEnabled?.() ??
+            const isArenaModeActive = this.getActiveTabState()?.isArenaModeActive ??
                 this.stateManager.getSetting('arena_mode');
-            arenaToggleButton.textContent = isArenaModeEnabled ? ICON.ARENA : ICON.CHAT;
-            arenaToggleButton.classList.toggle('arena-mode-on', isArenaModeEnabled);
+            arenaToggleButton.textContent = isArenaModeActive ? ICON.ARENA : ICON.CHAT;
+            arenaToggleButton.classList.toggle('arena-mode-on', isArenaModeActive);
         };
         
         this.stateManager.runOnReady(updateButtonState);
         this.stateManager.subscribeToSetting('arena_mode', updateButtonState);
         
         arenaToggleButton.onclick = () => { 
-            this.getActiveTabState()?.toggleArenaModeEnabled?.(); 
+            this.getActiveTabState()?.toggleArenaMode?.(); 
             updateButtonState(); 
         };
     }

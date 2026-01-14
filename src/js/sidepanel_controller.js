@@ -255,7 +255,6 @@ export class SidepanelController {
     async initApiCall() {
         this.chatUI.initScrollListener(); 
         this.state.updateThinkingMode();
-        this.state.updateArenaMode();
 
         if (this.state.isArenaModeActive) {
             const enabledArenaModels = this.state.getSetting('arena_models');

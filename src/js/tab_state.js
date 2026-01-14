@@ -24,9 +24,8 @@ export class TabState {
             _pendingThinkingMode: false,
             activeThinkingMode: false,
             thinkingStates: { default: THINKING_STATE.INACTIVE },
-            isArenaModeActive: false,
+            _isArenaModeActive: !!globalState.getSetting('arena_mode'), // Initialize from global default
             activeArenaModels: null,
-            arenaModeEnabled: null,
             shouldThink: false,
             shouldWebSearch: undefined,
             reasoningEffort: undefined,
@@ -59,10 +58,19 @@ export class TabState {
         Object.assign(this, {
             chatState: CHAT_STATE.NORMAL,
             shouldSave: true,
-            isArenaModeActive: false,
+            _isArenaModeActive: !!this.globalState.getSetting('arena_mode'), // Reset to default
             activeArenaModels: null
         });
         this.initThinkingState();
+    }
+
+    // Explicitly shadow the global isArenaModeActive
+    get isArenaModeActive() { return this._isArenaModeActive; }
+    set isArenaModeActive(value) { this._isArenaModeActive = !!value; }
+
+    toggleArenaMode() {
+        this._isArenaModeActive = !this._isArenaModeActive;
+        return this._isArenaModeActive;
     }
 
     isChatNormal() { return this.chatState === CHAT_STATE.NORMAL; }
@@ -93,41 +101,17 @@ export class TabState {
         initializeThinkingStates(this, modelId);
     }
 
-    ensureArenaModeInitialized() {
-        if (this.arenaModeEnabled === null || this.arenaModeEnabled === undefined) {
-            this.arenaModeEnabled = !!this.globalState.getSetting('arena_mode');
-        }
-    }
-
-    getArenaModeEnabled() {
-        this.ensureArenaModeInitialized();
-        return !!this.arenaModeEnabled;
-    }
-
-    setArenaModeEnabled(value) {
-        this.arenaModeEnabled = !!value;
-    }
-
-    toggleArenaModeEnabled() {
-        this.setArenaModeEnabled(!this.getArenaModeEnabled());
-        return this.arenaModeEnabled;
-    }
-
-    updateArenaMode() {
-        this.isArenaModeActive = this.getArenaModeEnabled();
-    }
-
     initArenaResponse(modelA, modelB) {
         Object.assign(this, { 
             activeArenaModels: [modelA, modelB], 
-            isArenaModeActive: true 
+            _isArenaModeActive: true 
         });
     }
 
     clearArenaState() {
         Object.assign(this, { 
             activeArenaModels: null, 
-            isArenaModeActive: false 
+            _isArenaModeActive: false 
         });
     }
 
