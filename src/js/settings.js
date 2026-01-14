@@ -1,5 +1,6 @@
 import { SettingsStateManager } from './state_manager.js';
-import { ArenaRatingManager, createElementWithClass, auto_resize_textfield_listener, update_textfield_height } from "./utils.js";
+import { createElementWithClass, autoResizeTextfieldListener, updateTextfieldHeight } from "./ui_utils.js";
+import { ArenaRatingManager } from "./ArenaRatingManager.js";
 
 const apiDisplayNames = {
     anthropic: 'Anthropic',
@@ -18,226 +19,253 @@ class SettingsUI {
         this.currentApiIndex = 0;
         this.apiProviders = Object.keys(apiDisplayNames);
         this.currentAPIProvider = this.apiProviders[0];
-        this.dummyRowsOnInit = document.getElementsByClassName('models-dummy').length;
+        this.dummyRowsOnInit = 0;
         this.selectModes = ['arena', 'rename', 'transcription'];
 
-        this.settingsConfig = {
-            inputs: {
-                max_tokens: { type: 'number', parser: parseInt },
-                temperature: { type: 'number', parser: parseFloat },
-                loop_threshold: { type: 'number', parser: parseInt, default: 1 }
+        this.config = {
+            inputs: { 
+                max_tokens: parseInt, 
+                temperature: parseFloat, 
+                loop_threshold: parseInt 
             },
             checkboxes: [
-                'show_model_name', 'close_on_deselect', 'stream_response',
-                'arena_mode', 'auto_rename', 'web_search', 'persist_tabs'
+                'show_model_name', 
+                'close_on_deselect', 
+                'stream_response', 
+                'arena_mode', 
+                'auto_rename', 
+                'web_search', 
+                'persist_tabs'
             ]
         };
 
-        this.init();
-    }
-
-    init() {
         this.stateManager.runOnReady(() => {
-            this.setupEventListeners();
-            this.initializeUI();
+            const dummyElements = document.getElementsByClassName('models-dummy');
+            this.dummyRowsOnInit = dummyElements.length;
+            
+            this.setupListeners();
+            this.initialize();
         });
     }
 
-    setupEventListeners() {
-        // Basic buttons
-        document.getElementById('buttonSave').addEventListener('click', () => this.save());
-        document.getElementById('button-api-cycle').addEventListener('click', () => this.cycleApiKeyInput());
-        document.getElementById('button-model-provider-select').addEventListener('click', (e) => this.cycleAPIProvider(e.target));
-        document.getElementById('button-add-model').addEventListener('click', () => this.addModel());
-        document.getElementById('button-remove-models').addEventListener('click', () => this.removeModel());
-        this.initMicrophoneButton();
-        
-        // Mode toggles
-        document.getElementById('arena_mode').addEventListener('change', () => this.handleModeToggle('arena'));
-        document.getElementById('auto_rename').addEventListener('change', () => this.handleModeToggle('rename'));
-        document.getElementById('arena_select').addEventListener('change', () => this.handleSelectToggle('arena'));
-        document.getElementById('rename_select').addEventListener('change', () => this.handleSelectToggle('rename'));
-        document.getElementById('transcription_select').addEventListener('change', () => this.handleSelectToggle('transcription'));
+    setupListeners() {
+        const getElement = (id) => document.getElementById(id);
+        const addListener = (id, event, callback) => {
+            getElement(id)?.addEventListener(event, callback);
+        };
 
-        // Radio groups
-        new Map([
-            ['prompt_select', (v) => this.handlePromptSelection(v)],
-            ['reasoning_effort', (v) => this.stateManager.queueSettingChange('reasoning_effort', v)]
-        ]).forEach((handler, name) => {
+        addListener('buttonSave', 'click', () => this.save());
+        addListener('button-api-cycle', 'click', () => this.cycleApi());
+        
+        addListener('button-model-provider-select', 'click', (event) => {
+            this.cycleProvider(event.target);
+        });
+        
+        addListener('button-add-model', 'click', () => this.addModel());
+        addListener('button-remove-models', 'click', () => this.removeModel());
+        
+        addListener('arena_mode', 'change', () => this.handleMode('arena'));
+        addListener('auto_rename', 'change', () => this.handleMode('rename'));
+        
+        addListener('arena_select', 'change', () => this.handleSelect('arena'));
+        addListener('rename_select', 'change', () => this.handleSelect('rename'));
+        addListener('transcription_select', 'change', () => this.handleSelect('transcription'));
+        
+        addListener('api_key_input', 'input', (event) => this.handleApiKey(event));
+        
+        addListener('button-delete-arena', 'click', (event) => {
+            this.handleArenaReset(event.target);
+        });
+        
+        addListener('button-reindex', 'click', (event) => {
+            this.handleRequest(event.target, 'history_reindex', 'Reindexed');
+        });
+        
+        addListener('button-repair-images', 'click', (event) => {
+            this.handleRequest(event.target, 'history_repair_images', 'Repaired');
+        });
+
+        // Prompt selection and Reasoning effort radios
+        ['prompt_select', 'reasoning_effort'].forEach(name => {
             document.querySelectorAll(`input[name="${name}"]`).forEach(radio => {
-                radio.addEventListener('change', e => handler(e.target.value));
+                radio.onchange = (e) => {
+                    const value = e.target.value;
+                    if (name === 'prompt_select') this.handlePrompt(value);
+                    else this.stateManager.queueSettingChange(name, value);
+                };
             });
         });
 
-        document.getElementById('api_key_input').addEventListener('input', (e) => this.handleApiKeyInput(e));
-
-        document.addEventListener('change', (e) => {
-            if (e.target.name === 'model_select') {
-                this.handleModelSelection(e);
+        // Global delegate for model selection
+        document.addEventListener('change', (event) => {
+            if (event.target.name === 'model_select') {
+                this.handleModel(event.target);
             }
         });
         
-        // Arena reset
-        const resetButton = document.getElementById('button-delete-arena');
-        resetButton.addEventListener('click', () => this.handleArenaReset(resetButton));
-
-        const reindexButton = document.getElementById('button-reindex');
-        if (reindexButton) {
-            reindexButton.addEventListener('click', () => this.handleReindexRequest(reindexButton));
-        }
-
-        const repairImagesButton = document.getElementById('button-repair-images');
-        if (repairImagesButton) {
-            repairImagesButton.addEventListener('click', () => this.handleRepairImagesRequest(repairImagesButton));
-        }
+        this.initMicrophone();
     }
 
-    async initializeUI() {
-        this.initInputValues();
-        this.initModels();
+    async initialize() {
+        // Initialize numeric inputs
+        Object.entries(this.config.inputs).forEach(([id, parser]) => {
+            const input = document.getElementById(id);
+            const value = this.stateManager.getSetting(id);
+            
+            if (value !== undefined) {
+                input.value = value;
+            } else if (id === 'loop_threshold') {
+                input.value = 1;
+            } else {
+                input.value = '';
+            }
+        });
+
+        // Initialize checkboxes
+        this.config.checkboxes.forEach(id => {
+            const checkbox = document.getElementById(id);
+            const value = this.stateManager.getSetting(id);
+            
+            if (id === 'persist_tabs') {
+                checkbox.checked = (value !== false);
+            } else {
+                checkbox.checked = !!value;
+            }
+        });
+
+        // Reset sub-selects
+        this.selectModes.forEach(mode => {
+            const el = document.getElementById(`${mode}_select`);
+            if (el) el.checked = false;
+        });
+
+        // Initialize models from state
+        const storedModels = this.stateManager.state.settings.models || {};
+        Object.values(storedModels).forEach(providerMap => {
+            Object.entries(providerMap).forEach(([apiName, displayName]) => {
+                this.addModelUI(apiName, displayName);
+            });
+        });
+        
         this.setApiLabel();
-        this.initTextArea();
-        this.initReasoningEffort();
-        this.updateModelCheckboxes();
+        this.initPromptUI();
+        this.initReasoning();
+        this.updateCheckboxes();
     }
 
-    initMicrophoneButton() {
+    initMicrophone() {
         const button = document.getElementById('enable-microphone');
-        const span = button.querySelector('span');
-        const setText = (text) => span.textContent = `${text} `;
+        const statusSpan = button?.querySelector('span');
+        if (!button || !statusSpan) return;
 
-        const updateFromState = async () => {
-            const status = await navigator.permissions.query({ name: 'microphone' }).catch(() => null);
-            if (status?.state === 'granted') setText('Microphone ✓');
-            else if (status?.state === 'denied') setText('Microphone Blocked');
-            else setText('Allow Microphone');
+        const updateStatus = async () => {
+            const permission = await navigator.permissions.query({ name: 'microphone' }).catch(() => null);
+            
+            if (permission?.state === 'granted') {
+                statusSpan.textContent = 'Microphone \u2713 ';
+            } else if (permission?.state === 'denied') {
+                statusSpan.textContent = 'Microphone Blocked ';
+            } else {
+                statusSpan.textContent = 'Allow Microphone ';
+            }
         };
 
-        updateFromState();
+        updateStatus();
 
-        button.addEventListener('click', async () => {
+        button.onclick = async () => {
             button.disabled = true;
-            setText('…');
+            statusSpan.textContent = '\u2026';
+            
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                stream.getTracks().forEach(t => t.stop());
-                setText('Microphone ✓');
+                stream.getTracks().forEach(track => track.stop());
+                statusSpan.textContent = 'Microphone \u2713 ';
             } catch (error) {
-                setText(error?.name === 'NotAllowedError' ? 'Microphone Blocked' : 'Microphone Error');
+                if (error.name === 'NotAllowedError') {
+                    statusSpan.textContent = 'Microphone Blocked ';
+                } else {
+                    statusSpan.textContent = 'Microphone Error ';
+                }
             } finally {
                 button.disabled = false;
             }
-        });
+        };
     }
 
-    initInputValues() {
-        Object.entries(this.settingsConfig.inputs).forEach(([id, { parser, default: def }]) => {
-            document.getElementById(id).value = this.stateManager.getSetting(id) ?? def;
-        });
-
-        this.settingsConfig.checkboxes.forEach(id => {
-            const value = this.stateManager.getSetting(id);
-            document.getElementById(id).checked = id === 'persist_tabs' ? value !== false : !!value;
-        });
-
-        this.selectModes.forEach(mode => document.getElementById(`${mode}_select`).checked = false);
-    }
-
-    initModels() {
-        const models = this.stateManager.state.settings.models;
-        Object.entries(models).forEach(([provider, modelMap]) => {
-            Object.entries(modelMap).forEach(([apiString, displayName]) => {
-                this.addModelToUI(apiString, displayName);
-            });
-        });
-    }
-
-    handleArenaReset(button) {
-        if (!button.classList.contains('confirm')) {
-            button.classList.add('confirm');
-            button.textContent = 'Are you sure? This is irreversible. ';
-            return;
-        }
-        new ArenaRatingManager().initDB().then(manager => manager.wipeStoredCacheAndDB());
-        button.classList.remove('confirm');
-        button.textContent = 'Reset Arena Matches ';
-    }
-
-    handleModelSelection(event) {
-        const input = event.target;
+    handleModel(input) {
         const currentMode = this.getCurrentMode();
         
-        switch (currentMode) {
-            case 'arena':
-                const selectedModels = document.querySelectorAll('input[name="model_select"]:checked');
-                const hasEnoughModels = selectedModels.length >= 2;
-                document.getElementById('models-label').classList.toggle('settings-error', !hasEnoughModels);
-                if (hasEnoughModels) {
-                    this.stateManager.queueSettingChange('arena_models', 
-                        Array.from(selectedModels).map(input => input.id)
-                    );
-                }
-                break;
-            case 'rename':
-                this.stateManager.queueSettingChange('auto_rename_model', input.id);
-                break;
-            case 'transcription':
-                this.stateManager.queueSettingChange('transcription_model', input.id);
-                break;
-            case 'normal':
-                this.stateManager.queueSettingChange('current_model', input.id);
-                break;
+        if (currentMode === 'arena') {
+            const checkedModels = document.querySelectorAll('input[name="model_select"]:checked');
+            const modelsLabel = document.getElementById('models-label');
+            
+            const hasEnoughModels = checkedModels.length >= 2;
+            modelsLabel.classList.toggle('settings-error', !hasEnoughModels);
+            
+            if (hasEnoughModels) {
+                const modelIds = Array.from(checkedModels).map(el => el.id);
+                this.stateManager.queueSettingChange('arena_models', modelIds);
+            }
+        } else {
+            const settingKeys = { 
+                rename: 'auto_rename_model', 
+                transcription: 'transcription_model', 
+                normal: 'current_model' 
+            };
+            
+            const targetKey = settingKeys[currentMode];
+            this.stateManager.queueSettingChange(targetKey, input.id);
         }
     }
 
-    handleModeToggle(mode) {
-        const isEnabled = document.getElementById(`${mode === 'arena' ? 'arena_mode' : 'auto_rename'}`).checked;
-        const selectToggle = document.getElementById(`${mode}_select`);
-    
-        if (isEnabled) {
-            this.setSelectMode(mode);
-        }
-    
-        this.stateManager.queueSettingChange(
-            mode === 'arena' ? 'arena_mode' : 'auto_rename',
-            isEnabled
-        );
-    
-        this.updateModelCheckboxes();
+    handleMode(mode) {
+        const checkboxId = (mode === 'arena') ? 'arena_mode' : 'auto_rename';
+        const isEnabled = document.getElementById(checkboxId).checked;
+        
+        if (isEnabled) this.setSelectMode(mode);
+        else this.setSelectMode(null); // Clear sub-selects
+        
+        this.stateManager.queueSettingChange(checkboxId, isEnabled);
+        this.updateCheckboxes();
     }
-    
+
     setSelectMode(mode) {
-        this.selectModes.forEach(selectMode => {
-            const toggle = document.getElementById(`${selectMode}_select`);
-            if (toggle) toggle.checked = selectMode === mode;
+        this.selectModes.forEach(m => {
+            const el = document.getElementById(`${m}_select`);
+            if (el) el.checked = (m === mode);
         });
     }
 
-    handleSelectToggle(mode) {
-        const selectToggle = document.getElementById(`${mode}_select`);
-        if (selectToggle?.checked) {
+    handleSelect(mode) {
+        const toggle = document.getElementById(`${mode}_select`);
+        if (toggle?.checked) {
+            // Uncheck other selection toggles
             this.selectModes
-                .filter(other => other !== mode)
-                .forEach(other => {
-                    const otherToggle = document.getElementById(`${other}_select`);
-                    if (otherToggle) otherToggle.checked = false;
+                .filter(m => m !== mode)
+                .forEach(m => {
+                    const other = document.getElementById(`${m}_select`);
+                    if (other) other.checked = false;
                 });
         }
-        this.updateModelCheckboxes();
-    }
-    
-    handleApiKeyInput(event) {
-        const input = event.target;
-        const key = input.value.trim();
-        if (key) this.stateManager.setApiKey(this.apiProviders[this.currentApiIndex], key);
+        this.updateCheckboxes();
     }
 
-    async handleReindexRequest(button) {
-        if (!button || button.dataset.busy === 'true') return;
+    handleApiKey(event) {
+        const value = event.target.value.trim();
+        if (value) {
+            const provider = this.apiProviders[this.currentApiIndex];
+            this.stateManager.setApiKey(provider, value);
+        }
+    }
 
-        const span = button.querySelector('span');
-        const readLabel = () => (span ? span.textContent : button.textContent).trim();
-        const writeLabel = (text) => {
+    async handleRequest(button, messageType, successLabel) {
+        if (button.disabled) return;
+        
+        const originalLabel = button.querySelector('span')?.textContent || button.textContent;
+        button.disabled = true;
+        
+        const setLabel = (text) => {
+            const span = button.querySelector('span');
             if (span) {
                 span.textContent = `${text} `;
             } else {
@@ -245,131 +273,62 @@ class SettingsUI {
             }
         };
 
-        const defaultLabel = button.dataset.defaultLabel || readLabel();
-        button.dataset.defaultLabel = defaultLabel;
-
-        const stateClasses = ['reindex-busy', 'reindex-success', 'reindex-prompt', 'reindex-failure', 'confirm'];
-        const applyState = (text, classes = []) => {
-            writeLabel(text);
-            button.classList.remove(...stateClasses);
-            classes.forEach(cls => button.classList.add(cls));
-        };
-
-        const resetState = () => {
-            setTimeout(() => {
-                applyState(defaultLabel);
-            }, 2500);
-        };
-
-        button.dataset.busy = 'true';
-        button.disabled = true;
-        applyState('Reindexing...', ['reindex-busy']);
-
+        setLabel('Processing...');
+        
         try {
-            const result = await chrome.runtime.sendMessage({ type: 'history_reindex' });
-            if (result?.ok) {
-                applyState('Reindexed', ['reindex-success']);
+            const response = await chrome.runtime.sendMessage({ type: messageType });
+            if (response?.ok) {
+                if (response.repaired !== undefined) {
+                    setLabel(`Repaired ${response.repaired}`);
+                } else {
+                    setLabel(successLabel);
+                }
             } else {
-                applyState('Open history first to reindex', ['reindex-prompt']);
+                setLabel('Open history first');
             }
         } catch (error) {
-            console.error('Failed to trigger reindex:', error);
-            applyState('Reindex failed', ['reindex-failure']);
-        } finally {
-            button.disabled = false;
-            delete button.dataset.busy;
-            resetState();
+            setLabel('Failed');
         }
+
+        setTimeout(() => {
+            setLabel(originalLabel);
+            button.disabled = false;
+        }, 2500);
     }
 
-    async handleRepairImagesRequest(button) {
-        if (button.dataset.busy === 'true') return;
-
-        const span = button.querySelector('span');
-        const readLabel = () => (span ? span.textContent : button.textContent).trim();
-        const writeLabel = (text) => {
-            if (span) {
-                span.textContent = `${text} `;
-            } else {
-                button.textContent = text;
-            }
-        };
-
-        const defaultLabel = button.dataset.defaultLabel || readLabel();
-        button.dataset.defaultLabel = defaultLabel;
-
-        const stateClasses = ['repair-busy', 'repair-success', 'repair-prompt', 'repair-failure', 'confirm'];
-        const applyState = (text, classes = []) => {
-            writeLabel(text);
-            button.classList.remove(...stateClasses);
-            classes.forEach(cls => button.classList.add(cls));
-        };
-
-        const resetState = () => {
-            setTimeout(() => {
-                applyState(defaultLabel);
-            }, 2500);
-        };
-
-        button.dataset.busy = 'true';
-        button.disabled = true;
-        applyState('Repairing...', ['repair-busy']);
-
-        try {
-            const result = await chrome.runtime.sendMessage({ type: 'history_repair_images' });
-            if (result?.ok) {
-                applyState(`Repaired ${result.repaired || 0}`, ['repair-success']);
-            } else {
-                applyState('Open history first to repair', ['repair-prompt']);
-            }
-        } catch (error) {
-            console.error('Failed to trigger repair:', error);
-            applyState('Repair failed', ['repair-failure']);
-        } finally {
-            button.disabled = false;
-            delete button.dataset.busy;
-            resetState();
-        }
-    }
-
-    updateModelCheckboxes() {
-        const modelCheckboxes = document.getElementsByName('model_select');
+    updateCheckboxes() {
         const currentMode = this.getCurrentMode();
-    
-        modelCheckboxes.forEach(input => {
-            input.classList.remove('arena-models', 'rename-model', 'transcription-model');
-    
-            // Change input type based on mode
-            const newType = currentMode === 'arena' ? 'checkbox' : 'radio';
-            if (input.type !== newType) input.type = newType;
-    
-            // Set checked state based on current mode
-            switch (currentMode) {
-                case 'arena':
-                    input.checked = this.stateManager.getSetting('arena_models')?.includes(input.id) || false;
-                    input.classList.add('arena-models');
-                    break;
-                case 'rename':
-                    input.classList.add('rename-model');
-                    break;
-                case 'transcription':
-                    break;
+        document.body?.classList.toggle('alt-model-select', currentMode !== 'normal');
+        
+        const modelInputs = document.getElementsByName('model_select');
+        modelInputs.forEach(input => {
+            input.type = (currentMode === 'arena') ? 'checkbox' : 'radio';
+            
+            if (currentMode === 'arena') {
+                const arenaModels = this.stateManager.getSetting('arena_models') || [];
+                input.checked = arenaModels.includes(input.id);
+            } else {
+                input.checked = false;
             }
         });
+
         if (currentMode !== 'arena') {
-            modelCheckboxes.forEach(input => {
-                input.checked = false;
-            });
-
-            const selectedModel =
-                currentMode === 'rename'
-                    ? (this.stateManager.getSetting('auto_rename_model') || this.stateManager.getSetting('current_model'))
-                : currentMode === 'transcription'
-                    ? this.stateManager.getSetting('transcription_model')
-                    : this.stateManager.getSetting('current_model');
-
-            const selectedInput = selectedModel ? document.getElementById(selectedModel) : null;
-            if (selectedInput) selectedInput.checked = true;
+            let selectedId = null;
+            if (currentMode === 'rename') {
+                selectedId = this.stateManager.getSetting('auto_rename_model') || 
+                             this.stateManager.getSetting('current_model');
+            } else if (currentMode === 'transcription') {
+                selectedId = this.stateManager.getSetting('transcription_model');
+            } else {
+                selectedId = this.stateManager.getSetting('current_model');
+            }
+            
+            if (selectedId) {
+                const element = document.getElementById(selectedId);
+                if (element) {
+                    element.checked = true;
+                }
+            }
         }
     }
 
@@ -381,60 +340,33 @@ class SettingsUI {
     }
 
     addModel() {
-        const apiName = document.getElementById('model-api-name-input').value.trim();
-        const displayName = document.getElementById('model-display-name-input').value.trim();
+        const apiNameInput = document.getElementById('model-api-name-input');
+        const displayNameInput = document.getElementById('model-display-name-input');
         
-        if (!apiName || !displayName) return;
+        const apiName = apiNameInput.value.trim();
+        const displayName = displayNameInput.value.trim();
         
-        if (!this.checkModelExists(apiName, displayName)) {
-            this.addModelToUI(apiName, displayName);
+        if (!apiName || !displayName) {
+            return;
+        }
+
+        const apiExists = document.getElementById(apiName) !== null;
+        const labels = document.getElementsByClassName('model-label');
+        const displayNameExists = Array.from(labels).some(label => {
+            return label.textContent.trim() === displayName;
+        });
+
+        if (!apiExists && !displayNameExists) {
+            this.addModelUI(apiName, displayName);
             this.stateManager.addModel(this.currentAPIProvider, apiName, displayName);
+            
+            // Clear inputs
+            apiNameInput.value = '';
+            displayNameInput.value = '';
         }
     }
 
-    checkModelExists(apiName, displayName) {
-        return document.getElementById(apiName) !== null || 
-               Array.from(document.getElementsByClassName('model-label'))
-                    .some(label => label.textContent.trim() === displayName);
-    }
-
-    addModelToUI(apiName, displayName) {
-        const [input, label] = this.createModelElements(apiName, displayName);
-
-        // Get all dummy divs (rows)
-        const dummyDivs = document.getElementsByClassName('models-dummy');
-        let lastRow = dummyDivs[dummyDivs.length - 1];
-        const insertBefore = lastRow.parentElement;
-        let needsNewRow = true;
-
-        if (dummyDivs.length > this.dummyRowsOnInit) {
-            lastRow = dummyDivs[dummyDivs.length - 2];
-            needsNewRow = this.shouldCreateNewRow(lastRow, input, label);
-        }
-
-        if (needsNewRow) {
-            const newRow = this.createNewModelRow(lastRow, insertBefore);
-            newRow.appendChild(input);
-            newRow.appendChild(label);
-        } else {
-            lastRow.appendChild(input);
-            lastRow.appendChild(label);
-        }
-    }
-
-    createNewModelRow(lastRow, modelRow) {
-        const newSetting = createElementWithClass('div', 'setting');
-        const dummyLabel = createElementWithClass('label', 'setting-label');
-        const newDummy = createElementWithClass('div', 'models-dummy');
-        
-        newSetting.appendChild(dummyLabel);
-        newSetting.appendChild(newDummy);
-        lastRow.parentElement.parentElement.insertBefore(newSetting, modelRow);
-        
-        return newDummy;
-    }
-
-    createModelElements(apiName, displayName) {
+    addModelUI(apiName, displayName) {
         const input = document.createElement('input');
         input.className = 'checkbox';
         input.type = 'radio';
@@ -443,137 +375,185 @@ class SettingsUI {
         input.value = apiName;
         
         const label = createElementWithClass('label', 'model-label', displayName);
-        
-        return [input, label];
-    }
+        label.setAttribute('for', apiName);
 
-    shouldCreateNewRow(row, input, label) {
-        const originalHeight = row.offsetHeight;
-        row.appendChild(input);
-        row.appendChild(label);
-        
-        const newWidth = row.scrollWidth;
-        const newHeight = row.offsetHeight;
-        
-        row.removeChild(input);
-        row.removeChild(label);
-        
-        const maxWidth = document.querySelector('.add-model-row-align').offsetWidth;
-        return newWidth > maxWidth || newHeight > originalHeight;
+        const rows = document.getElementsByClassName('models-dummy');
+        let targetRow = rows[rows.length - 1];
+
+        // Try to fit in previous rows if we've added new ones
+        if (rows.length > this.dummyRowsOnInit) {
+            const previousRow = rows[rows.length - 2];
+            const container = document.querySelector('.add-model-row-align');
+            const maxWidth = container.offsetWidth;
+            const originalHeight = previousRow.offsetHeight;
+
+            previousRow.append(input, label);
+            
+            // Check for overflow
+            const isOverflowing = previousRow.scrollWidth > maxWidth || 
+                                 previousRow.offsetHeight > originalHeight;
+
+            if (isOverflowing) {
+                previousRow.removeChild(input);
+                previousRow.removeChild(label);
+            } else {
+                targetRow = previousRow;
+            }
+        }
+
+        // Create new row if needed
+        if (targetRow === rows[rows.length - 1]) {
+            const settingDiv = createElementWithClass('div', 'setting');
+            const dummyDiv = createElementWithClass('div', 'models-dummy');
+            const placeholderLabel = createElementWithClass('label', 'setting-label');
+            
+            settingDiv.append(placeholderLabel, dummyDiv);
+            
+            const parent = targetRow.parentElement.parentElement;
+            parent.insertBefore(settingDiv, targetRow.parentElement);
+            targetRow = dummyDiv;
+        }
+
+        targetRow.append(input, label);
     }
 
     async removeModel() {
-        const displayName = document.getElementById('model-display-name-input').value.trim();
-        if (!displayName) return;
-
-        const targetLabel = Array.from(document.getElementsByClassName('model-label'))
-            .find(label => label.textContent.trim() === displayName);
+        const nameInput = document.getElementById('model-display-name-input');
+        const nameToRemove = nameInput.value.trim();
         
-        if (!targetLabel) return;
-
-        const radio = targetLabel.previousElementSibling;
-        const apiName = radio.id;
-        const row = targetLabel.parentElement;
-
-        this.stateManager.removeModel(apiName);
+        const labels = document.getElementsByClassName('model-label');
+        const targetLabel = Array.from(labels).find(label => {
+            return label.textContent.trim() === nameToRemove;
+        });
         
-        row.removeChild(radio);
-        row.removeChild(targetLabel);
-
-        if (row.children.length === 0) {
-            row.parentElement.remove();
+        if (targetLabel) {
+            const input = targetLabel.previousElementSibling;
+            const apiName = input.id;
+            const row = targetLabel.parentElement;
+            
+            this.stateManager.removeModel(apiName);
+            
+            row.removeChild(input);
+            row.removeChild(targetLabel);
+            
+            // Cleanup empty rows
+            if (row.children.length === 0) {
+                row.parentElement.remove();
+            }
+            
+            this.updateCheckboxes();
+            nameInput.value = '';
         }
-
-        // Ensure the selection reflects updated current_model immediately
-        this.updateModelCheckboxes();
     }
 
     save() {
-        if (this.validateSettings()) {
-            this.saveSettings();
-            this.stateManager.commitChanges();
-        }
-    }
-
-    validateSettings() {
         const currentMode = this.getCurrentMode();
         if (currentMode === 'arena') {
-            const selectedCount = document.querySelectorAll('input[name="model_select"]:checked').length;
-            if (selectedCount < 2) {
+            const checkedCount = document.querySelectorAll('input[name="model_select"]:checked').length;
+            if (checkedCount < 2) {
                 document.getElementById('models-label').classList.add('settings-error');
-                return false;
+                return;
             }
         }
-        return true;
-    }
+        
+        const updates = {};
 
-    saveSettings() {
-        const settings = {};
-
-        Object.entries(this.settingsConfig.inputs).forEach(([id, { parser }]) => {
-            settings[id] = parser(document.getElementById(id).value);
+        // Parse and collect input values (skip empty/invalid to preserve existing)
+        Object.entries(this.config.inputs).forEach(([id, parser]) => {
+            const element = document.getElementById(id);
+            const value = element.value.trim();
+            if (value === '') return; // Keep existing value if cleared
+            const parsed = parser(value);
+            if (!Number.isNaN(parsed)) {
+                updates[id] = parsed;
+            }
         });
-
-        this.settingsConfig.checkboxes.forEach(id => {
-            settings[id] = document.getElementById(id).checked;
+        
+        // Collect checkbox states
+        this.config.checkboxes.forEach(id => {
+            const element = document.getElementById(id);
+            updates[id] = element.checked;
         });
-
-        this.stateManager.queueSettingChange(settings);
+        
+        this.stateManager.queueSettingChange(updates);
+        this.stateManager.commitChanges();
     }
 
-    cycleApiKeyInput() {
-        this.currentApiIndex = (this.currentApiIndex + 1) % this.apiProviders.length;
-        this.setApiLabel();
+    cycleApi() { 
+        this.currentApiIndex = (this.currentApiIndex + 1) % this.apiProviders.length; 
+        this.setApiLabel(); 
     }
-
+    
     setApiLabel() {
         const input = document.getElementById('api_key_input');
-        const label = input.labels[0];
-        const currentProvider = this.apiProviders[this.currentApiIndex];
+        const provider = this.apiProviders[this.currentApiIndex];
+        const displayName = apiDisplayNames[provider];
         
-        label.textContent = `Your ${apiDisplayNames[currentProvider]} API Key:`;
-        const hasKey = this.stateManager.getSetting('api_keys')?.[currentProvider];
-        input.placeholder = hasKey ? "Existing key (hidden)" : "Enter your API key here";
+        const label = input.labels[0];
+        if (label) {
+            label.textContent = `Your ${displayName} API Key:`;
+        }
+        
+        const existingKey = this.stateManager.getSetting('api_keys')?.[provider];
+        input.placeholder = existingKey ? "Existing key (hidden)" : "Enter your API key here";
         input.value = "";
     }
 
-    cycleAPIProvider(button) {
-        this.currentAPIProvider = this.apiProviders[(this.apiProviders.indexOf(this.currentAPIProvider) + 1) % this.apiProviders.length];
-        button.textContent = `${apiDisplayNames[this.currentAPIProvider]} ⟳`;
+    cycleProvider(button) { 
+        const currentIndex = this.apiProviders.indexOf(this.currentAPIProvider);
+        const nextIndex = (currentIndex + 1) % this.apiProviders.length;
+        this.currentAPIProvider = this.apiProviders[nextIndex];
+        
+        const displayName = apiDisplayNames[this.currentAPIProvider];
+        button.textContent = `${displayName} \u21B3`; 
     }
 
-    async handlePromptSelection(promptType) {
-        const textarea = document.getElementById('customize_prompt');
-        this.setTextAreaPlaceholder(textarea, promptType);
-        const promptValue = await this.stateManager.getPrompt(promptType);
-        textarea.value = promptValue || '';
-        update_textfield_height(textarea);
-
-        textarea.onchange = (e) => {
-            this.stateManager.setPrompt(promptType, e.target.value);
+    async handlePrompt(type) {
+        const area = document.getElementById('customize_prompt');
+        const basePlaceholder = "Type your prompt here...";
+        
+        const extraInfo = {
+            thinking_prompt: " (This prompt will be appended to the system prompt)",
+            solver_prompt: " (You should make it clear that the model should use the previously generated thinking to now solve the problem. This prompt will be appended to the system prompt)"
+        };
+        
+        area.placeholder = basePlaceholder + (extraInfo[type] || '');
+        
+        const promptValue = await this.stateManager.getPrompt(type);
+        area.value = promptValue || '';
+        
+        updateTextfieldHeight(area);
+        
+        area.onchange = (event) => {
+            this.stateManager.setPrompt(type, event.target.value);
         };
     }
 
-    setTextAreaPlaceholder(textarea, promptType) {
-        let placeholder = "Type your prompt here...";
-        if (promptType === "thinking_prompt") {
-            placeholder += " (This prompt will be appended to the system prompt)";
-        } else if (promptType === "solver_prompt") {
-            placeholder += " (You should make it clear that the model should use the previously generated thinking to now solve the problem. This prompt will be appended to the system prompt)";
+    handleArenaReset(button) {
+        if (!button.classList.contains('confirm')) { 
+            button.classList.add('confirm'); 
+            button.textContent = 'Are you sure? '; 
+            return; 
         }
-        textarea.placeholder = placeholder;
+        
+        const ratingManager = new ArenaRatingManager();
+        ratingManager.initDB().then(() => ratingManager.wipe());
+        
+        button.classList.remove('confirm'); 
+        button.textContent = 'Reset Arena Matches ';
     }
 
-    initTextArea() {
-        document.getElementById("chat-prompt").checked = true;
-        auto_resize_textfield_listener('customize_prompt');
-        this.handlePromptSelection('chat_prompt');
+    initPromptUI() { 
+        autoResizeTextfieldListener('customize_prompt'); 
+        document.getElementById('chat-prompt').checked = true; 
+        this.handlePrompt('chat_prompt'); 
     }
-
-    initReasoningEffort() {
-        const reasoningEffort = this.stateManager.getSetting('reasoning_effort') || 'medium';
-        if (reasoningEffort) {
-            document.getElementById('reasoning_' + reasoningEffort).checked = true;
+    
+    initReasoning() { 
+        const effort = this.stateManager.getSetting('reasoning_effort') || 'medium'; 
+        const radio = document.getElementById('reasoning_' + effort);
+        if (radio) {
+            radio.checked = true; 
         }
     }
 }

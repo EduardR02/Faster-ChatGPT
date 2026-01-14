@@ -3,9 +3,11 @@ import { HistoryChatUI } from './chat_ui.js';
 import { HistoryStateManager } from './state_manager.js';
 import { HistoryRenameManager } from './rename_manager.js';
 import { ChatCore } from './chat_core.js';
-import { createElementWithClass } from './utils.js';
+import { createElementWithClass } from './ui_utils.js';
 
-
+/**
+ * timing and duration formatting helpers.
+ */
 const now = () => (typeof performance !== 'undefined' && typeof performance.now === 'function'
     ? performance.now()
     : Date.now());
@@ -17,555 +19,379 @@ const formatDuration = (start, end = now()) => {
         : `${duration.toFixed(1)}ms`;
 };
 
-const hasWindow = typeof window !== 'undefined';
-
+/**
+ * background task and frame helpers.
+ */
 const runWhenIdle = (callback, timeout = 250) => {
-    if (hasWindow && typeof window.requestIdleCallback === 'function') {
+    if (typeof window !== 'undefined' && window.requestIdleCallback) {
         return window.requestIdleCallback(callback, { timeout });
     }
     return setTimeout(() => callback({ didTimeout: true, timeRemaining: () => 0 }), timeout);
 };
 
-const waitForIdle = (timeout = 0) => new Promise(resolve => {
-    runWhenIdle(() => resolve(), timeout);
-});
+const waitForIdle = (timeout = 0) => new Promise(resolve => runWhenIdle(resolve, timeout));
 
 const nextFrame = () => new Promise(resolve => {
-    if (hasWindow && typeof window.requestAnimationFrame === 'function') {
+    if (typeof window !== 'undefined' && window.requestAnimationFrame) {
         window.requestAnimationFrame(() => resolve());
     } else {
         setTimeout(resolve, 16);
     }
 });
 
+/**
+ * Manages the context menu for history items.
+ */
 class PopupMenu {
     constructor(renameManager, chatStorage) {
-        this.renameManager = renameManager;
-        this.chatStorage = chatStorage;
-        this.activePopup = null;
-        this.chatUI = null;
+        Object.assign(this, { renameManager, chatStorage, activePopup: null, chatUI: null });
         this.init();
     }
 
     init() {
         this.popup = document.querySelector('.popup-menu');
         this.initRenameLogic();
-        document.addEventListener('click', this.handleGlobalClick.bind(this));
-        this.popup.addEventListener('click', this.handlePopupClick.bind(this));
+        document.addEventListener('click', () => this.hide());
+        this.popup.addEventListener('click', (event) => this.handleAction(event));
     }
 
     initRenameLogic() {
-        const confirmBtn = this.popup.querySelector('.rename-confirm');
-        const cancelBtn = this.popup.querySelector('.rename-cancel');
+        const renameInput = this.popup.querySelector('.rename-input');
+        this.popup.querySelector('.rename-confirm').onclick = (event) => { 
+            event.stopPropagation(); 
+            this.confirmRename(); 
+        };
+        this.popup.querySelector('.rename-cancel').onclick = (event) => { 
+            event.stopPropagation(); 
+            this.restore(); 
+        };
+        
+        renameInput.onkeydown = (event) => {
+            if (event.key === 'Enter' && !event.shiftKey) { 
+                event.preventDefault(); 
+                this.confirmRename(); 
+            } else if (event.key === 'Escape') {
+                this.hide(); 
+            }
+        };
+    }
 
-        confirmBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.confirmRename();
+    attachToItem(historyItem) {
+        historyItem.querySelector('.action-dots').onclick = (event) => {
+            event.stopPropagation();
+            if (this.activePopup === historyItem) {
+                return this.hide();
+            }
+            this.show(historyItem);
+        };
+    }
+
+    show(historyItem) {
+        this.restore();
+        const itemRect = historyItem.getBoundingClientRect();
+        Object.assign(this.popup.style, { 
+            top: `${itemRect.top}px`, 
+            left: `${itemRect.right + 5}px` 
         });
+        this.popup.classList.add('active');
+        this.activePopup = historyItem;
+    }
 
-        cancelBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.restorePopupMenu();
-        });
+    handleAction(event) {
+        event.stopPropagation();
+        const actionType = event.target.dataset.action;
+        if (!actionType) return;
 
-        const input = this.popup.querySelector('.rename-input');
-        input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                this.confirmRename();
-            } else if (e.key === 'Escape') {
-                this.hidePopup();
+        switch (actionType) {
+            case 'rename': 
+                this.showRenameInput(); 
+                break;
+            case 'delete': 
+                this.handleDelete(event.target); 
+                break;
+            case 'auto-rename': 
+                this.handleAutoRename(); 
+                break;
+        }
+    }
+
+    showRenameInput() {
+        ['rename', 'delete', 'auto-rename'].forEach(action => {
+            const actionButton = this.popup.querySelector(`[data-action="${action}"]`);
+            if (actionButton) {
+                actionButton.style.display = 'none';
             }
         });
+        this.popup.querySelector('.rename-input-wrapper').style.display = 'flex';
+        const renameInput = this.popup.querySelector('.rename-input');
+        renameInput.value = this.activePopup.querySelector('.item-text').textContent;
+        renameInput.focus();
     }
 
-    addHistoryItem(item) {
-        const dots = item.querySelector('.action-dots');
-        dots.addEventListener('click', (e) => this.handleDotsClick(e, item));
-    }
-
-    handleDotsClick(e, item) {
-        e.stopPropagation();
-
-        if (this.activePopup === item) {
-            this.hidePopup();
-            return;
-        }
-
-        // Restore popup menu state before showing it for another item
-        this.restorePopupMenu();
-
-        const rect = item.getBoundingClientRect();
-        this.popup.style.top = `${rect.top}px`;
-        this.popup.style.left = `${rect.right + 5}px`;
-
-        this.popup.classList.add('active');
-        this.activePopup = item;
-    }
-
-    handlePopupClick(e) {
-        e.stopPropagation();
-        const action = e.target.dataset.action;
-        if (!action) return;
-
-        switch (action) {
-            case 'rename':
-                const renameButton = this.popup.querySelector('[data-action="rename"]');
-                const inputWrapper = this.popup.querySelector('.rename-input-wrapper');
-                const deleteButton = this.popup.querySelector('[data-action="delete"]');
-                const autoRenameButton = this.popup.querySelector('[data-action="auto-rename"]');
-                const input = this.popup.querySelector('.rename-input');
-
-                renameButton.style.display = 'none';
-                deleteButton.style.display = 'none';
-                inputWrapper.style.display = 'flex';
-                autoRenameButton.style.display = 'none';
-                input.value = this.activePopup.querySelector('.item-text').textContent;
-                input.focus();
-                break;
-            case 'delete':
-                this.deleteChat(this.activePopup, e.target);
-                break;
-            case 'auto-rename':
-                this.autoRenameSingleChat(this.activePopup);
-                break;
-        }
-    }
-
-    handleGlobalClick() {
-        this.hidePopup();
-    }
-
-    restorePopupMenu() {
-        this.popup.querySelector('[data-action="rename"]').style.display = 'block';
+    restore() {
+        ['rename', 'delete', 'auto-rename'].forEach(action => {
+            const actionButton = this.popup.querySelector(`[data-action="${action}"]`);
+            if (actionButton) {
+                actionButton.style.display = 'block';
+            }
+        });
         this.popup.querySelector('.rename-input-wrapper').style.display = 'none';
-        this.popup.querySelector('[data-action="delete"]').style.display = 'block';
-        this.popup.querySelector('[data-action="auto-rename"]').style.display = 'block';
-
-        // Reset the delete button state
         const deleteButton = this.popup.querySelector('[data-action="delete"]');
-        if (deleteButton) {
-            deleteButton.classList.remove('delete-confirm');
-            deleteButton.textContent = 'Delete';
+        if (deleteButton) { 
+            deleteButton.classList.remove('delete-confirm'); 
+            deleteButton.textContent = 'Delete'; 
         }
     }
 
-    hidePopup() {
-        this.restorePopupMenu();
-        this.popup.classList.remove('active');
-        this.activePopup = null;
+    hide() { 
+        this.restore(); 
+        this.popup.classList.remove('active'); 
+        this.activePopup = null; 
     }
 
     confirmRename() {
-        const newName = this.popup.querySelector('.rename-input').value.trim();
-        if (newName) {
-            const textSpan = this.activePopup.querySelector('.item-text');
-            const oldName = textSpan.textContent;
-            textSpan.textContent = textSpan.textContent.replace(oldName, newName);
-            const currentId = parseInt(this.activePopup.id, 10);
-            if (chatCore.getChatId() === currentId)
-                chatCore.miscUpdate({ title: chatUI.autoUpdateChatHeader(chatCore.getChatId()) || chatCore.getTitle() });
-            this.chatStorage.renameChat(currentId, newName);
+        const renameInput = this.popup.querySelector('.rename-input');
+        const newTitle = renameInput.value.trim();
+        if (newTitle) {
+            const chatId = parseInt(this.activePopup.id, 10);
+            this.activePopup.querySelector('.item-text').textContent = newTitle;
+            if (chatCore.getChatId() === chatId) {
+                const headerTitle = this.chatUI?.autoUpdateHeader?.(chatId);
+                chatCore.miscUpdate({ title: headerTitle || newTitle });
+            }
+            this.chatStorage.renameChat(chatId, newTitle);
         }
-        this.hidePopup();
+        this.hide();
     }
 
-    deleteChat(item, popupItem) {
-        if (!popupItem.classList.contains('delete-confirm')) {
-            popupItem.classList.add('delete-confirm');
-            popupItem.textContent = 'Sure?';
+    handleDelete(deleteButton) {
+        if (!deleteButton.classList.contains('delete-confirm')) {
+            deleteButton.classList.add('delete-confirm');
+            deleteButton.textContent = 'Sure?';
             return;
         }
-    
-        const chatId = parseInt(item.id, 10);
-
-        this.chatUI.handleItemDeletion(item);
+        const chatId = parseInt(this.activePopup.id, 10);
+        this.chatUI.handleItemDeletion(this.activePopup);
         chatMetaCache.delete(chatId);
         chatMetaComplete.delete(chatId);
-
-        void this.chatStorage.deleteChat(chatId)
-            .then(() => {
-                if (chatSearch) {
-                    return chatSearch.removeFromIndex(chatId);
-                }
-                return undefined;
-            })
-            .catch(error => {
-                console.error('Failed to delete chat:', error);
-            });
-        if (chatCore.getChatId() === chatId) {
-            chatCore.reset();
-            this.chatUI.clearConversation();
+        this.chatStorage.deleteChat(chatId).then(() => {
+            chatSearch?.removeFromIndex(chatId);
+        });
+        if (chatCore.getChatId() === chatId) { 
+            chatCore.reset(); 
+            this.chatUI.clearConversation(); 
         }
-
-        this.hidePopup();
+        this.hide();
     }
 
-    async autoRenameSingleChat(item) {
-        const textSpan = item.querySelector('.item-text');
-        const result = await this.renameManager.renameSingleChat(parseInt(item.id, 10), textSpan);
-        
-        if (result?.tokenCounter) {
-            result.tokenCounter.updateLifetimeTokens();
-            if (chatCore.getChatId() === parseInt(item.id, 10))
-                chatCore.miscUpdate({ title: chatUI.autoUpdateChatHeader(chatCore.getChatId()) || chatCore.getTitle() });
+    async handleAutoRename() {
+        const chatId = parseInt(this.activePopup.id, 10);
+        const textSpan = this.activePopup.querySelector('.item-text');
+        const renameResult = await this.renameManager.renameSingleChat(chatId, textSpan);
+        if (renameResult?.tokenCounter) {
+            renameResult.tokenCounter.updateLifetimeTokens();
+            if (chatCore.getChatId() === chatId) {
+                const headerTitle = this.chatUI?.autoUpdateHeader?.(chatId);
+                chatCore.miscUpdate({ title: headerTitle || textSpan.textContent });
+            }
         }
-        
-        this.hidePopup();
+        this.hide();
     }
 }
 
-
+/**
+ * Cache and Manager instances.
+ */
+const chatMetaCache = new Map();
+const chatMetaComplete = new Set();
 const chatStorage = new ChatStorage();
 const chatCore = new ChatCore(chatStorage);
 const renameManager = new HistoryRenameManager(chatStorage);
-const popupMenu = new PopupMenu(renameManager, chatStorage);
 const stateManager = new HistoryStateManager();
-const chatMetaCache = new Map();
-const chatMetaComplete = new Set();
 
-const cacheChatMeta = (meta, { complete = false } = {}) => {
+const cacheMeta = (meta, complete = false) => {
     if (!meta || meta.chatId == null) return meta;
     const existing = chatMetaCache.get(meta.chatId);
-    if (existing) {
-        const merged = { ...existing, ...meta };
-        chatMetaCache.set(meta.chatId, merged);
-        if (complete || chatMetaComplete.has(meta.chatId)) {
-            chatMetaComplete.add(meta.chatId);
-        }
-        return merged;
-    }
-    chatMetaCache.set(meta.chatId, meta);
-    if (complete) {
-        chatMetaComplete.add(meta.chatId);
-    }
-    return meta;
+    const merged = existing ? { ...existing, ...meta } : meta;
+    chatMetaCache.set(meta.chatId, merged);
+    if (complete) chatMetaComplete.add(meta.chatId);
+    return merged;
 };
 
-const loadHistoryItems = async (...args) => {
-    const items = await chatStorage.getChatMetadata(...args);
-    items.forEach(item => cacheChatMeta(item));
-    return items;
+const getCachedMeta = async (id) => {
+    if (chatMetaCache.has(id) && chatMetaComplete.has(id)) return chatMetaCache.get(id);
+    const meta = await chatStorage.getChatMetadataById(id);
+    return meta ? cacheMeta(meta, true) : chatMetaCache.get(id) || null;
 };
 
-const getCachedChatMeta = async (chatId) => {
-    if (chatMetaCache.has(chatId) && chatMetaComplete.has(chatId)) {
-        return chatMetaCache.get(chatId);
-    }
-    const meta = await chatStorage.getChatMetadataById(chatId);
-    if (meta) {
-        return cacheChatMeta(meta, { complete: true });
-    }
-    if (chatMetaCache.has(chatId)) {
-        return chatMetaCache.get(chatId);
-    }
-    return null;
-};
+const popupMenu = new PopupMenu(renameManager, chatStorage);
 
 const chatUI = new HistoryChatUI({
     stateManager,
-    popupMenu,
-    continueFunc: (index, secondaryIndex, modelChoice = null) => 
-        sendChatToSidepanel({ chatId: chatCore.getChatId(), index, secondaryIndex, modelChoice }),
-    loadHistoryItems: loadHistoryItems,
-    addPopupActions: popupMenu.addHistoryItem.bind(popupMenu),
-    loadChat: async (chatId) => { return await chatCore.loadChat(chatId); },
-    getChatMeta: getCachedChatMeta,
+    continueFunc: (index, subIndex, modelChoice) => 
+        chrome.runtime.sendMessage({ type: "open_side_panel" }).then(() => 
+            chrome.runtime.sendMessage({ type: "reconstruct_chat", options: { chatId: chatCore.getChatId(), index, secondaryIndex: subIndex, modelChoice } })),
+    loadHistoryItems: async (limit, offset) => {
+        const items = await chatStorage.getChatMetadata(limit, offset);
+        items.forEach(item => cacheMeta(item));
+        return items;
+    },
+    addPopupActions: (item) => popupMenu.attachToItem(item),
+    loadChat: (id) => chatCore.loadChat(id),
+    getChatMeta: getCachedMeta,
 });
 popupMenu.chatUI = chatUI;
 
-
 function initMessageListeners() {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-        switch (message.type) {
-            case 'new_chat_saved':
-                handleNewChatSaved(message.chat, message.searchDoc);
-                break;
-            case 'appended_messages_to_saved_chat':
-                handleAppendedMessages(
-                    message.chatId,
-                    message.addedCount,
-                    message.startIndex,
-                    undefined,
-                    message.searchDelta,
-                    message.timestamp
-                );
-                break;
-            case 'message_updated':
-                handleMessageUpdate(message.chatId, message.messageId);
-                break;
-            case 'chat_renamed':
-                handleChatRenamed(message.chatId, message.title);
-                break;
-            case 'history_reindex':
-                (async () => {
-                    try {
-                        const tasks = [];
-                        if (chatSearch) tasks.push(chatSearch.reindex());
-                        if (mediaTab) tasks.push(mediaTab.reindexMedia());
-                        await Promise.all(tasks);
-                        sendResponse({ ok: true });
-                    } catch (error) {
-                        console.error('History reindex failed:', error);
-                        sendResponse({ ok: false, error: error?.message ?? 'unknown_error' });
+        if (message.type === 'new_chat_saved') {
+            cacheMeta(message.chat, true);
+            chatUI.handleNewChatSaved(message.chat);
+            if (chatCore.getChatId() === null) {
+                chatUI.buildChat(message.chat.chatId);
+            }
+            if (message.searchDoc) {
+                chatSearch?.enqueueNewDocument(message.searchDoc);
+            }
+        } else if (message.type === 'appended_messages_to_saved_chat') {
+            handleAppended(message.chatId, message.addedCount, message.startIndex, null, message.searchDelta, message.timestamp);
+        } else if (message.type === 'message_updated') {
+            handleUpdate(message.chatId, message.messageId);
+        } else if (message.type === 'chat_renamed') {
+            handleRenamed(message.chatId, message.title);
+        } else if (message.type === 'history_reindex') {
+            Promise.all([chatSearch?.reindex(), mediaTab?.reindexMedia()])
+                .then(() => sendResponse({ ok: true }))
+                .catch(error => sendResponse({ ok: false, error: error?.message || 'Reindex failed' }));
+            return true;
+        } else if (message.type === 'history_repair_images') {
+            chatStorage.repairAllBlobs()
+                .then(repairedCount => {
+                    if (mediaTab && repairedCount > 0) {
+                        mediaTab.refreshMedia({ force: true });
                     }
-                })();
-                return true;
-            case 'history_repair_images':
-                (async () => {
-                    try {
-                        if (!chatStorage) {
-                            sendResponse({ ok: false, error: 'history_not_ready' });
-                            return;
-                        }
-                        const repaired = await chatStorage.repairAllBlobs();
-                        if (mediaTab && repaired > 0) {
-                            await mediaTab.refreshMedia({ force: true });
-                        }
-                        sendResponse({ ok: true, repaired });
-                    } catch (error) {
-                        console.error('History repair failed:', error);
-                        sendResponse({ ok: false, error: error?.message ?? 'unknown_error' });
-                    }
-                })();
-                return true;
-            case 'repair_blob_from_data_url':
-                (async () => {
-                    try {
-                        if (!chatStorage) {
-                            sendResponse({ ok: false, error: 'history_not_ready' });
-                            return;
-                        }
-                        const { repaired, dataUrl } = await chatStorage.repairBlobByDataUrl(message.dataUrl);
-                        sendResponse({ ok: repaired, dataUrl });
-                    } catch (error) {
-                        console.error('Blob repair failed:', error);
-                        sendResponse({ ok: false, error: error?.message ?? 'unknown_error' });
-                    }
-                })();
-                return true;
+                    sendResponse({ ok: true, repaired: repairedCount });
+                })
+                .catch(error => sendResponse({ ok: false, error: error?.message || 'Repair failed' }));
+            return true;
+        } else if (message.type === 'repair_blob_from_data_url') {
+            chatStorage.repairBlobByDataUrl(message.dataUrl)
+                .then(result => sendResponse({ ok: result.repaired, dataUrl: result.dataUrl }))
+                .catch(error => sendResponse({ ok: false, error: error?.message || 'Blob repair failed' }));
+            return true;
         }
     });
 }
 
-async function handleAppendedMessages(chatId, addedCount, startIndex, message = null, searchDelta = null, timestamp = null) {
-    await handleHistoryItemOnNewMessage(chatId, timestamp != null ? { timestamp } : {});
-
-    if (searchDelta && searchDelta.trim()) {
-        const update = {
-            chatId,
-            delta: searchDelta,
-            timestamp
-        };
-        if (chatSearch) {
-            chatSearch.enqueueAppend(update);
-        }
+async function handleAppended(chatId, addedCount, startIndex, message = null, searchDelta = null, timestamp = null) {
+    await handleHistoryRefresh(chatId, timestamp ? { timestamp: timestamp } : {});
+    if (searchDelta) {
+        chatSearch?.enqueueAppend({ chatId, delta: searchDelta, timestamp: timestamp });
     }
-
-    if (mediaTab) {
-        mediaTab.deferredForceRefresh = true;
+    if (mediaTab) { 
+        mediaTab.deferredForceRefresh = true; 
         if (mediaTab.isMediaTabActive()) {
-            runWhenIdle(() => { void mediaTab.refreshMedia({ incremental: true }); });
+            runWhenIdle(() => mediaTab.refreshMedia({ incremental: true })); 
         }
     }
-
     if (chatCore.getChatId() !== chatId) return;
-    
-    const newMessages = message ? [message] : await chatStorage.getMessages(chatId, startIndex, addedCount);
-    if (!newMessages) return;
-    
-    chatUI.appendMessages(newMessages, chatCore.getLength());
-    chatCore.addMultipleFromHistory(newMessages);
+    const messages = message ? [message] : await chatStorage.getMessages(chatId, startIndex, addedCount);
+    if (messages) { 
+        chatUI.appendMessages(messages, chatCore.getLength()); 
+        chatCore.addMultipleFromHistory(messages); 
+    }
 }
 
-async function handleHistoryItemOnNewMessage(chatId, overrides = {}) {
-    // due to updated timestamp, history item order (and dividers) may need to be updated
-    if (!chatId) return;
-    let chatMeta = chatMetaCache.get(chatId);
-    let fetched = false;
-    if (chatMeta) {
-        chatMeta = { ...chatMeta, ...overrides };
-    } else {
-        const fetchedMeta = await chatStorage.getChatMetadataById(chatId);
-        if (!fetchedMeta) return;
-        fetched = true;
-        chatMeta = overrides && Object.keys(overrides).length
-            ? { ...fetchedMeta, ...overrides }
-            : fetchedMeta;
+async function handleUpdate(chatId, messageId) {
+    if (chatCore.getChatId() !== chatId) return;
+    const message = await chatStorage.getMessage(chatId, messageId);
+    if (!message) return;
+    if (messageId >= chatCore.getLength()) {
+        return handleAppended(chatId, 1, chatCore.getLength(), message, ChatStorage.extractTextFromMessages([message]), message.timestamp);
     }
-    const wasComplete = chatMetaComplete.has(chatId);
-    cacheChatMeta(chatMeta, { complete: fetched || wasComplete });
+    if (mediaTab) {
+        mediaTab.deferredForceRefresh = true;
+    }
+    await handleHistoryRefresh(chatId, { timestamp: message.timestamp || Date.now() });
+    if (message.responses) {
+        chatUI.updateArena(message, messageId);
+    } else {
+        chatUI.appendSingleRegen(message, messageId);
+    }
+    chatCore.miscUpdate({ messages: chatCore.currentChat.messages.map((msg, index) => index === messageId ? message : msg) });
+}
+
+function handleRenamed(chatId, title) {
+    const cachedMeta = chatMetaCache.get(chatId);
+    if (cachedMeta) {
+        cacheMeta({ ...cachedMeta, title }, chatMetaComplete.has(chatId));
+    }
+    chatUI.handleRenamed(chatId, title);
+    chatSearch?.updateInIndex(chatId, title);
+    if (chatCore.getChatId() === chatId) { 
+        chatCore.miscUpdate({ title }); 
+        chatUI.updateChatHeader(title); 
+    }
+}
+
+async function handleHistoryRefresh(chatId, overrides = {}) {
+    if (!chatId) return;
+    let meta = chatMetaCache.get(chatId) || await chatStorage.getChatMetadataById(chatId);
+    if (!meta) return;
+    meta = { ...meta, ...overrides };
+    cacheMeta(meta, true);
     const historyItem = chatUI.getHistoryItem(chatId);
     if (historyItem) {
         chatUI.handleItemDeletion(historyItem);
     }
-    chatUI.handleNewChatSaved(chatMeta);
+    chatUI.handleNewChatSaved(meta);
 }
-
-function handleNewChatSaved(chatMeta, searchDoc = null) {
-    cacheChatMeta(chatMeta, { complete: true });
-    chatUI.handleNewChatSaved(chatMeta);
-    // if no chat is open, open the new chat (might remove if annoying)
-    if (chatCore.getChatId() === null) {
-        chatUI.buildChat(chatMeta.chatId);
-    }
-
-    if (searchDoc && chatSearch) {
-        chatSearch.enqueueNewDocument(searchDoc);
-    }
-}
-
-async function handleMessageUpdate(chatId, messageId) {
-    if (chatCore.getChatId() !== chatId) return;
-    
-    const updatedMessage = await chatStorage.getMessage(chatId, messageId);
-    if (!updatedMessage) return;
-    
-    const isUpdate = messageId < chatCore.getLength();
-    if (!isUpdate) {
-        const delta = ChatStorage.extractTextFromMessages([updatedMessage]);
-        handleAppendedMessages(chatId, 1, chatCore.getLength(), updatedMessage, delta, updatedMessage.timestamp ?? null);
-        return;
-    }
-    
-    if (mediaTab) {
-        mediaTab.deferredForceRefresh = true;
-    }
-
-    await handleHistoryItemOnNewMessage(chatId, { timestamp: updatedMessage.timestamp ?? Date.now() });
-    if (updatedMessage.responses) chatUI.updateArenaMessage(updatedMessage, messageId);
-    else chatUI.appendSingleRegeneratedMessage(updatedMessage, messageId);
-    chatCore.replaceLastFromHistory(updatedMessage);
-}
-
-function handleChatRenamed(chatId, title) {
-    const cached = chatMetaCache.get(chatId);
-    if (cached) {
-        cacheChatMeta({ ...cached, title }, { complete: chatMetaComplete.has(chatId) });
-    } else {
-        void getCachedChatMeta(chatId).then(meta => {
-            if (meta) {
-                cacheChatMeta({ ...meta, title }, { complete: true });
-            }
-        });
-    }
-    chatUI.handleChatRenamed(chatId, title);
-    if (chatSearch) {
-        void chatSearch.updateInIndex(chatId, title);
-    }
-    if (chatCore.getChatId() === chatId) {
-        chatCore.miscUpdate( { title } );
-        chatUI.updateChatHeader(title);
-    }
-}
-
-
-async function sendChatToSidepanel(options) {
-    // Open sidepanel (returns immediately if already open)
-    await chrome.runtime.sendMessage({ type: "open_side_panel" });
-    
-    // Send the reconstruct message
-    chrome.runtime.sendMessage({
-        type: "reconstruct_chat",
-        options,
-    });
-}
-
 
 async function autoRenameUnmodified() {
     const button = document.getElementById('auto-rename');
-    const model = renameManager.getModel();
+    if (!button) return;
 
-    // First click confirmation
+    const modelId = renameManager.getModel();
     if (!button.dataset.confirmed) {
-        button.textContent = `use ${model} to rename?`;
-        button.dataset.confirmed = "pending";
+        button.textContent = `use ${modelId} to rename?`;
+        button.dataset.confirmed = 'pending';
         setTimeout(() => {
-            if (button.dataset.confirmed === "pending") {
-                button.textContent = "auto-rename unmodified";
+            if (button.dataset.confirmed === 'pending') {
+                button.textContent = 'auto-rename unmodified';
                 delete button.dataset.confirmed;
             }
         }, 3000);
         return;
     }
+
     delete button.dataset.confirmed;
-    button.textContent = "renaming...";
+    button.textContent = 'renaming...';
 
     const result = await renameManager.renameAllUnmodified();
-
     if (result.status === 'no_chats') {
-        button.textContent = "no chats to rename";
+        button.textContent = 'no chats to rename';
         setTimeout(() => {
-            button.textContent = "auto-rename unmodified";
+            button.textContent = 'auto-rename unmodified';
         }, 2000);
         return;
     }
 
     result.tokenCounter.updateLifetimeTokens();
     button.textContent = `${result.successCount}/${result.totalCount} renamed (${result.tokenCounter.inputTokens}|${result.tokenCounter.outputTokens} tokens)`;
-    if (chatCore.getChatId()) chatCore.miscUpdate({ title: chatUI.autoUpdateChatHeader(chatCore.getChatId()) || chatCore.getTitle() });
+
+    if (chatCore.getChatId()) {
+        const title = chatUI.autoUpdateHeader(chatCore.getChatId()) || chatCore.getTitle();
+        chatCore.miscUpdate({ title });
+    }
+
     setTimeout(() => {
-        button.textContent = "auto-rename unmodified";
+        button.textContent = 'auto-rename unmodified';
     }, 15000);
 }
 
-
-async function initiateChatBackupDownload(element) {
-    try {
-        element.textContent = "extracting...";
-        const chatDataJson = await chatStorage.exportChats({ pretty: true });
-        chatStorage.triggerDownload(chatDataJson);
-        element.textContent = "success!";
-    } catch (error) {
-        element.textContent = "failed :(";
-        console.error(error);
-    }
-    setTimeout(() => {
-        element.textContent = "export";
-    }, 5000);
-}
-
-
-async function initiateChatBackupImport(element) {
-    const fileInput = document.createElement('input');
-    fileInput.type = 'file';
-    fileInput.accept = 'application/json';
-
-    fileInput.onchange = async (event) => {
-        const file = event.target.files[0];
-        if (!file) {
-            element.textContent = "no file selected";
-            setTimeout(() => {
-                element.textContent = "import";
-            }, 3000);
-            return;
-        }
-
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-            try {
-                element.textContent = "importing...";
-                const importResult = await chatStorage.importChats(e.target.result);
-                element.textContent = importResult.success ? `${importResult.count} added` : 'failed :(';
-                if (!importResult.success) console.error("Import error:", importResult.error);
-                chatMetaCache.clear();
-                chatMetaComplete.clear();
-                chatUI.reloadHistoryList();
-                if (importResult.success && chatSearch) {
-                    await chatSearch.rebuildIndex().catch(err => console.error('Search rebuild failed:', err));
-                }
-            } catch (error) {
-                element.textContent = "failed :(";
-                console.error("Import error:", error);
-            }
-            setTimeout(() => { element.textContent = "import"; }, 5000);
-        };
-        reader.readAsText(file, 'UTF-8');
-    };
-    fileInput.click(); // Programmatically trigger file selection
-}
-
-
+/**
+ * Media Tab Management.
+ */
 const MEDIA_DEFAULT_LIMIT = 500;
 const MEDIA_RENDER_CHUNK_SIZE = 12;
 const MEDIA_STATE = Object.freeze({
@@ -2260,7 +2086,44 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('auto-rename').onclick = autoRenameUnmodified;
     document.getElementById('export').onclick = (e) => initiateChatBackupDownload(e.target);
     document.getElementById('import').onclick = (e) => initiateChatBackupImport(e.target);
-
     mediaTab = new MediaTab(chatStorage, chatUI);
     chatSearch = new ChatSearch(chatUI);
 });
+
+async function initiateChatBackupDownload(element) {
+    element.textContent = "extracting...";
+    try {
+        const backupJson = await chatStorage.exportChats({ pretty: true });
+        chatStorage.triggerDownload(backupJson);
+        element.textContent = "success!";
+    } catch (error) {
+        console.error('Export failed:', error);
+        element.textContent = "failed :(";
+    }
+    setTimeout(() => element.textContent = "export", 5000);
+}
+
+async function initiateChatBackupImport(element) {
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'application/json';
+    fileInput.onchange = (event) => {
+        const selectedFile = event.target.files[0];
+        if (!selectedFile) return;
+        const fileReader = new FileReader();
+        fileReader.onload = async (fileEvent) => {
+            element.textContent = "importing...";
+            try {
+                const importResult = await chatStorage.importChats(fileEvent.target.result);
+                element.textContent = importResult.success ? `${importResult.count} added` : 'failed :(';
+                chatUI.reloadHistoryList();
+                chatSearch?.reindex();
+            } catch (error) {
+                console.error('Import failed:', error);
+                element.textContent = 'failed :(';
+            }
+        };
+        fileReader.readAsText(selectedFile);
+    };
+    fileInput.click();
+}

@@ -1,4 +1,6 @@
-*.txt
+src/prompts/
 .DS_STORE
 .cursor/*
 .claude/*
+src_old/
+Agents/

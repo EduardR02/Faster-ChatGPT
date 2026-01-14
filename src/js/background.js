@@ -1,80 +1,98 @@
-import { get_mode, is_on, set_defaults } from "./utils.js";
+import { getMode, isOn, setDefaults } from "./storage_utils.js";
 
-const SIDE_PANEL_PATH = chrome.runtime.getURL("src/html/sidepanel.html");
+const PANEL_PATH = chrome.runtime.getURL("src/html/sidepanel.html");
 
-chrome.runtime.onInstalled.addListener((details) => {
+let lifetimeTokensUpdate = Promise.resolve();
+const applyLifetimeTokensDelta = (inputDelta = 0, outputDelta = 0) => {
+    lifetimeTokensUpdate = lifetimeTokensUpdate
+        .then(() => new Promise(resolve => {
+            chrome.storage.local.get(['lifetime_input_tokens', 'lifetime_output_tokens'], result => {
+                chrome.storage.local.set({
+                    lifetime_input_tokens: (result.lifetime_input_tokens || 0) + inputDelta,
+                    lifetime_output_tokens: (result.lifetime_output_tokens || 0) + outputDelta
+                }, resolve);
+            });
+        }))
+        .catch(() => {});
+    return lifetimeTokensUpdate;
+};
+
+chrome.runtime.onInstalled.addListener(async (details) => {
     if (details.reason === chrome.runtime.OnInstalledReason.INSTALL) {
-        set_defaults().then(() => {
-            chrome.runtime.openOptionsPage();
-        });
+        await setDefaults();
+        chrome.runtime.openOptionsPage();
     }
 });
 
-// Handle keyboard shortcuts
 chrome.commands.onCommand.addListener(async (command, tab) => {
     if (command === "new-chat") {
-        await openSidePanel(tab);
-        // Broadcast the message - sidepanel will receive it
+        await openPanel(tab);
+        // Fire and forget, but catch errors if no one is listening
         chrome.runtime.sendMessage({ type: "new_chat" }).catch(() => {});
     } else if (command === "open-history") {
-        chrome.tabs.create({ url: chrome.runtime.getURL("src/html/history.html") });
+        const historyUrl = chrome.runtime.getURL("src/html/history.html");
+        chrome.tabs.create({ url: historyUrl });
     }
 });
 
-// Handle messages
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    switch (msg.type) {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    switch (message.type) {
+        case "increment_lifetime_tokens":
+            applyLifetimeTokensDelta(message.inputDelta || 0, message.outputDelta || 0)
+                .then(() => sendResponse({ ok: true }))
+                .catch(() => sendResponse({ ok: false }));
+            return true;
         case "open_side_panel":
-            openSidePanel(sender?.tab).then(() => sendResponse({ ok: true }));
+            openPanel(sender?.tab)
+                .then(() => sendResponse({ ok: true }))
+                .catch(() => sendResponse({ ok: false }));
             return true;
 
         case "is_sidepanel_open":
-            isSidePanelOpen().then((isOpen) => sendResponse({ isOpen }));
+            isSidePanelOpen()
+                .then(isOpen => sendResponse({ isOpen }))
+                .catch(() => sendResponse({ isOpen: false }));
             return true;
 
         case "close_side_panel":
-            chrome.sidePanel.setOptions({
-                path: SIDE_PANEL_PATH,
-                enabled: false,
-            });
-            return;
+            chrome.sidePanel.setOptions({ 
+                path: PANEL_PATH, 
+                enabled: false 
+            }).catch(() => {});
+            break;
 
         case "is_mode_on":
-            get_mode((current_mode) => {
-                sendResponse({ is_mode_on: is_on(current_mode) });
+            getMode(mode => {
+                sendResponse({ is_mode_on: isOn(mode) });
             });
             return true;
     }
 });
 
-/**
- * Opens the sidepanel and waits for it to be ready
- * Returns immediately if already open (fast path)
- */
-async function openSidePanel(tab) {
-    // Enable the sidepanel
+async function openPanel(tab) {
+    // Ensure sidepanel is enabled
     chrome.sidePanel.setOptions({
-        path: SIDE_PANEL_PATH,
-        enabled: true,
-    });
+        path: PANEL_PATH,
+        enabled: true
+    }).catch(() => {});
 
-    // Start checking if already open (don't await yet - run in parallel)
+    // Check if already open BEFORE calling open() to avoid race condition
     const alreadyOpenPromise = isSidePanelOpen();
 
-    // Open sidepanel immediately (MUST be synchronous to preserve user gesture)
+    // Open sidepanel immediately (MUST be synchronous to preserve user gesture context)
     if (tab?.windowId) {
-        chrome.sidePanel.open({ windowId: tab.windowId });
+        chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
     } else {
-        chrome.windows.getLastFocused((window) => {
-            chrome.sidePanel.open({ windowId: window.id });
+        chrome.windows.getLastFocused(window => {
+            if (window?.id) {
+                chrome.sidePanel.open({ windowId: window.id }).catch(() => {});
+            }
         });
     }
 
-    // Now await to see if it was already open
-    const alreadyOpen = await alreadyOpenPromise;
-    if (alreadyOpen) {
-        // Already open - return immediately (instant!)
-        return;
+    // Now check if it was already open
+    if (await alreadyOpenPromise) {
+        return; // Already open - no need to wait
     }
 
     // Was closed - wait for ready signal from newly opened panel
@@ -86,8 +104,7 @@ async function openSidePanel(tab) {
             }
         };
         chrome.runtime.onMessage.addListener(listener);
-
-        // Timeout after 3 seconds
+        // Timeout after 3 seconds to avoid hanging
         setTimeout(() => {
             chrome.runtime.onMessage.removeListener(listener);
             resolve();
@@ -95,13 +112,9 @@ async function openSidePanel(tab) {
     });
 }
 
-/**
- * Check if sidepanel is currently open
- */
-function isSidePanelOpen() {
-    return new Promise((resolve) => {
-        chrome.runtime.getContexts({ contextTypes: ["SIDE_PANEL"] }, (contexts) => {
-            resolve(contexts.length > 0);
-        });
+async function isSidePanelOpen() {
+    const contexts = await new Promise(resolve => {
+        chrome.runtime.getContexts({ contextTypes: ["SIDE_PANEL"] }, resolve);
     });
+    return contexts.length > 0;
 }

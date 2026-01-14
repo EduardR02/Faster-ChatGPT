@@ -1,13 +1,27 @@
-import { auto_resize_textfield_listener, update_textfield_height } from "./utils.js";
+import { autoResizeTextfieldListener, updateTextfieldHeight } from "./ui_utils.js";
 import { ApiManager } from "./api_manager.js";
 import { ChatStorage } from './chat_storage.js';
 import { SidepanelStateManager } from './state_manager.js';
 import { TabManager } from './tab_manager.js';
+import { SidepanelChatUI } from './chat_ui.js';
+import { DragDropManager } from './drag_drop_manager.js';
+import { VoiceManager } from './voice_manager.js';
+
+// Configuration constants
+const STARTUP_WINDOW_MS = 2000;  // Time window to consider closing empty startup tabs
+const NEW_TAB_URL = 'chrome://newtab';
+
+// Arena mode toggle icons
+const ICON = {
+    ARENA: '\u{2694}',   // ⚔️ Crossed swords - arena mode enabled
+    CHAT: '\u{1F916}'    // 🤖 Robot - normal chat mode
+};
 
 class SidepanelApp {
     constructor() {
         this.stateManager = new SidepanelStateManager('chat_prompt');
         this.apiManager = new ApiManager();
+        this.stateManager.apiManager = this.apiManager;
         this.chatStorage = new ChatStorage();
 
         // Per-tab textarea content storage
@@ -18,14 +32,9 @@ class SidepanelApp {
         this.startupNewTabId = null;
         this._markNextTabAsStartupNew = false;
 
-        this.voice = {
-            recorder: null,
-            stream: null,
-            chunks: [],
-            recordingTabId: null,
-            mimeType: null,
-            busy: false,
-        };
+        // Cached DOM elements (reduces repeated queries)
+        this.textInput = document.getElementById('textInput');
+        this.incognitoToggle = document.getElementById('incognito-toggle');
 
         // Initialize TabManager
         this.tabManager = new TabManager({
@@ -51,6 +60,7 @@ class SidepanelApp {
             }
         });
 
+        this.initManagers();
         this.initEventListeners();
 
         this.stateManager.runOnReady(() => {
@@ -58,954 +68,687 @@ class SidepanelApp {
         });
     }
 
+    initManagers() {
+        this.voiceManager = new VoiceManager(this.apiManager, this.stateManager, {
+            getActiveTabId: () => this.getActiveTab()?.id,
+            onTranscript: (id, text) => this.applyTranscription(id, text),
+            onError: (msg) => this.getActiveChatUI()?.addErrorMessage(msg)
+        });
+    }
+
     ensureSharedUIInitialized() {
         if (this.sharedUIInitialized) return;
-        const chatUI = this.getActiveChatUI();
-        if (!chatUI) return;
-        this.initSharedUI(chatUI);
-        this.sharedUIInitialized = true;
+        if (this.getActiveChatUI()) {
+            this.initSharedUI();
+            this.sharedUIInitialized = true;
+        }
     }
 
     ensureActiveTab() {
         if (this.getActiveController()) return;
-
-        // If tabs exist but none is active, activate the first one
-        const existingTabs = this.tabManager.getAllTabs();
-        if (existingTabs.length > 0) {
-            this.tabManager.switchTab(existingTabs[0].id);
+        const tabs = this.tabManager.getAllTabs();
+        if (tabs.length > 0) {
+            this.tabManager.switchTab(tabs[0].id);
             this.ensureSharedUIInitialized();
             return;
         }
 
-        // No tabs exist, create a new one
-        const tab = this.tabManager.createTab({
-            continueFunc: (index, secondaryIndex, modelChoice) =>
-                this.continueFromCurrent(index, secondaryIndex, modelChoice)
+        const tab = this.tabManager.createTab({ 
+            continueFunc: (i, s, m) => this.continueFromCurrent(i, s, m) 
         });
-        if (tab && this._markNextTabAsStartupNew) {
-            this.startupNewTabId = tab.id;
+        if (tab) {
+            if (this._markNextTabAsStartupNew) this.startupNewTabId = tab.id;
+            this.ensureSharedUIInitialized();
         }
-        if (tab) this.ensureSharedUIInitialized();
     }
 
     async bootstrapTabs() {
         await this.tabManager.restorePersistedTabs();
-
-        if (!this.openedForReconstruct) {
-            this._markNextTabAsStartupNew = true;
-        }
+        // Wait for next frame to ensure UI/state is stable
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        
+        this._markNextTabAsStartupNew = !this.openedForReconstruct;
         this.ensureActiveTab();
         this._markNextTabAsStartupNew = false;
     }
 
     isTabReallyEmpty(tabId) {
-        const tab = this.tabManager.getAllTabs().find(t => t.id === tabId);
-        if (!tab) return false;
+        const tabs = this.tabManager.getAllTabs();
+        const tab = tabs.find(t => t.id === tabId);
+        
+        if (!tab) {
+            return false;
+        }
 
-        const chatCore = tab.controller?.chatCore;
-        const hasMessages = chatCore?.hasChatStarted?.() || false;
+        const controller = tab.controller;
+        const chatCore = controller?.chatCore;
+        
+        // Get content from active input or stored content
+        const isActiveTab = this.getActiveTab()?.id === tabId;
+        const currentText = isActiveTab ? this.textInput?.value : this.tabTextareaContent.get(tabId);
+        const trimmedText = currentText || '';
+
+        const hasStarted = chatCore?.hasChatStarted();
         const hasPendingMedia = Object.keys(chatCore?.pendingMedia || {}).length > 0;
-        const hasChatId = !!(chatCore?.getChatId?.() || tab.tabState?.chatId);
+        const hasChatId = chatCore?.getChatId() || tab.tabState?.chatId;
+        const hasInputText = trimmedText.trim().length > 0;
 
-        const activeTab = this.getActiveTab();
-        const textareaText = activeTab?.id === tabId
-            ? (document.getElementById('textInput')?.value || '')
-            : (this.tabTextareaContent.get(tabId) || '');
-        const hasText = textareaText.trim().length > 0;
-
-        return !hasMessages && !hasText && !hasPendingMedia && !hasChatId;
+        return !(hasStarted || hasPendingMedia || hasChatId || hasInputText);
     }
 
-    initSharedUI(chatUI) {
-        const globalState = this.stateManager;
-        const sharedState = new Proxy(globalState, {
+    initSharedUI() {
+        // Dummy state to handle cases when no tab is active
+        const dummyTabState = {
+            isArenaModeActive: false,
+            getShouldThink: () => false,
+            getShouldWebSearch: () => false,
+            getReasoningEffort: () => 'medium',
+            getImageAspectRatio: () => 'auto',
+            getImageResolution: () => '2K',
+            getCurrentModel: () => this.stateManager.getSetting('current_model'),
+            isThinking: () => false,
+            isSolving: () => false,
+            isInactive: () => true,
+            getArenaModel: () => null,
+            getArenaModelKey: () => 'model_a',
+            getArenaModels: () => [],
+        };
+
+        // Create a proxy to delegate property access between global state and active tab state
+        const stateProxyHandler = {
             get: (target, prop) => {
-                const active = this.tabManager.getActiveTabState();
-                if (active && prop in active) {
-                    const value = active[prop];
-                    return typeof value === 'function' ? value.bind(active) : value;
+                const activeTabState = this.getActiveTabState() || dummyTabState;
+                
+                // Prioritize active tab state if property exists there
+                if (prop in activeTabState) {
+                    const value = activeTabState[prop];
+                    return typeof value === 'function' ? value.bind(activeTabState) : value;
                 }
-                const value = target[prop];
-                return typeof value === 'function' ? value.bind(target) : value;
+                
+                // Fallback to global state manager
+                const globalValue = target[prop];
+                return typeof globalValue === 'function' ? globalValue.bind(target) : globalValue;
             },
             set: (target, prop, value) => {
-                const active = this.tabManager.getActiveTabState();
-                if (active && prop in active) {
-                    active[prop] = value;
+                const activeTabState = this.getActiveTabState();
+                
+                // Set on active tab state if it exists there
+                if (activeTabState && prop in activeTabState) {
+                    activeTabState[prop] = value;
                 } else {
                     target[prop] = value;
                 }
                 return true;
             }
+        };
+
+        const sharedState = new Proxy(this.stateManager, stateProxyHandler);
+
+        // Configure shared UI instance by properly calling the constructor
+        const ui = new SidepanelChatUI({
+            stateManager: sharedState,
+            textarea: this.textInput,
+            // Shared UI uses the main conversation wrapper but should ideally not be used for messaging
+            conversationWrapperId: 'tab-content-area'
         });
 
-        const sharedUI = Object.create(Object.getPrototypeOf(chatUI));
-        sharedUI.stateManager = sharedState;
-        sharedUI.textarea = document.getElementById('textInput');
-
-        sharedUI.initSonnetThinking();
-        globalState.runOnReady(() => {
-            sharedUI.initWebSearchToggle();
-            sharedUI.initImageConfigToggles();
-            sharedUI.initModelPicker();
+        ui.initSonnetThinking();
+        
+        this.stateManager.runOnReady(() => { 
+            ui.initWebSearchToggle(); 
+            ui.initImageConfigToggles(); 
+            ui.initModelPicker(); 
         });
 
-        const buttonFooter = document.getElementById('sidepanel-button-footer');
-        const incognitoToggle = document.getElementById('incognito-toggle');
-        if (buttonFooter && incognitoToggle) {
-            const hoverText = buttonFooter.querySelectorAll('.hover-text');
-            const hasChatStarted = () => this.getActiveController()?.chatCore?.hasChatStarted?.() || false;
-            sharedUI.setupIncognitoButtonHandlers(incognitoToggle, buttonFooter, hoverText, hasChatStarted);
-            sharedUI.updateIncognitoButtonVisuals(incognitoToggle);
+        const footer = document.getElementById('sidepanel-button-footer');
+        const toggle = document.getElementById('incognito-toggle');
+        
+        if (footer && toggle) {
+            const getChatStartedStatus = () => {
+                return this.getActiveController()?.chatCore?.hasChatStarted() ?? false;
+            };
+
+            ui.setupIncognitoButtonHandlers(
+                toggle, 
+                footer, 
+                footer.querySelectorAll('.hover-text'), 
+                getChatStartedStatus
+            );
+            
+            ui.updateIncognitoButtonVisuals(toggle);
         }
     }
 
-    // ========== Accessor Methods ==========
+    // ========== Accessor Methods ========== 
 
-    getActiveController() {
-        return this.tabManager.getActiveController();
-    }
+    getActiveController() { return this.tabManager.getActiveController(); }
+    getActiveChatUI() { return this.tabManager.getActiveChatUI(); }
+    getActiveTabState() { return this.tabManager.getActiveTabState(); }
+    getActiveTab() { return this.tabManager.getActiveTab(); }
 
-    getActiveChatUI() {
-        return this.tabManager.getActiveChatUI();
-    }
-
-    getActiveTabState() {
-        return this.tabManager.getActiveTabState();
-    }
-
-    getActiveTab() {
-        return this.tabManager.getActiveTab();
-    }
-
-    /**
-     * Creates a new tab if current isn't empty. Returns false if max tabs reached.
-     */
     createTabIfNeeded() {
         if (this.tabManager.isCurrentTabEmpty()) return true;
-        const newTab = this.tabManager.createTab({
-            continueFunc: (i, si, mc) => this.continueFromCurrent(i, si, mc)
+        const tab = this.tabManager.createTab({ 
+            continueFunc: (i, s, m) => this.continueFromCurrent(i, s, m) 
         });
-        if (!newTab) {
-            this.getActiveChatUI()?.addErrorMessage("Maximum tabs reached. Close a tab first.");
-            return false;
-        }
-        return true;
+        if (!tab) this.getActiveChatUI()?.addErrorMessage("Maximum tabs reached. Close a tab first.");
+        return !!tab;
     }
 
-    // ========== Event Listeners ==========
+    // ========== Event Listeners ========== 
 
     initEventListeners() {
-        auto_resize_textfield_listener('textInput');
-        this.initInputListener();
+        autoResizeTextfieldListener('textInput');
+        this.textInput.onkeydown = e => {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.handleInput(); }
+        };
         this.initArenaToggleButton();
         this.initThinkingModeButton();
         this.initFooterButtons();
-        this.initVoiceTranscription();
         this.initTextareaImageHandling();
         this.setupMessageListeners();
         this.stateManager.subscribeToChatReset("chat", () => this.handleNewChat());
     }
 
-    initInputListener() {
-        const inputField = document.getElementById('textInput');
-        inputField.addEventListener('keydown', (event) => {
-            if (inputField === document.activeElement && event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                this.handleInput(inputField);
-            }
-        });
-    }
-
     async handleInput() {
-        const tabState = this.getActiveTabState();
-        const controller = this.getActiveController();
-        if (!tabState || !controller) return;
-
-        // Check if mode is on (via proxy to global state)
-        if (!this.stateManager.isOn()) return;
-
-        if (controller.chatCore.getSystemPrompt() === undefined) {
-            await this.initPrompt({ mode: "chat" });
+        const activeTabState = this.getActiveTabState();
+        const activeController = this.getActiveController();
+        
+        if (!activeTabState || !activeController || !this.stateManager.isOn()) {
+            return;
         }
-        controller.sendUserMessage();
-    }
-
-    async initPrompt(context) {
-        const controller = this.getActiveController();
-        if (controller) {
-            await controller.initPrompt(context);
+        
+        if (activeController.chatCore.getSystemPrompt() === undefined) {
+            await activeController.initPrompt({ mode: "chat" });
         }
+        activeController.sendUserMessage();
     }
 
     continueFromCurrent(index, secondaryIndex = null, modelChoice = null) {
-        const controller = this.getActiveController();
-        const chatUI = this.getActiveChatUI();
-        if (!controller) return;
+        const activeController = this.getActiveController();
+        if (!activeController) return;
 
-        const options = {
-            chatId: controller.chatCore.getChatId(),
+        const reconstructOptions = {
+            chatId: activeController.chatCore.getChatId(),
             index,
             secondaryIndex,
             modelChoice,
-            pendingUserMessage: controller.collectPendingUserMessage()
+            pendingUserMessage: activeController.collectPendingUserMessage()
         };
-        if (!options.chatId) {
-            options.systemPrompt = controller.chatCore.getSystemPrompt();
+        
+        if (!reconstructOptions.chatId) {
+            reconstructOptions.systemPrompt = activeController.chatCore.getSystemPrompt();
         }
-        void this.handleReconstructChat(options);
+        
+        void this.handleReconstructChat(reconstructOptions);
     }
 
-    // ========== Tab Switch Handler ==========
+    // ========== Tab Switch Handler ========== 
 
-    handleTabSwitch(newTab, oldTabId) {
-        const textarea = document.getElementById('textInput');
-        const { tabState, chatUI } = newTab;
+    handleTabSwitch(activeTab, oldTabId) {
+        if (oldTabId && oldTabId !== activeTab.id) {
+            this.tabTextareaContent.set(oldTabId, this.textInput.value || '');
+            this.voiceManager.handleTabSwitch(activeTab.id, oldTabId);
+        }
 
-        // Save/restore textarea content
-        if (oldTabId && oldTabId !== newTab.id) {
-            this.tabTextareaContent.set(oldTabId, textarea.value || '');
+        this.textInput.value = this.tabTextareaContent.get(activeTab.id) || '';
+        updateTextfieldHeight(this.textInput);
 
-            if (this.voice.recorder?.state === 'recording' && this.voice.recordingTabId === oldTabId) {
-                void this.stopRecordingAndTranscribe();
+        if (activeTab.chatUI) {
+            activeTab.chatUI.updateIncognitoButtonVisuals(this.incognitoToggle);
+        }
+        
+        if (activeTab.tabState) {
+            this.updateHeaderControls(activeTab.tabState);
+            const currentModelId = activeTab.tabState.getCurrentModel();
+            if (currentModelId && currentModelId !== this.stateManager.getSetting('current_model')) {
+                this.stateManager.updateSettingsLocal({ current_model: currentModelId });
             }
         }
-        textarea.value = this.tabTextareaContent.get(newTab.id) ?? '';
-        update_textfield_height(textarea);
+    }
 
-        // Update incognito button
-        const incognitoToggle = document.getElementById('incognito-toggle');
-        if (incognitoToggle && chatUI) chatUI.updateIncognitoButtonVisuals(incognitoToggle);
-
-        if (!tabState) return;
-
-        // Update thinking mode button
-        document.querySelector('.thinking-mode')
-            ?.classList.toggle('thinking-mode-on', tabState.pendingThinkingMode);
-
-        // Update arena mode button
-        const isArenaMode = this.stateManager.getSetting('arena_mode');
-        const arenaButton = document.querySelector('.arena-toggle-button');
-        if (arenaButton) {
-            arenaButton.textContent = isArenaMode ? '\u{2694}' : '\u{1F916}';
-            arenaButton.classList.toggle('arena-mode-on', isArenaMode);
+    updateHeaderControls(tabState) {
+        const thinkingModeButton = document.querySelector('.thinking-mode');
+        if (thinkingModeButton) {
+            thinkingModeButton.classList.toggle('thinking-mode-on', tabState.pendingThinkingMode);
+        }
+        
+        const arenaToggleButton = document.querySelector('.arena-toggle-button');
+        const isArenaModeEnabled = tabState?.getArenaModeEnabled?.() ?? this.stateManager.getSetting('arena_mode');
+        if (arenaToggleButton) {
+            arenaToggleButton.textContent = isArenaModeEnabled ? ICON.ARENA : ICON.CHAT;
+            arenaToggleButton.classList.toggle('arena-mode-on', isArenaModeEnabled);
         }
 
-        // Update reasoning toggle
-        const sonnetBtn = document.getElementById('sonnet-thinking-toggle');
-        if (sonnetBtn) {
-            const model = tabState.getCurrentModel() || '';
-            const hasReasoningLevels = /o\d/.test(model) || model.includes('gpt-5') ||
-                (/gemini-[3-9]\.?\d*|gemini-\d{2,}/.test(model) && !model.includes('image'));
-            const label = sonnetBtn.querySelector('.reasoning-label');
-
-            if (hasReasoningLevels) {
-                const effort = tabState.getReasoningEffort();
-                sonnetBtn.classList.add('active');
-                sonnetBtn.title = `Reasoning: ${effort}`;
-                if (label) label.textContent = effort;
+        const reasoningToggleButton = document.getElementById('sonnet-thinking-toggle');
+        if (reasoningToggleButton) {
+            const currentModelId = tabState.getCurrentModel() || '';
+            const hasReasoningEffortLevels = this.apiManager.hasReasoningLevels(currentModelId);
+            const labelSpan = reasoningToggleButton.querySelector('.reasoning-label');
+            
+            if (hasReasoningEffortLevels) {
+                const effortLevel = tabState.getReasoningEffort();
+                reasoningToggleButton.classList.add('active');
+                reasoningToggleButton.title = `Reasoning: ${effortLevel}`;
+                if (labelSpan) labelSpan.textContent = effortLevel;
             } else {
-                sonnetBtn.classList.toggle('active', tabState.getShouldThink());
-                sonnetBtn.title = 'Reasoning';
-                if (label) label.textContent = 'reason';
+                reasoningToggleButton.classList.toggle('active', tabState.getShouldThink());
+                reasoningToggleButton.title = 'Reasoning';
+                if (labelSpan) labelSpan.textContent = 'reason';
             }
         }
-
-        // Update web search toggle
-        document.getElementById('web-search-toggle')
-            ?.classList.toggle('active', tabState.getShouldWebSearch());
-
-        // Update image config labels
+        
+        const webSearchToggle = document.getElementById('web-search-toggle');
+        if (webSearchToggle) {
+            webSearchToggle.classList.toggle('active', tabState.getShouldWebSearch());
+        }
+        
         const aspectLabel = document.querySelector('#image-aspect-toggle .reasoning-label');
-        const resLabel = document.querySelector('#image-res-toggle .reasoning-label');
+        const resolutionLabel = document.querySelector('#image-res-toggle .reasoning-label');
         if (aspectLabel) aspectLabel.textContent = tabState.getImageAspectRatio();
-        if (resLabel) resLabel.textContent = tabState.getImageResolution();
-
-        // Sync model to global state
-        const tabModel = tabState.getCurrentModel();
-        if (tabModel && tabModel !== this.stateManager.getSetting('current_model')) {
-            this.stateManager.updateSettingsLocal({ current_model: tabModel });
-        }
+        if (resolutionLabel) resolutionLabel.textContent = tabState.getImageResolution();
     }
 
-    handleTabClose(tabId) {
-        if (this.voice.recorder?.state === 'recording' && this.voice.recordingTabId === tabId) {
-            void this.stopVoiceRecording();
-        }
-        this.tabTextareaContent.delete(tabId);
+    handleTabClose(tabId) { 
+        this.voiceManager.handleTabClose(tabId); 
+        this.tabTextareaContent.delete(tabId); 
     }
-
-    // ========== Toggle Buttons ==========
 
     initArenaToggleButton() {
-        const button = document.querySelector('.arena-toggle-button');
+        const arenaToggleButton = document.querySelector('.arena-toggle-button');
 
-        const updateButton = () => {
-            const isArenaMode = this.stateManager.getSetting('arena_mode');
-            button.textContent = isArenaMode ? '\u{2694}' : '\u{1F916}';
-            button.classList.toggle('arena-mode-on', isArenaMode);
+        const updateButtonState = () => {
+            const isArenaModeEnabled = this.getActiveTabState()?.getArenaModeEnabled?.() ??
+                this.stateManager.getSetting('arena_mode');
+            arenaToggleButton.textContent = isArenaModeEnabled ? ICON.ARENA : ICON.CHAT;
+            arenaToggleButton.classList.toggle('arena-mode-on', isArenaModeEnabled);
         };
-
-        this.stateManager.runOnReady(updateButton);
-        this.stateManager.subscribeToSetting('arena_mode', updateButton);
-
-        button.addEventListener('click', () => {
-            this.stateManager.toggleArenaMode();
-            updateButton();
-        });
+        
+        this.stateManager.runOnReady(updateButtonState);
+        this.stateManager.subscribeToSetting('arena_mode', updateButtonState);
+        
+        arenaToggleButton.onclick = () => { 
+            this.getActiveTabState()?.toggleArenaModeEnabled?.(); 
+            updateButtonState(); 
+        };
     }
 
     initThinkingModeButton() {
-        const button = document.querySelector('.thinking-mode');
-        button.addEventListener('click', () => {
-            const tabState = this.getActiveTabState();
-            if (tabState) {
-                tabState.toggleThinkingMode();
-                button.classList.toggle('thinking-mode-on', tabState.pendingThinkingMode);
+        const thinkingModeButton = document.querySelector('.thinking-mode');
+        
+        thinkingModeButton.onclick = () => {
+            const activeTabState = this.getActiveTabState();
+            if (activeTabState) { 
+                activeTabState.toggleThinkingMode(); 
+                thinkingModeButton.classList.toggle('thinking-mode-on', activeTabState.pendingThinkingMode); 
             }
-        });
-    }
-
-    // ========== Voice Transcription ==========
-
-    initVoiceTranscription() {
-        const button = document.getElementById('voice-transcribe-toggle');
-        if (!button) return;
-
-        const updateButton = () => {
-            const isRecording = this.voice.recorder?.state === 'recording';
-            button.classList.toggle('recording', isRecording);
-            button.classList.toggle('busy', !!this.voice.busy);
         };
-
-        button.addEventListener('click', () => {
-            if (this.voice.busy) return;
-            if (this.voice.recorder?.state === 'recording') {
-                void this.stopRecordingAndTranscribe();
-            } else {
-                void this.startVoiceRecording();
-            }
-            updateButton();
-        });
-
-        this._updateVoiceButton = updateButton;
-        updateButton();
     }
 
-    getPreferredAudioMimeType() {
-        return ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg']
-            .find(t => MediaRecorder?.isTypeSupported?.(t)) || '';
-    }
-
-    async startVoiceRecording() {
-        if (this.voice.recorder?.state === 'recording') return;
-
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const mimeType = this.getPreferredAudioMimeType();
-            const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-
-            this.voice.stream = stream;
-            this.voice.mimeType = recorder.mimeType || mimeType || 'audio/webm';
-            this.voice.recorder = recorder;
-            this.voice.chunks = [];
-            this.voice.recordingTabId = this.getActiveTab()?.id ?? null;
-
-            recorder.addEventListener('dataavailable', (event) => {
-                if (event.data?.size > 0) this.voice.chunks.push(event.data);
-            });
-
-            recorder.start();
-        } catch (error) {
-            const msg = error?.name === 'NotAllowedError'
-                ? 'Microphone permission denied. Open settings → Microphone access → Enable microphone.'
-                : this.apiManager.getUiErrorMessage(error, { prefix: 'Microphone error' });
-            this.getActiveChatUI()?.addErrorMessage(msg);
-            this.cleanupVoiceRecorder();
-        } finally {
-            this._updateVoiceButton?.();
-        }
-    }
-
-    cleanupVoiceRecorder() {
-        this.voice.recorder = null;
-        this.voice.chunks = [];
-        this.voice.mimeType = null;
-        this.voice.recordingTabId = null;
-
-        if (this.voice.stream) {
-            this.voice.stream.getTracks().forEach(track => track.stop());
-            this.voice.stream = null;
-        }
-        this._updateVoiceButton?.();
-    }
-
-    async stopVoiceRecording() {
-        const recorder = this.voice.recorder;
-        if (!recorder) return null;
-
-        const stopped = new Promise(resolve => recorder.addEventListener('stop', resolve, { once: true }));
-        recorder.stop();
-        await stopped;
-
-        const blob = new Blob(this.voice.chunks, { type: this.voice.mimeType || 'audio/webm' });
-        this.cleanupVoiceRecorder();
-        return blob;
-    }
-
-    async stopRecordingAndTranscribe() {
-        const tabId = this.voice.recordingTabId;
-        const audioBlob = await this.stopVoiceRecording();
-        if (!audioBlob || audioBlob.size === 0) return;
-
-        const model = this.stateManager.getSetting('transcription_model');
-        if (!model) {
-            this.getActiveChatUI()?.addErrorMessage('Select a transcription model in settings first.');
-            return;
-        }
-
-        this.voice.busy = true;
-        this._updateVoiceButton?.();
-
-        try {
-            const ext = ['ogg', 'webm', 'wav'].find(e => audioBlob.type.includes(e)) || 'webm';
-            const text = await this.apiManager.transcribeAudio(model, audioBlob, { filename: `audio.${ext}` });
-            if (text) this.applyTranscriptionText(tabId, text);
-        } catch (error) {
-            this.getActiveChatUI()?.addErrorMessage(this.apiManager.getUiErrorMessage(error, { prefix: 'Transcription error' }));
-        } finally {
-            this.voice.busy = false;
-            this._updateVoiceButton?.();
-        }
-    }
-
-    applyTranscriptionText(tabId, text) {
-        const cleaned = String(text || '').trim();
-        if (!cleaned) return;
-
+    applyTranscription(tabId, transcriptText) {
+        const cleanedTranscript = String(transcriptText || '').trim();
+        if (!cleanedTranscript || !tabId) return;
+        
+        // Verify tab still exists before proceeding
+        const allTabs = this.tabManager.getAllTabs();
+        const tabExists = allTabs.some(t => t.id === tabId);
+        if (!tabExists) return;
+        
         if (this.getActiveTab()?.id === tabId) {
-            this.insertTextAtCursor(document.getElementById('textInput'), cleaned);
+            this.insertTextAtCursor(this.textInput, cleanedTranscript);
             return;
         }
-        if (!tabId) return;
-        const existing = this.tabTextareaContent.get(tabId) || '';
-        this.tabTextareaContent.set(tabId, existing ? `${existing}\n${cleaned}` : cleaned);
+        
+        const existingContent = this.tabTextareaContent.get(tabId) || '';
+        this.tabTextareaContent.set(tabId, existingContent ? `${existingContent}\n${cleanedTranscript}` : cleanedTranscript);
     }
 
-    insertTextAtCursor(textarea, text) {
-        const start = textarea.selectionStart ?? textarea.value.length;
-        const end = textarea.selectionEnd ?? textarea.value.length;
+    insertTextAtCursor(textareaElement, textToInsert) {
+        const selectionStart = textareaElement.selectionStart ?? textareaElement.value.length;
+        const selectionEnd = textareaElement.selectionEnd ?? textareaElement.value.length;
 
-        const before = textarea.value.slice(0, start);
-        const after = textarea.value.slice(end);
+        const textBefore = textareaElement.value.slice(0, selectionStart);
+        const textAfter = textareaElement.value.slice(selectionEnd);
+        const needsSpace = textBefore.length > 0 && !/\s$/.test(textBefore) && textToInsert.length > 0 && !/^\s/.test(textToInsert);
+        const finalInsertion = `${needsSpace ? ' ' : ''}${textToInsert}`;
 
-        const needsSpaceBefore = before.length > 0 && !/\s$/.test(before) && text.length > 0 && !/^\s/.test(text);
-        const insertion = `${needsSpaceBefore ? ' ' : ''}${text}`;
-
-        textarea.value = `${before}${insertion}${after}`;
-        const cursor = before.length + insertion.length;
-        textarea.selectionStart = cursor;
-        textarea.selectionEnd = cursor;
-        update_textfield_height(textarea);
-        textarea.focus();
+        textareaElement.value = `${textBefore}${finalInsertion}${textAfter}`;
+        const newCursorPosition = textBefore.length + finalInsertion.length;
+        textareaElement.selectionStart = newCursorPosition;
+        textareaElement.selectionEnd = newCursorPosition;
+        updateTextfieldHeight(textareaElement);
+        textareaElement.focus();
     }
-
-    // ========== Footer Buttons ==========
 
     initFooterButtons() {
-        this.initHistoryButton();
-        this.initSettingsButton();
-        this.initPopoutToggle();
-    }
-
-    initHistoryButton() {
-        document.getElementById('history-button').addEventListener('click', () => {
+        document.getElementById('history-button').onclick = () => {
             chrome.tabs.create({ url: chrome.runtime.getURL('src/html/history.html') });
-        });
-    }
-
-    initSettingsButton() {
-        document.getElementById('settings-button').addEventListener('click', () => {
+        };
+        document.getElementById('settings-button').onclick = () => {
             chrome.runtime.openOptionsPage();
-        });
+        };
+        document.getElementById('pop-out-toggle').onclick = () => {
+            this.handlePopoutToggle();
+        };
     }
-
-    initPopoutToggle() {
-        const button = document.getElementById('pop-out-toggle');
-        button.addEventListener('click', async () => {
-            await this.handlePopoutToggle();
-        });
-    }
-
-    // ========== Message Listeners ==========
 
     setupMessageListeners() {
-        chrome.runtime.onMessage.addListener((msg) => {
-            switch (msg.type) {
-                case 'chat_renamed':
-                    this.handleChatRenamed(msg.chatId, msg.title);
-                    return;
+        chrome.runtime.onMessage.addListener(message => {
+            if (message.type === 'chat_renamed') {
+                return this.handleChatRenamed(message.chatId, message.title);
             }
-
+            
             if (!this.stateManager.isOn()) return;
-
-            switch (msg.type) {
-                case 'new_selection':
-                    this.handleNewSelection(msg.text, msg.url);
-                    break;
-                case 'new_chat':
-                    this.handleNewChat();
-                    break;
-                case 'reconstruct_chat':
-                    this.handleReconstructChat(msg.options);
-                    break;
+            
+            if (message.type === 'new_selection') {
+                this.handleNewSelection(message.text, message.url);
+            } else if (message.type === 'new_chat') {
+                this.handleNewChat();
+            } else if (message.type === 'reconstruct_chat') {
+                this.handleReconstructChat(message.options);
             }
         });
     }
 
-    handleChatRenamed(chatId, title) {
-        const tab = this.tabManager.findTabByChatId(chatId);
-        if (tab) {
-            tab.controller.chatCore.miscUpdate({ title });
-            this.tabManager.updateTabTitle(tab.id, title);
+    handleChatRenamed(chatId, newTitle) {
+        const renamedTab = this.tabManager.findTabByChatId(chatId);
+        if (renamedTab) { 
+            renamedTab.controller.chatCore.miscUpdate({ title: newTitle }); 
+            this.tabManager.updateTabTitle(renamedTab.id, newTitle); 
         }
     }
 
-    async handleNewSelection(text, url) {
-        this.ensureActiveTab();
+    async handleNewSelection(selectedText, pageUrl) {
+        this.ensureActiveTab(); 
         if (!this.createTabIfNeeded()) return;
-
-        const controller = this.getActiveController();
-        const chatUI = this.getActiveChatUI();
-        const tabState = this.getActiveTabState();
-        if (!controller || !chatUI) return;
-
-        if (tabState) tabState.chatId = null;
-
-        this.stateManager.subscribeToChatReset("chat", () => this.handleNewSelection(text, url));
-        const hostname = new URL(url).hostname;
-        controller.initStates(`Selection from ${hostname}`);
-        chatUI.clearConversation();
-        chatUI.addSystemMessage(text, `Selected Text - site:${hostname}`);
-
-        const tab = this.getActiveTab();
-        if (tab) this.tabManager.updateTabTitle(tab.id, `Selection from ${hostname}`);
-
-        await this.initPrompt({ mode: "selection", text, url });
-
-        if (this.stateManager.isInstantPromptMode()) {
-            controller.chatCore.addUserMessage("Please explain!");
-            controller.initApiCall();
+        
+        const activeController = this.getActiveController();
+        const activeChatUI = this.getActiveChatUI();
+        const activeTabState = this.getActiveTabState();
+        
+        if (!activeController || !activeChatUI) return; 
+        if (activeTabState) {
+            activeTabState.chatId = null;
+        }
+        
+        this.stateManager.subscribeToChatReset("chat", () => this.handleNewSelection(selectedText, pageUrl));
+        
+        const hostName = new URL(pageUrl).hostname;
+        activeController.initStates(`Selection from ${hostName}`);
+        activeChatUI.clearConversation(); 
+        activeChatUI.addSystemMessage(selectedText, `Selected Text - site:${hostName}`);
+        
+        if (this.getActiveTab()) {
+            this.tabManager.updateTabTitle(this.getActiveTab().id, `Selection from ${hostName}`);
+        }
+        
+        await activeController.initPrompt({ mode: "selection", text: selectedText, url: pageUrl });
+        
+        if (this.stateManager.isInstantPromptMode()) { 
+            activeController.chatCore.addUserMessage("Please explain!"); 
+            activeController.initApiCall(); 
         }
     }
 
     handleNewChat() {
-        this.ensureActiveTab();
+        this.ensureActiveTab(); 
         if (!this.createTabIfNeeded()) return;
-
-        const controller = this.getActiveController();
-        const chatUI = this.getActiveChatUI();
-        const tabState = this.getActiveTabState();
-        if (!controller || !chatUI || !tabState) return;
-
+        
+        const activeController = this.getActiveController();
+        const activeChatUI = this.getActiveChatUI();
+        const activeTabState = this.getActiveTabState();
+        
+        if (!activeController || !activeChatUI || !activeTabState) return;
         this.stateManager.subscribeToChatReset("chat", () => this.handleNewChat());
-        tabState.chatId = null;
-        controller.initStates("New Chat");
-        chatUI.clearConversation();
-
-        if (this.stateManager.isInstantPromptMode()) {
-            chatUI.addWarningMessage("Warning: Instant prompt mode does not make sense in chat mode and will be ignored.");
+        
+        activeTabState.chatId = null; 
+        activeController.initStates("New Chat"); 
+        activeChatUI.clearConversation();
+        
+        if (this.stateManager.isInstantPromptMode()) { 
+            activeChatUI.addWarningMessage("Warning: Instant prompt mode does not make sense in chat mode and will be ignored."); 
         }
-        this.initPrompt({ mode: "chat" });
+        activeController.initPrompt({ mode: "chat" });
     }
 
-    async handleReconstructChat(options) {
-        this.openedForReconstruct = true;
+    async handleReconstructChat(reconstructOptions) {
+        this.openedForReconstruct = true; 
         this.ensureActiveTab();
-
-        // For simple "open chat" (no index), switch to existing tab if found
-        if (options?.chatId && options.index === undefined) {
-            const existing = this.tabManager.findTabByChatId(options.chatId);
-            if (existing) {
-                const maybeCloseStartupNewTab =
-                    this.startupNewTabId &&
-                    this.startupNewTabId !== existing.id &&
-                    Date.now() - this.startupAt < 2000 &&
-                    this.isTabReallyEmpty(this.startupNewTabId);
-
-                this.tabManager.switchTab(existing.id);
-
-                if (maybeCloseStartupNewTab) {
+        
+        if (reconstructOptions?.chatId && reconstructOptions.index === undefined) {
+            const existingTab = this.tabManager.findTabByChatId(reconstructOptions.chatId);
+            if (existingTab) {
+                if (this.startupNewTabId && this.startupNewTabId !== existingTab.id && Date.now() - this.startupAt < STARTUP_WINDOW_MS && this.isTabReallyEmpty(this.startupNewTabId)) {
                     this.tabManager.closeTab(this.startupNewTabId);
                     this.startupNewTabId = null;
                 }
-                return;
+                return this.tabManager.switchTab(existingTab.id);
             }
         }
-
+        
         if (!this.createTabIfNeeded()) return;
+        
+        const activeController = this.getActiveController();
+        const activeChatUI = this.getActiveChatUI();
+        const activeTabState = this.getActiveTabState();
+        const activeTab = this.getActiveTab();
+        
+        if (!activeController || !activeChatUI || !activeTabState) return;
+        if (!reconstructOptions.chatId) {
+            activeTabState.chatId = null;
+        }
+        
+        activeController.initStates(reconstructOptions.chatId ? "Continued Chat" : "New Chat");
+        activeTabState.isSidePanel = reconstructOptions.isSidePanel !== false;
 
-        const controller = this.getActiveController();
-        const chatUI = this.getActiveChatUI();
-        const tabState = this.getActiveTabState();
-        const tab = this.getActiveTab();
-        if (!controller || !chatUI || !tabState) return;
-
-        const newChatName = options.chatId ? "Continued Chat" : "New Chat";
-        if (!options.chatId) tabState.chatId = null;
-        controller.initStates(newChatName);
-        tabState.isSidePanel = options.isSidePanel === false ? false : true;
-
-        if (!options.chatId && !options.pendingUserMessage) {
-            if (options.systemPrompt) controller.chatCore.insertSystemMessage(options.systemPrompt);
-            chatUI.clearConversation();
-            return;
+        if (!reconstructOptions.chatId && !reconstructOptions.pendingUserMessage) {
+            if (reconstructOptions.systemPrompt) {
+                activeController.chatCore.insertSystemMessage(reconstructOptions.systemPrompt);
+            }
+            return activeChatUI.clearConversation();
         }
 
-        let lastMessage = null;
-        if (options.chatId) {
-            const normalizedChatId = Number(options.chatId);
-            if (!Number.isFinite(normalizedChatId)) {
-                chatUI?.addErrorMessage("Invalid chat ID");
+        let lastHistoryMessage = null;
+        if (reconstructOptions.chatId) {
+            const numericChatId = Number(reconstructOptions.chatId);
+            if (!Number.isFinite(numericChatId)) {
+                activeChatUI.addErrorMessage("Invalid chat ID");
                 return;
             }
 
-            const messageLimit = options.index !== undefined ? options.index + 1 : null;
-            let chat;
+            const messageLimit = reconstructOptions.index !== undefined ? reconstructOptions.index + 1 : null;
+            let loadedChat;
             try {
-                chat = await this.chatStorage.loadChat(normalizedChatId, messageLimit);
-            } catch (e) {
-                console.warn('Failed to load chat:', e);
-                chatUI?.addErrorMessage("Failed to load chat");
+                loadedChat = await this.chatStorage.loadChat(numericChatId, messageLimit);
+            } catch (error) {
+                console.warn('Failed to load chat:', error);
+                activeChatUI.addErrorMessage("Failed to load chat");
                 return;
             }
-            if (!chat?.messages) {
-                chatUI?.addErrorMessage("Chat not found");
-                return;
+            if (!loadedChat?.messages) return activeChatUI.addErrorMessage("Chat not found");
+            
+            lastHistoryMessage = loadedChat.messages.at(-1);
+            const secondaryLength = lastHistoryMessage?.contents
+                ? lastHistoryMessage.contents.length
+                : lastHistoryMessage?.responses?.[reconstructOptions.modelChoice || 'model_a']?.messages?.length;
+            
+            activeController.chatCore.buildFromDB(loadedChat, null, reconstructOptions.secondaryIndex, reconstructOptions.modelChoice);
+            
+            activeChatUI.updateIncognito(activeController.chatCore.hasChatStarted()); 
+            activeChatUI.buildChat(activeController.chatCore.getChat());
+            
+            if (activeTab?.container) {
+                requestAnimationFrame(() => activeTab.container.scrollTop = activeTab.container.scrollHeight);
             }
-            const fullChatLength = await this.chatStorage.getChatLength(normalizedChatId);
-            lastMessage = chat.messages.at(-1);
-            const secondaryLength = lastMessage?.contents
-                ? lastMessage.contents.length
-                : lastMessage?.responses[options.modelChoice || 'model_a']?.messages?.length;
-
-            controller.chatCore.buildFromDB(chat, null, options.secondaryIndex, options.modelChoice);
-            chatUI.updateIncognito(controller.chatCore.hasChatStarted());
-            chatUI.buildChat(controller.chatCore.getChat());
-            if (tab?.container) {
-                requestAnimationFrame(() => {
-                    tab.container.scrollTop = tab.container.scrollHeight;
-                });
-            }
-
-            const continueOptions = {
-                fullChatLength,
-                lastMessage,
-                index: options.index,
-                modelChoice: options.modelChoice,
-                secondaryIndex: options.secondaryIndex,
+            
+            activeController.chatCore.continuedChatOptions = { 
+                fullChatLength: await this.chatStorage.getChatLength(numericChatId), 
+                lastMessage: lastHistoryMessage, 
+                index: reconstructOptions.index,
+                modelChoice: reconstructOptions.modelChoice,
+                secondaryIndex: reconstructOptions.secondaryIndex,
                 secondaryLength
             };
-            controller.chatCore.continuedChatOptions = continueOptions;
-
-            // Update tab title
-            if (tab && chat.title) {
-                this.tabManager.updateTabTitle(tab.id, chat.title);
+            
+            if (activeTab && loadedChat.title) {
+                this.tabManager.updateTabTitle(activeTab.id, loadedChat.title);
             }
-
-            // Store chatId in tabState for persistence
-            tabState.chatId = normalizedChatId;
+            activeTabState.chatId = numericChatId; 
             this.tabManager.schedulePersist();
         }
-
-        if (options.systemPrompt) controller.chatCore.insertSystemMessage(options.systemPrompt);
-
-        if (lastMessage?.role !== "user") lastMessage = options.pendingUserMessage;
-        this.handleIfLastUserMessage(lastMessage || options.pendingUserMessage);
-
-        const latest = controller.chatCore.getLatestMessage();
-        if (latest?.role === 'assistant' && !latest.responses) {
-            const latestPart = latest.contents?.at(-1)?.at(-1);
-            const model = latestPart?.model || this.stateManager.getSetting('current_model');
-            chatUI.addRegenerateFooterToLastMessage(() => controller.regenerateResponse(model));
+        
+        if (reconstructOptions.systemPrompt) {
+            activeController.chatCore.insertSystemMessage(reconstructOptions.systemPrompt);
+        }
+        
+        this.handleLastUserMsg(lastHistoryMessage?.role === 'user' ? lastHistoryMessage : reconstructOptions.pendingUserMessage);
+        
+        const latestMessage = activeController.chatCore.getLatestMessage();
+        if (latestMessage?.role === 'assistant' && !latestMessage.responses) {
+            activeChatUI.addRegenerateFooterToLastMessage(() => {
+                const lastModelId = latestMessage.contents?.at(-1)?.at(-1)?.model || this.stateManager.getSetting('current_model');
+                activeController.regenerateResponse(lastModelId);
+            });
         }
     }
 
-    handleIfLastUserMessage(lastMessage) {
+    handleLastUserMsg(message) {
         const controller = this.getActiveController();
         const chatUI = this.getActiveChatUI();
-        if (!controller || !chatUI) return;
-
-        if (lastMessage && lastMessage.role === "user") {
-            if (lastMessage.images) controller.appendPendingMedia(lastMessage.images, 'image');
-            if (lastMessage.files) controller.appendPendingMedia(lastMessage.files, 'file');
-            if (lastMessage.contents) chatUI.setTextareaText(lastMessage.contents.at(-1).at(-1).content);
+        
+        if (!controller || !chatUI) {
+            return;
+        }
+        
+        if (message?.role === "user") {
+            // Restore media
+            if (message.images) {
+                controller.appendPendingMedia(message.images, 'image');
+            }
+            if (message.files) {
+                controller.appendPendingMedia(message.files, 'file');
+            }
+            
+            // Restore text
+            if (message.contents) {
+                const text = message.contents.at(-1).at(-1).content;
+                chatUI.setTextareaText(text);
+            }
         } else {
             chatUI.setTextareaText('');
         }
     }
 
-    // ========== Popout Handling ==========
-
     async handlePopoutToggle() {
-        const controller = this.getActiveController();
-        const tabState = this.getActiveTabState();
-        const chatUI = this.getActiveChatUI();
-        if (!controller || !tabState) return;
-
-        // Warn if tabs would be lost
-        const tabCount = this.tabManager.getTabCount();
-        if (tabCount > 1) {
-            const persistenceEnabled = this.stateManager.getSetting('persist_tabs') !== false;
-            if (!persistenceEnabled) {
-                chatUI?.addErrorMessage("Close other tabs before popping out (they would be lost).");
+        const activeController = this.getActiveController();
+        const activeTabState = this.getActiveTabState();
+        const activeChatUI = this.getActiveChatUI();
+        
+        if (!activeController || !activeTabState) {
+            return;
+        }
+        
+        // Multi-tab popout safety checks
+        const currentTabCount = this.tabManager.getTabCount();
+        if (currentTabCount > 1) {
+            const isPersistenceEnabled = this.stateManager.getSetting('persist_tabs') !== false;
+            if (!isPersistenceEnabled) {
+                activeChatUI?.addErrorMessage("Close other tabs before popping out (they would be lost).");
                 return;
             }
-            // Even with persistence, unsaved tabs (no chatId) will be lost
-            const currentTabId = this.getActiveTab()?.id;
-            const unsavedCount = this.tabManager.getAllTabs()
-                .filter(t => t.id !== currentTabId && !this.tabManager.getTabChatId(t)).length;
-            if (unsavedCount > 0) {
-                chatUI?.addErrorMessage(`Close ${unsavedCount} unsaved tab(s) before popping out (drafts aren't persisted).`);
-                return;
-            }
-        }
-
-        const index = Math.max(controller.chatCore.getLength() - 1, 0);
-        const options = {
-            chatId: controller.chatCore.getChatId(),
-            isSidePanel: !tabState.isSidePanel,
-            index,
-            pendingUserMessage: controller.collectPendingUserMessage()
-        };
-
-        const latestMessage = controller.chatCore.getLatestMessage();
-        if (latestMessage?.responses) {
-            const modelChoice = latestMessage.continued_with && latestMessage.continued_with !== "none"
-                ? latestMessage.continued_with
-                : 'model_a';
-            options.secondaryIndex = latestMessage.responses[modelChoice].messages.length - 1;
-            options.modelChoice = modelChoice;
-        }
-        if (latestMessage?.role === 'assistant') {
-            options.secondaryIndex = latestMessage.contents.length - 1;
-        }
-        if (!options.chatId) {
-            options.systemPrompt = controller.chatCore.getSystemPrompt();
-        }
-
-        if (tabState.isSidePanel) {
-            await this.handleSidepanelToTab(options);
-        } else {
-            await this.handleTabToSidepanel(options);
-        }
-    }
-
-    async handleSidepanelToTab(options) {
-        chrome.tabs.create({
-            url: chrome.runtime.getURL('src/html/sidepanel.html')
-        });
-
-        await new Promise(resolve => {
-            chrome.runtime.onMessage.addListener(function listener(message) {
-                if (message.type === "sidepanel_ready") {
-                    chrome.runtime.onMessage.removeListener(listener);
-                    resolve();
-                }
+            
+            const currentActiveTabId = this.getActiveTab()?.id;
+            const unsavedTabsList = this.tabManager.getAllTabs().filter(tab => {
+                const isNotCurrentlyActive = (tab.id !== currentActiveTabId);
+                const isNotYetSavedToStorage = !this.tabManager.getTabChatId(tab);
+                return isNotCurrentlyActive && isNotYetSavedToStorage;
             });
-        });
-
-        chrome.runtime.sendMessage({
-            type: "reconstruct_chat",
-            options: options
-        });
-
-        window.close();
-    }
-
-    async handleTabToSidepanel(options) {
-        const [tabCount, { isOpen }] = await Promise.all([
-            chrome.tabs.query({ windowId: chrome.windows.WINDOW_ID_CURRENT }).then(tabs => tabs.length),
-            chrome.runtime.sendMessage({ type: "is_sidepanel_open" })
-        ]);
-
-        if (!isOpen) {
-            await chrome.runtime.sendMessage({ type: "open_side_panel" });
+            
+            if (unsavedTabsList.length > 0) {
+                const errorMessage = `Close ${unsavedTabsList.length} unsaved tab(s) before popping out (drafts aren't persisted).`;
+                activeChatUI?.addErrorMessage(errorMessage);
+                return;
+            }
+        }
+        
+        const reconstructOptions = { 
+            chatId: activeController.chatCore.getChatId(), 
+            isSidePanel: !activeTabState.isSidePanel, 
+            index: Math.max(activeController.chatCore.getLength() - 1, 0), 
+            pendingUserMessage: activeController.collectPendingUserMessage() 
+        };
+        
+        // Determine indices for continuation
+        const latestMessageInChat = activeController.chatCore.getLatestMessage();
+        if (latestMessageInChat?.responses) {
+            const modelChoiceKey = (latestMessageInChat.continued_with !== "none") 
+                ? latestMessageInChat.continued_with 
+                : 'model_a';
+                
+            reconstructOptions.secondaryIndex = latestMessageInChat.responses[modelChoiceKey].messages.length - 1; 
+            reconstructOptions.modelChoice = modelChoiceKey;
+            
+        } else if (latestMessageInChat?.role === 'assistant') {
+            reconstructOptions.secondaryIndex = latestMessageInChat.contents.length - 1;
+        }
+        
+        if (!reconstructOptions.chatId) {
+            reconstructOptions.systemPrompt = activeController.chatCore.getSystemPrompt();
         }
 
-        await chrome.runtime.sendMessage({
-            type: "reconstruct_chat",
-            options: options
-        });
-
-        if (tabCount === 1) {
-            await chrome.tabs.create({ url: 'chrome://newtab' });
+        if (activeTabState.isSidePanel) {
+            // Panel -> Tab
+            const sidePanelUrl = chrome.runtime.getURL('src/html/sidepanel.html');
+            chrome.tabs.create({ url: sidePanelUrl });
+            
+            // Wait for new sidepanel instance to signal ready
+            await new Promise(resolve => {
+                const readyMessageListener = (message) => { 
+                    if (message.type === "sidepanel_ready") { 
+                        chrome.runtime.onMessage.removeListener(readyMessageListener); 
+                        resolve(); 
+                    } 
+                };
+                chrome.runtime.onMessage.addListener(readyMessageListener);
+            });
+            
+            chrome.runtime.sendMessage({ 
+                type: "reconstruct_chat", 
+                options: reconstructOptions 
+            });
+            window.close();
+            
+        } else {
+            // Tab -> Panel
+            const [{ length: currentWindowTabCount }, { isOpen: isSidepanelCurrentlyOpen }] = await Promise.all([
+                chrome.tabs.query({ windowId: chrome.windows.WINDOW_ID_CURRENT }), 
+                chrome.runtime.sendMessage({ type: "is_sidepanel_open" })
+            ]);
+            
+            if (!isSidepanelCurrentlyOpen) {
+                await chrome.runtime.sendMessage({ type: "open_side_panel" });
+            }
+            
+            chrome.runtime.sendMessage({ 
+                type: "reconstruct_chat", 
+                options: reconstructOptions 
+            });
+            
+            // Create fallback tab if this was the last one
+            if (currentWindowTabCount === 1) {
+                await chrome.tabs.create({ url: NEW_TAB_URL });
+            }
+            window.close();
         }
-        window.close();
     }
-
-    // ========== Media Handling ==========
 
     initTextareaImageHandling() {
-        const textarea = document.getElementById('textInput');
-        this.setupDragAndDropListeners(textarea);
-        this.setupPasteListener(textarea);
-        this.setupDropListener(textarea);
-    }
-
-    setupDragAndDropListeners(textarea) {
-        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-            textarea.addEventListener(eventName, e => {
-                e.preventDefault();
-                e.stopPropagation();
-                textarea.classList.toggle('dragging',
-                    eventName === 'dragover' || eventName === 'dragenter');
-            }, false);
+        this.dragDropManager = new DragDropManager(this.textInput, {
+            onImage: base64String => this.getActiveController()?.appendPendingMedia([base64String], 'image'),
+            onFile: fileObject => this.getActiveController()?.appendPendingMedia([fileObject], 'file'),
+            onText: droppedText => this.getActiveChatUI()?.setTextareaText(droppedText),
+            onError: errorMessage => this.getActiveChatUI()?.addErrorMessage(this.apiManager.getUiErrorMessage(errorMessage))
         });
-    }
-
-    setupPasteListener(textarea) {
-        textarea.addEventListener('paste', async (e) => {
-            const items = Array.from(e.clipboardData.items);
-
-            const files = items
-                .filter(item => item.kind === 'file')
-                .map(item => item.getAsFile())
-                .filter(file => file !== null);
-
-            if (files.length > 0) {
-                e.preventDefault();
-                this.handleFilesDrop(files);
-            }
-        });
-    }
-
-    setupDropListener(textarea) {
-        textarea.addEventListener('drop', async (e) => {
-            if (e.dataTransfer.files.length > 0) {
-                await this.handleFilesDrop(e.dataTransfer.files);
-                return;
-            }
-
-            const imgSrc = this.getImageSourceFromDrop(e);
-            if (imgSrc) {
-                const base64String = await this.urlToBase64(imgSrc);
-                if (base64String) {
-                    const controller = this.getActiveController();
-                    if (controller) {
-                        controller.appendPendingMedia([base64String], 'image');
-                    }
-                    return;
-                }
-            }
-
-            this.handleTextDrop(e, textarea);
-        });
-    }
-
-    async handleFilesDrop(files) {
-        for (const file of files) {
-            if (file.type.match('image.*')) {
-                await this.handleImageFile(file);
-            } else if (!file.type.match('video.*')) {
-                await this.handleTextFile(file);
-            }
-        }
-    }
-
-    handleImageFile(file) {
-        return new Promise(resolve => {
-            const reader = new FileReader();
-            reader.onload = e => {
-                const controller = this.getActiveController();
-                if (controller) {
-                    controller.appendPendingMedia([e.target.result], 'image');
-                }
-                resolve();
-            };
-            reader.readAsDataURL(file);
-        });
-    }
-
-    handleTextFile(file) {
-        return new Promise(resolve => {
-            const reader = new FileReader();
-            reader.onload = e => {
-                const controller = this.getActiveController();
-                if (controller) {
-                    controller.appendPendingMedia([{ name: file.name, content: e.target.result }], 'file');
-                }
-                resolve();
-            };
-            reader.onerror = error => {
-                const chatUI = this.getActiveChatUI();
-                if (chatUI) {
-                    const uiMessage = this.apiManager.getUiErrorMessage(error);
-                    chatUI.addErrorMessage(uiMessage);
-                }
-                resolve();
-            };
-            reader.readAsText(file);
-        });
-    }
-
-    getImageSourceFromDrop(e) {
-        const html = e.dataTransfer.getData('text/html');
-        if (!html) return null;
-
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
-        return doc.querySelector('img')?.src;
-    }
-
-    async urlToBase64(url) {
-        const MAX_BYTES = 20_000_000;
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
-        try {
-            const response = await fetch(url, { signal: controller.signal });
-            clearTimeout(timeoutId);
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-            const headerLength = Number(response.headers.get('content-length'));
-            if (Number.isFinite(headerLength) && headerLength > MAX_BYTES) {
-                throw new Error('image too large');
-            }
-
-            const blob = await response.blob();
-            if (blob.size > MAX_BYTES) throw new Error('image too large');
-
-            return await new Promise(resolve => {
-                const reader = new FileReader();
-                reader.onload = e => resolve(e.target.result);
-                reader.readAsDataURL(blob);
-            });
-        } catch (error) {
-            const chatUI = this.getActiveChatUI();
-            if (chatUI) {
-                const message = error.name === 'AbortError'
-                    ? 'Image fetch timed out'
-                    : `Error converting image to base64: ${error.message}`;
-                chatUI.addErrorMessage(message);
-            }
-            return null;
-        } finally {
-            clearTimeout(timeoutId);
-        }
-    }
-
-    handleTextDrop(e, textarea) {
-        const text = e.dataTransfer.getData('text');
-        if (text) {
-            const start = textarea.selectionStart;
-            const value = textarea.value.slice(0, start) +
-                           text +
-                           textarea.value.slice(textarea.selectionEnd);
-            const chatUI = this.getActiveChatUI();
-            if (chatUI) {
-                chatUI.setTextareaText(value);
-            }
-        }
     }
 }
 

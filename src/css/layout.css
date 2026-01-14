@@ -971,15 +971,9 @@ a:visited {
   outline:none;
 }
 
-.checkbox.arena-models:checked {
+.alt-model-select input[name="model_select"].checkbox:checked {
   border-color: #56b6c2;
   background-color:#56b6c2;
-  outline:none;
-}
-
-.checkbox.rename-model:checked {
-  border-color: #98c379;
-  background-color:#98c379;
   outline:none;
 }
 

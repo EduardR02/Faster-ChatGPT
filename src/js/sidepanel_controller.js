@@ -1,268 +1,403 @@
-import { TokenCounter, StreamWriter, StreamWriterSimple, Footer, ArenaRatingManager } from './utils.js';
+import { TokenCounter } from './TokenCounter.js';
+import { StreamWriter, StreamWriterSimple } from './StreamWriter.js';
+import { Footer } from './Footer.js';
+import { ArenaRatingManager } from './ArenaRatingManager.js';
 import { SidepanelRenameManager } from './rename_manager.js';
 import { SidepanelChatCore } from './chat_core.js';
 
-
+/**
+ * orchestrates the interaction between the Sidepanel UI, Chat Core, and API.
+ */
 export class SidepanelController {
     constructor(options) {
-        const {
-            stateManager,
-            chatUI,
-            apiManager,
-            chatStorage,
-            onTitleChange = null,
-            onChatIdChange = null
-        } = options;
-
-        this.stateManager = stateManager;
-        this.chatUI = chatUI;
-        this.apiManager = apiManager;
-        this.chatStorage = chatStorage;
-        this.renameManager = new SidepanelRenameManager(chatStorage);
-        this.arenaRatingManager = new ArenaRatingManager();
-        this.arenaRatingManager.initDB();
+        Object.assign(this, { 
+            state: options.stateManager, 
+            chatUI: options.chatUI, 
+            api: options.apiManager, 
+            storage: options.chatStorage, 
+            rename: new SidepanelRenameManager(options.chatStorage), 
+            arenaRating: new ArenaRatingManager() 
+        });
+        
+        this.arenaRating.initDB();
+        
         this.chatCore = new SidepanelChatCore(
-            chatStorage,
-            stateManager,
-            this.chatUI.getChatHeader(),
-            onTitleChange,
-            onChatIdChange
+            options.chatStorage, 
+            options.stateManager, 
+            this.chatUI.getChatHeader(), 
+            options.onTitleChange, 
+            options.onChatIdChange
         );
     }
 
-    getContinueFunc(messageIndex, secondaryIndex = 0, modelKey = null) {
+    getContinueFunc(index, subIndex = 0, modelKey = null) {
         if (!this.chatUI.continueFunc) return undefined;
-        return () => this.chatUI.continueFunc(messageIndex, secondaryIndex, modelKey);
+        return () => this.chatUI.continueFunc(index, subIndex, modelKey);
     }
 
-    initStates(chatName) {
+    initStates(chatTitle) {
         this.handleDefaultArenaChoice();
-        this.stateManager.resetChatState();
+        this.state.resetChatState();
         this.chatUI.updateIncognito();
-        this.chatCore.reset(chatName);
+        this.chatCore.reset(chatTitle);
     }
 
-    async makeApiCall(model, isRegen = false) {
-        const api_provider = this.apiManager.getProviderForModel(model);
-        const tokenCounter = new TokenCounter(api_provider);
-        this.chatCore.initThinkingChat();
-        const messages = this.chatCore.getMessagesForAPI(model);
-
+    async makeApiCall(modelId, isRegeneration = false) {
+        const providerName = this.api.getProviderName(modelId);
+        const tokenCounter = new TokenCounter(providerName);
         const abortController = new AbortController();
-        let manualAborted = false;
-        const manualAbort = () => {
-            manualAborted = true;
+        
+        let apiModelId = modelId;
+        let displayModelName = modelId;
+        let apiOptions = this.getApiOptions();
+        let wasManuallyAborted = false;
+
+        this.chatCore.initThinkingChat();
+        this.chatUI.addManualAbortButton(modelId, () => {
+            wasManuallyAborted = true;
             abortController.abort();
-        };
-        this.chatUI.addManualAbortButton(model, manualAbort);
+        });
 
-        const streamWriter = this.createStreamWriter(
-            this.chatUI.getContentDiv(model),
-            this.stateManager.isArenaModeActive
-        );
-
-        // For local models, fetch the actual model name from the server before making API call
-        let actualModelId = model;
-        let displayModelName = model;
-        const options = {
-            shouldThink: this.stateManager.getShouldThink?.() ?? false,
-            webSearch: this.stateManager.getShouldWebSearch?.() ?? false,
-            reasoningEffort: this.stateManager.getReasoningEffort?.() ?? 'medium',
-            imageAspectRatio: this.stateManager.getImageAspectRatio?.() ?? 'auto',
-            imageResolution: this.stateManager.getImageResolution?.() ?? '2K'
-        };
-        if (api_provider === 'llamacpp') {
-            const modelInfo = await this.apiManager.getLocalModelConfig();
-            actualModelId = modelInfo.raw;
-            displayModelName = modelInfo.display;
-            options.localModelOverride = modelInfo;
+        // Handle local model specific configuration
+        if (this.api.getProviderName(modelId) === 'llamacpp') {
+            const localConfig = await this.api.getLocalModelConfig();
+            Object.assign(apiOptions, { localModelOverride: localConfig });
+            apiModelId = localConfig.raw;
+            displayModelName = localConfig.display;
         }
 
-        // Disable streaming for image models (images are generated all at once)
-        const isImageModel = this.apiManager.isImageModel(model);
-        const streamResponse = !isImageModel && this.stateManager.getSetting('stream_response');
-        let success = false;
-        let responseResult;
-        
+        const streamWriter = this.createStreamWriter(this.chatUI.getContentDiv(modelId), this.state.isArenaModeActive);
+        const shouldStreamResponse = !this.api.isImageModel(modelId) && this.state.getSetting('stream_response');
+        let isCallSuccessful = false;
+
         try {
-            responseResult = await this.apiManager.callApi(
-                actualModelId,
-                messages,
-                tokenCounter,
-                streamResponse ? streamWriter : null,
-                abortController,
-                options
+            const apiResponse = await this.api.callApi(
+                apiModelId, 
+                this.chatCore.getMessagesForAPI(modelId), 
+                tokenCounter, 
+                shouldStreamResponse ? streamWriter : null, 
+                abortController, 
+                apiOptions
             );
 
-            if (!streamResponse) {
-                responseResult.forEach(msg => {
-                    if (msg.type === 'image') {
-                        if (streamWriter.parts.at(-1).content.length > 0) {
-                            streamWriter.nextPart();
-                        }
-                        const part = streamWriter.parts.at(-1);
-                        part.content = [msg.content];
-                        part.type = 'image';
-                        if (msg.thoughtSignature) part.thoughtSignature = msg.thoughtSignature;
-                    } else {
-                        streamWriter.processContent(msg.content, msg.type === 'thought');
-                        if (msg.thoughtSignature) {
-                            streamWriter.parts.at(-1).thoughtSignature = msg.thoughtSignature;
-                        }
-                    }
-                });
+            if (!shouldStreamResponse) {
+                this.processNonStreamedResponse(apiResponse, streamWriter);
             }
-            success = true;
+            isCallSuccessful = true;
+
         } catch (error) {
-            if (!manualAborted) {
-                const uiMessage = this.apiManager.getUiErrorMessage(error);
-                this.chatUI.addErrorMessage(uiMessage);
+            if (!wasManuallyAborted) {
+                this.chatUI.addErrorMessage(this.api.getUiErrorMessage(error));
             }
         } finally {
             tokenCounter.updateLifetimeTokens();
-            this.chatUI.removeManualAbortButton(model);
-            const isThinkingFunc = success ? null : () => false;
-            await streamWriter.addFooter(this.createMessageFooter(tokenCounter, model, isThinkingFunc));
+            this.chatUI.removeManualAbortButton(modelId);
+            
+            const isThinkingStatusCallback = isCallSuccessful ? null : () => false;
+            const messageFooter = this.createFooter(tokenCounter, modelId, isThinkingStatusCallback);
+            await streamWriter.addFooter(messageFooter);
         }
 
-        if (success) {
-            // Update UI with the actual model display name for local models
-            if (api_provider === 'llamacpp') {
-                this.chatUI.updateLastMessageModelName(displayModelName);
-                if (this.stateManager.isArenaModeActive) {
-                    const modelKey = this.stateManager.getArenaModelKey(model);
-                    await this.chatCore.setArenaModelName(modelKey, displayModelName);
-                    this.chatUI.setArenaModelDisplayName(model, displayModelName);
-                }
-            }
-
-            // For normal mode, save with display name; for arena keep logical id for routing
-            const saveModel = this.stateManager.isArenaModeActive ? model : displayModelName;
-            await this.saveResponseMessage(streamWriter.parts, saveModel, isRegen);
-
-            const latest = this.chatCore.getLatestMessage();
-            if (!this.stateManager.isArenaModeActive && this.chatUI.continueFunc && latest?.role === 'assistant' && !latest.responses) {
-                const messageIndex = this.chatCore.getLength() - 1;
-                const secondaryIndex = latest.contents?.length ? latest.contents.length - 1 : 0;
-                this.chatUI.renderContinueForAssistant(messageIndex, secondaryIndex);
-            }
-            // Thinking loop routing must use logical model id
-            this.handleThinkingMode(model, isRegen);
+        if (isCallSuccessful) {
+            await this.handleSuccessfulCall(modelId, displayModelName, streamWriter.parts, isRegeneration);
         }
     }
 
-    async saveResponseMessage(message, model, isRegen) {
-        if (this.stateManager.isArenaModeActive) {
-            await this.chatCore.updateArena(message, model, this.stateManager.getArenaModelKey(model));
-            return;
+    processNonStreamedResponse(responseParts, writer) {
+        responseParts.forEach(part => {
+            if (part.type === 'image') {
+                // If there's already content in the current part, move to a new one
+                if (writer.parts.at(-1).content.length > 0) {
+                    writer.nextPart();
+                }
+                const currentPart = writer.parts.at(-1);
+                Object.assign(currentPart, { 
+                    content: [part.content], 
+                    type: 'image', 
+                    thoughtSignature: part.thoughtSignature 
+                });
+            } else {
+                writer.processContent(part.content, part.type === 'thought');
+                if (part.thoughtSignature) {
+                    writer.parts.at(-1).thoughtSignature = part.thoughtSignature;
+                }
+            }
+        });
+    }
+
+    async handleSuccessfulCall(modelId, displayName, responseParts, isRegeneration) {
+        if (this.api.getProviderName(modelId) === 'llamacpp') {
+            this.chatUI.updateLastMessageModelName(displayName);
+            if (this.state.isArenaModeActive) {
+                const key = this.state.getArenaModelKey(modelId);
+                await this.chatCore.setArenaModelName(key, displayName);
+                this.chatUI.setArenaModelDisplayName(modelId, displayName);
+            }
         }
-        if (isRegen && !this.stateManager.thinkingMode) {
-            await this.chatCore.appendRegenerated(message, model);
-            return;
+
+        const modelNameForStorage = this.state.isArenaModeActive ? modelId : displayName;
+        await this.saveResponse(responseParts, modelNameForStorage, isRegeneration);
+
+        const lastMessage = this.chatCore.getLatestMessage();
+        if (!this.state.isArenaModeActive && this.chatUI.continueFunc && lastMessage?.role === 'assistant') {
+            const messageIndex = this.chatCore.getLength() - 1;
+            const contentIndex = (lastMessage.contents?.length || 1) - 1;
+            this.chatUI.renderContinueForAssistant(messageIndex, contentIndex);
         }
-        await this.chatCore.addAssistantMessage(message, model);
+
+        this.handleThinkingFollowup(modelId, isRegeneration);
+
+        const needsSearchRefresh = this.state.isArenaModeActive || isRegeneration || this.state.thinkingMode;
+        if (this.state.isInactive(modelId) && needsSearchRefresh) {
+            await this.chatCore.refreshSearchDoc();
+        }
+    }
+
+    getApiOptions() {
+        const state = this.state;
+        return { 
+            shouldThink: state.getShouldThink(), 
+            webSearch: state.getShouldWebSearch(), 
+            reasoningEffort: state.getReasoningEffort(), 
+            imageAspectRatio: state.getImageAspectRatio(), 
+            imageResolution: state.getImageResolution() 
+        };
+    }
+
+    async saveResponse(responseParts, modelId, isRegeneration) {
+        if (this.state.isArenaModeActive) {
+            return this.chatCore.updateArena(responseParts, modelId, this.state.getArenaModelKey(modelId));
+        }
+        
+        if (isRegeneration && !this.state.thinkingMode) {
+            return this.chatCore.appendRegenerated(responseParts, modelId);
+        }
+        
+        await this.chatCore.addAssistantMessage(responseParts, modelId);
     }
 
     handleArenaChoice(choice) {
-        const currentMessage = this.chatCore.getLatestMessage();
+        const latestMessageInChat = this.chatCore.getLatestMessage();
         this.chatUI.removeArenaFooter();
-        
-        const winnerIndex = this.determineWinnerIndex(choice);
-        const winner = winnerIndex !== -1 ? this.stateManager.getArenaModel(winnerIndex) : null;
-        
-        const continued_with = winner ? 
-            (winnerIndex === 0 ? "model_a" : "model_b") : 
-            "none";
-        this.chatCore.updateArenaMisc(choice, continued_with);
-        const [modelA, modelB] = this.stateManager.getArenaModels();
-        if (['model_a', 'model_b', 'draw', 'draw(bothbad)'].includes(choice)) {
-            this.arenaRatingManager.addMatchAndUpdate(modelA, modelB, choice);
+
+        // Determine winner index: -1 if none, 0 for A, 1 for B
+        let arenaWinnerIndex = -1;
+        if (['draw', 'reveal', 'ignored'].includes(choice)) {
+            arenaWinnerIndex = Math.floor(Math.random() * 2);
+        } else if (choice === 'model_a') {
+            arenaWinnerIndex = 0;
+        } else if (choice === 'model_b') {
+            arenaWinnerIndex = 1;
         }
-        const ratings = [this.arenaRatingManager.getModelRating(modelA), this.arenaRatingManager.getModelRating(modelB)];
-        this.chatUI.resolveArena(choice, currentMessage.continued_with, null, ratings);
-        this.stateManager.clearArenaState();
+
+        const winnerKey = arenaWinnerIndex !== -1 ? (arenaWinnerIndex === 0 ? "model_a" : "model_b") : "none";
+        this.chatCore.updateArenaMisc(choice, winnerKey);
+
+        const activeArenaModels = this.state.getArenaModels();
+        if (['model_a', 'model_b', 'draw', 'draw(bothbad)'].includes(choice)) {
+            this.arenaRating.addMatchAndUpdate(activeArenaModels[0], activeArenaModels[1], choice);
+        }
+
+        const modelEloRatings = [
+            this.arenaRating.getModelRating(activeArenaModels[0]), 
+            this.arenaRating.getModelRating(activeArenaModels[1])
+        ];
         
+        this.chatUI.resolveArena(choice, latestMessageInChat.continued_with, null, modelEloRatings);
+        this.state.clearArenaState();
+
         if (choice === 'no_choice(bothbad)') {
             this.initApiCall();
         }
     }
 
-    // Private methods
     createStreamWriter(contentDiv, isArenaMode) {
-        if (this.stateManager.getSetting('stream_response') && isArenaMode) {
-            return new StreamWriter(
-                contentDiv,
-                (role, isThought) => this.chatUI.produceNextContentDiv(role, isThought),
-                () => this.chatUI.scrollIntoView(),
-                2500
-            );
-        }
-        return new StreamWriterSimple(
-            contentDiv,
-            (role, isThought) => this.chatUI.produceNextContentDiv(role, isThought),
-            () => this.chatUI.scrollIntoView()
-        );
+        const produceNextDiv = (role, isThought) => this.chatUI.produceNextContentDiv(role, isThought);
+        const scrollCallback = () => this.chatUI.scrollIntoView();
+        
+        const useSmoothStreaming = this.state.getSetting('stream_response') && isArenaMode;
+        return useSmoothStreaming 
+            ? new StreamWriter(contentDiv, produceNextDiv, scrollCallback, 5000) 
+            : new StreamWriterSimple(contentDiv, produceNextDiv, scrollCallback);
     }
 
-    createMessageFooter(tokenCounter, model, isThinkingFunc = null) {
+    createFooter(tokenCounter, modelId, isThinkingCheck = null) {
+        const checkThinking = isThinkingCheck || (() => this.state.isThinking(modelId));
+        const regenerateCallback = () => this.regenerateResponse(modelId);
+        
         return new Footer(
-            tokenCounter.inputTokens,
-            tokenCounter.outputTokens,
-            this.stateManager.isArenaModeActive,
-            isThinkingFunc !== null ? isThinkingFunc : () => this.stateManager.isThinking(model),
-            () => this.regenerateResponse(model)
+            tokenCounter.inputTokens, 
+            tokenCounter.outputTokens, 
+            this.state.isArenaModeActive, 
+            checkThinking, 
+            regenerateCallback
         );
     }
 
-    handleThinkingMode(model, isRegen) {
-        if (this.stateManager.isInactive(model)) return;
-        const latest = this.chatCore.getLatestMessage();
-        const secondaryIndex = latest?.contents?.length ?? 0;
+    handleThinkingFollowup(modelId, isRegeneration) {
+        if (this.state.isInactive(modelId)) return;
+        
+        const lastMessage = this.chatCore.getLatestMessage();
         const messageIndex = Math.max(this.chatCore.getLength() - 1, 0);
-        const continueFunc = this.getContinueFunc(messageIndex, secondaryIndex);
-        this.chatUI.regenerateResponse(model, isRegen, true, continueFunc, false);
-        this.makeApiCall(model, isRegen);
+        const contentIndex = lastMessage?.contents?.length || 0;
+        
+        this.chatUI.regenerateResponse(
+            modelId, 
+            isRegeneration, 
+            true, 
+            this.getContinueFunc(messageIndex, contentIndex),
+            false
+        );
+        
+        this.makeApiCall(modelId, isRegeneration);
     }
 
     async initApiCall() {
-        this.chatUI.initScrollListener();
-        this.stateManager.updateThinkingMode();
-        this.stateManager.updateArenaMode();
+        this.chatUI.initScrollListener(); 
+        this.state.updateThinkingMode();
+        this.state.updateArenaMode();
 
-        if (this.stateManager.isArenaModeActive) {
-            await this.initArenaCall();
+        if (this.state.isArenaModeActive) {
+            const enabledArenaModels = this.state.getSetting('arena_models');
+            if (enabledArenaModels.length < 2) {
+                return this.chatUI.addErrorMessage("Enable at least 2 models for Arena.");
+            }
+
+            const [modelAId, modelBId] = this.getRandomArenaModels(enabledArenaModels);
+            const currentMessageIndex = this.chatCore.getLength();
+
+            this.state.initArenaResponse(modelAId, modelBId); 
+            this.state.initThinkingState(); 
+            this.chatCore.initThinkingChat();
+
+            this.chatUI.createArenaMessage(null, {
+                continueFunc: this.getContinueFunc(currentMessageIndex),
+                messageIndex: currentMessageIndex,
+                allowContinue: false
+            });
+            
+            this.chatCore.initArena(modelAId, modelBId);
+            
+            await Promise.all([
+                this.makeApiCall(modelAId), 
+                this.makeApiCall(modelBId)
+            ]);
+            
+            this.chatUI.addArenaFooter(this.handleArenaChoice.bind(this));
+
         } else {
-            this.stateManager.initThinkingState();
-            const model = this.stateManager.getSetting('current_model');
-            const nextIndex = this.chatCore.getLength();
-            const continueFunc = this.getContinueFunc(nextIndex, 0);
-            this.chatUI.addMessage('assistant', [], { model, hideModels: !this.stateManager.getSetting('show_model_name'), continueFunc, allowContinue: false });
-            await this.makeApiCall(model);
+            this.state.initThinkingState();
+            const currentSelectedModel = this.state.getSetting('current_model');
+            const nextMessageIndex = this.chatCore.getLength();
+            
+            const uiMessageOptions = { 
+                model: currentSelectedModel, 
+                hideModels: !this.state.getSetting('show_model_name'), 
+                continueFunc: this.getContinueFunc(nextMessageIndex, 0), 
+                allowContinue: false 
+            };
+            
+            this.chatUI.addMessage('assistant', [], uiMessageOptions);
+            await this.makeApiCall(currentSelectedModel);
         }
     }
 
-    async initArenaCall() {
-        const enabledModels = this.stateManager.getSetting('arena_models');
-        if (enabledModels.length < 2) {
-            this.chatUI.addErrorMessage("Not enough models enabled for Arena mode.");
-            return;
+    async initPrompt(context) {
+        try {
+            const promptKey = context.mode + "_prompt";
+            await this.state.loadPrompt(promptKey);
+            
+            let systemPromptText = this.state.getPrompt('active_prompt');
+            if (context.mode === "selection") {
+                systemPromptText += `\n"""[${context.url}]"""\n"""[${context.text}]"""`;
+            }
+            
+            this.chatCore.insertSystemMessage(systemPromptText);
+        } catch (error) { 
+            this.chatUI.addErrorMessage(`Error loading prompt: ${error.message}`); 
+            throw error; 
+        } 
+    }
+
+    sendUserMessage() {
+        const userInputText = this.chatUI.getTextareaText().trim();
+        if (!userInputText) return;
+
+        this.chatUI.setTextareaText('');
+        this.handleDefaultArenaChoice();
+
+        const latestMessageBefore = this.chatCore.getLatestMessage();
+        if (latestMessageBefore?.role === 'assistant' && !latestMessageBefore.responses && this.chatUI.continueFunc) {
+            const messageIndex = this.chatCore.getLength() - 1;
+            const contentIndex = (latestMessageBefore.contents?.length || 1) - 1;
+            this.chatUI.renderContinueForAssistant(messageIndex, contentIndex);
         }
 
-        const [model1, model2] = this.getRandomArenaModels(enabledModels);
+        this.chatCore.addUserMessage(userInputText);
         
-        this.stateManager.initArenaResponse(model1, model2);
-        this.stateManager.initThinkingState();
-        this.chatCore.initThinkingChat();
-        const messageIndex = this.chatCore.getLength();
-        const continueFunc = this.getContinueFunc(messageIndex);
-        this.chatUI.createArenaMessage(null, { continueFunc, messageIndex });
-        this.chatCore.initArena(model1, model2);
+        const messageIndex = this.chatCore.getLength() - 1;
+        const latestUserMessage = this.chatCore.getLatestMessage();
+        const userMessageParts = latestUserMessage.contents.at(-1);
         
-        await Promise.all([
-            this.makeApiCall(model1),
-            this.makeApiCall(model2)
-        ]);
-        this.chatUI.addArenaFooter(this.handleArenaChoice.bind(this));
+        this.chatUI.addMessage('user', userMessageParts, { 
+            continueFunc: this.getContinueFunc(messageIndex, latestUserMessage.contents.length - 1) 
+        });
+
+        this.chatUI.removeRegenerateButtons(); 
+        this.chatUI.removeCurrentRemoveMediaButtons();
+        
+        this.initApiCall();
+    }
+
+    collectPendingUserMessage() {
+        const userInputText = this.chatUI.getTextareaText().trim();
+        return this.chatCore.collectPendingUserMessage(userInputText);
+    }
+
+    appendPendingMedia(mediaList, type) {
+        mediaList.forEach(mediaItem => {
+            const mediaId = this.chatCore.appendMedia(mediaItem, type);
+            if (type === 'image') {
+                this.chatUI.appendImage(mediaItem, () => this.chatCore.removeMedia(mediaId));
+            } else {
+                this.chatUI.appendFile(mediaItem, () => this.chatCore.removeMedia(mediaId));
+            }
+        });
+    }
+
+    handleDefaultArenaChoice() {
+        const latest = this.chatCore.getLatestMessage();
+        if (this.state.isArenaModeActive && latest?.role === 'assistant' && latest.choice === 'ignored') {
+            this.handleArenaChoice('ignored');
+        }
+    }
+
+    regenerateResponse(modelId) {
+        this.chatUI.initScrollListener(); 
+        this.state.updateThinkingMode(); 
+        this.state.initThinkingState(modelId);
+
+        const currentActiveModel = this.state.isArenaModeActive ? modelId : this.state.getSetting('current_model');
+        const shouldHideModelName = !this.state.getSetting('show_model_name') || this.state.isArenaModeActive;
+        const lastMessageInChat = this.chatCore.getLatestMessage();
+        const currentMessageIndex = Math.max(this.chatCore.getLength() - 1, 0);
+        const nextContentIndex = lastMessageInChat?.contents?.length || 0;
+        
+        this.chatUI.regenerateResponse(
+            currentActiveModel, 
+            true, 
+            shouldHideModelName, 
+            this.getContinueFunc(currentMessageIndex, nextContentIndex),
+            false
+        );
+
+        if (this.state.isArenaModeActive && this.state.thinkingMode) {
+            this.chatCore.initThinkingChat();
+            const activeArenaModels = this.state.getArenaModels();
+            this.chatCore.initArena(activeArenaModels[0], activeArenaModels[1]);
+        }
+        
+        this.makeApiCall(currentActiveModel, true);
     }
 
     getRandomArenaModels(models) {
@@ -272,94 +407,5 @@ export class SidepanelController {
             [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
         }
         return [shuffled[0], shuffled[1]];
-    }
-
-    async initPrompt(context) {
-        let promptString = context.mode + "_prompt";
-        try {
-            await this.stateManager.loadPrompt(promptString);
-            
-            let prompt = this.stateManager.getPrompt('active_prompt');
-            if (context.mode === "selection") {
-                prompt += `\n"""[${context.url}]"""\n"""[${context.text}]"""`;
-            }
-            
-            this.chatCore.insertSystemMessage(prompt);
-        } catch (error) {
-            this.chatUI.addErrorMessage(`Error loading ${context.mode} prompt file:\n${error.message}`);
-            throw error;
-        }
-    }
-
-    sendUserMessage() {
-        const text = this.chatUI.getTextareaText().trim();
-        if (!text) return;
-        this.chatUI.setTextareaText('');
-        this.handleDefaultArenaChoice();
-        const latestBefore = this.chatCore.getLatestMessage();
-        if (latestBefore?.role === 'assistant' && !latestBefore.responses && this.chatUI.continueFunc) {
-            const messageIndex = this.chatCore.getLength() - 1;
-            const secondaryIndex = latestBefore.contents?.length ? latestBefore.contents.length - 1 : 0;
-            this.chatUI.renderContinueForAssistant(messageIndex, secondaryIndex);
-        }
-        this.chatCore.addUserMessage(text);
-        const idx = this.chatCore.getLength() - 1;
-        const latest = this.chatCore.getLatestMessage();
-        const continueFunc = this.getContinueFunc(idx, latest.contents.length - 1);
-        this.chatUI.addMessage('user', latest.contents.at(-1), { continueFunc });
-        this.chatUI.removeRegenerateButtons();
-        this.chatUI.removeCurrentRemoveMediaButtons();
-        this.initApiCall();
-    }
-
-    collectPendingUserMessage() {
-        const text = this.chatUI.getTextareaText().trim();
-        return this.chatCore.collectPendingUserMessage(text);
-    }
-
-    appendPendingMedia(media, type) {
-        media.forEach(item => {
-            const currentId = this.chatCore.appendMedia(item, type);
-            if (type === 'image') this.chatUI.appendImage(item, () => this.chatCore.removeMedia(currentId));
-            else this.chatUI.appendFile(item, () => this.chatCore.removeMedia(currentId));
-        });
-    }
-
-    determineWinnerIndex(choice) {
-        if (['draw', 'reveal', 'ignored'].includes(choice)) {
-            return Math.floor(Math.random() * 2);
-        }
-        if (choice === 'model_a') return 0;
-        if (choice === 'model_b') return 1;
-        return -1;
-    }
-
-    handleDefaultArenaChoice() {
-        if (this.stateManager.isArenaModeActive) {
-            this.handleArenaChoice('ignored');
-        }
-    }
-
-    regenerateResponse(model) {
-        this.chatUI.initScrollListener();
-        this.stateManager.updateThinkingMode();
-        this.stateManager.initThinkingState(model);
-        const actualModel = this.stateManager.isArenaModeActive ? model : 
-            this.stateManager.getSetting('current_model');
-
-            const hideModels = !this.stateManager.getSetting('show_model_name') || this.stateManager.isArenaModeActive;
-        const latest = this.chatCore.getLatestMessage();
-        const secondaryIndex = latest?.contents?.length ?? 0;
-        const messageIndex = Math.max(this.chatCore.getLength() - 1, 0);
-        const continueFunc = this.getContinueFunc(messageIndex, secondaryIndex);
-        this.chatUI.regenerateResponse(actualModel, true, hideModels, continueFunc, false); 
-            
-        if (this.stateManager.isArenaModeActive && this.stateManager.thinkingMode) {
-            this.chatCore.initThinkingChat();
-            const [modelA, modelB] = this.stateManager.getArenaModels();
-            this.chatCore.initArena(modelA, modelB);
-        }
-
-        this.makeApiCall(actualModel, true);
     }
 }

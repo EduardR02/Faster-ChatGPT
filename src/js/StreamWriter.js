@@ -1,0 +1,269 @@
+import { formatContent, highlightCodeBlocks } from './ui_utils.js';
+
+/**
+ * Basic writer for non-UI streaming (e.g., auto-renaming).
+ */
+export class StreamWriterBase {
+    constructor(container = null) {
+        Object.assign(this, {
+            contentDiv: container,
+            chunks: [],
+            isFirstChunk: true
+        });
+    }
+
+    setThinkingModel() {}
+
+    onComplete() {}
+
+    processContent(content, isThought = false) {
+        if (isThought) return; // Discard thoughts for renaming
+        
+        this.chunks.push(content);
+        if (this.contentDiv) {
+            if (this.isFirstChunk) {
+                this.contentDiv.textContent = "";
+                this.isFirstChunk = false;
+            }
+            this.contentDiv.append(content);
+        }
+    }
+
+    done() {
+        return this.chunks.join('');
+    }
+}
+
+/**
+ * Standard UI stream writer.
+ */
+export class StreamWriterSimple {
+    constructor(contentDiv, produceNextDiv, scrollCallback = () => {}) {
+        Object.assign(this, {
+            contentDiv,
+            produceNextDiv,
+            scrollFunc: scrollCallback,
+            parts: [{ type: 'text', content: [] }],
+            isThoughtEnd: true,
+            isThinkingModel: false,
+            intervalId: null,
+            thinkingCounter: null
+        });
+    }
+
+    setThinkingModel() {
+        this.isThoughtEnd = false;
+        this.contentDiv.classList.add('thoughts');
+        this.parts = [{ type: 'thought', content: [] }];
+        this.isThinkingModel = true;
+    }
+
+    onComplete() {}
+
+    addThinkingCounter() {
+        const prefixSpan = this.contentDiv.closest('.assistant-message')?.querySelector('.message-prefix');
+        if (!prefixSpan) return;
+
+        this.thinkingModelWithCounter = true;
+
+        const [firstWord, ...remainingWords] = prefixSpan.textContent.split(' ');
+        const labelSuffix = remainingWords.length ? ' ' + remainingWords.join(' ') : '';
+        const originalText = prefixSpan.textContent;
+        const counter = {
+            prefixSpan,
+            originalText,
+            firstWord,
+            labelSuffix,
+            secondsElapsed: 0,
+            hasContent: false
+        };
+
+        this.stopThinkingCounter();
+        this.intervalId = setInterval(() => {
+            if (counter.hasContent) return;
+            counter.secondsElapsed += 1;
+            prefixSpan.textContent = `${firstWord} thinking for ${counter.secondsElapsed}s...${labelSuffix}`;
+        }, 1000);
+        this.thinkingCounter = counter;
+
+        const originalProcessContent = this.processContent.bind(this);
+        this.processContent = (content, isThought) => {
+            if (!counter.hasContent) {
+                counter.hasContent = true;
+                this.stopThinkingCounter();
+                if (content) {
+                    prefixSpan.textContent = `${firstWord} thought for ${counter.secondsElapsed}s${labelSuffix}`;
+                } else {
+                    prefixSpan.textContent = originalText;
+                }
+            }
+            originalProcessContent(content, isThought);
+        };
+    }
+
+    stopThinkingCounter() {
+        if (this.intervalId) {
+            clearInterval(this.intervalId);
+            this.intervalId = null;
+        }
+        if (this.thinkingCounter && !this.thinkingCounter.hasContent) {
+            this.thinkingCounter.prefixSpan.textContent = this.thinkingCounter.originalText;
+        }
+        this.thinkingCounter = null;
+    }
+
+    processContent(content, isThought = false) {
+        // Handle transitions from thought to text
+        if (!isThought && !this.isThoughtEnd) {
+            this.isThoughtEnd = true;
+            this.nextPart();
+        }
+        
+        this.parts.at(-1).content.push(content);
+        this.contentDiv.append(content);
+        this.scrollFunc();
+    }
+
+    nextPart(isThought = false) {
+        this.finalizeCurrentPart();
+        this.parts.push({ type: isThought ? 'thought' : 'text', content: [] });
+        this.switchDiv(isThought);
+    }
+
+    switchDiv(isThought = false) {
+        const nextDiv = this.produceNextDiv('assistant', isThought);
+        const wrapper = this.contentDiv.closest('.message-wrapper') || this.contentDiv.parentElement;
+        wrapper.appendChild(nextDiv);
+        this.contentDiv = nextDiv;
+    }
+
+    finalizeCurrentPart() {
+        const current = this.parts.at(-1);
+        current.content = current.content.join('');
+        
+        if (current.type === 'image') {
+            this.contentDiv.classList.remove('message-content');
+            this.contentDiv.classList.add('image-content');
+            const img = document.createElement('img');
+            img.src = current.content;
+            this.contentDiv.innerHTML = '';
+            this.contentDiv.appendChild(img);
+        } else {
+            this.contentDiv.innerHTML = formatContent(current.content);
+            highlightCodeBlocks(this.contentDiv);
+        }
+    }
+
+    async addFooter(footer) {
+        this.stopThinkingCounter();
+        this.finalizeCurrentPart();
+        footer.create(this.contentDiv);
+        this.scrollFunc();
+    }
+}
+
+/**
+ * Smooth stream writer with artificial delay for readability.
+ */
+export class StreamWriter extends StreamWriterSimple {
+    constructor(contentDiv, produceNextDiv, scrollCallback, wordsPerMinute = 200) {
+        super(contentDiv, produceNextDiv, scrollCallback);
+        Object.assign(this, {
+            contentQueue: [],
+            isProcessing: false,
+            charDelay: 12000 / wordsPerMinute,
+            accumulatedChars: 0,
+            lastFrameTime: 0,
+            pendingFooter: null,
+            pendingSwitch: false,
+            pendingQueue: []
+        });
+    }
+
+    setThinkingModel() {
+        super.setThinkingModel();
+        this.pendingSwitch = false;
+        this.pendingQueue = [];
+    }
+
+    processContent(content, isThought = false) {
+        // Handle transition
+        if (!isThought && !this.isThoughtEnd) {
+            this.isThoughtEnd = true;
+            if (this.parts.at(-1).content.length > 0) {
+                this.pendingSwitch = true;
+                this.parts.at(-1).content = this.parts.at(-1).content.join('');
+            } else {
+                this.parts.pop();
+                this.contentDiv.classList.remove('thoughts');
+            }
+            this.parts.push({ type: isThought ? 'thought' : 'text', content: [] });
+        }
+
+        this.parts.at(-1).content.push(content);
+        const targetQueue = this.pendingSwitch ? this.pendingQueue : this.contentQueue;
+        targetQueue.push(...content.split(""));
+
+        if (!this.isProcessing) {
+            this.isProcessing = true;
+            this.lastFrameTime = 0;
+            this.runAnimationLoop();
+        }
+    }
+
+    runAnimationLoop() {
+        requestAnimationFrame(timestamp => {
+            // Handle switching to text div after thought queue is empty - must check BEFORE early exit
+            if (this.pendingSwitch && !this.contentQueue.length) {
+                this.pendingSwitch = false;
+                this.contentQueue.push(...this.pendingQueue);
+                this.pendingQueue = [];
+
+                // Finalize previous thought part
+                const previousPart = this.parts.length >= 2 ? this.parts.at(-2) : null;
+                if (previousPart) {
+                    this.contentDiv.innerHTML = formatContent(previousPart.content);
+                    highlightCodeBlocks(this.contentDiv);
+                }
+
+                this.switchDiv(this.parts.at(-1).type === 'thought');
+            }
+
+            if (!this.contentQueue.length) {
+                this.isProcessing = false;
+                if (this.pendingFooter) {
+                    const { footer, resolve } = this.pendingFooter;
+                    this.pendingFooter = null;
+                    super.addFooter(footer).then(resolve);
+                }
+                return;
+            }
+
+            if (!this.lastFrameTime) this.lastFrameTime = timestamp;
+
+            const elapsed = timestamp - this.lastFrameTime;
+            this.accumulatedChars += elapsed / this.charDelay;
+
+            const charCount = Math.floor(this.accumulatedChars);
+            this.accumulatedChars -= charCount;
+
+            if (charCount > 0) {
+                const chunk = this.contentQueue.splice(0, charCount).join('');
+                this.contentDiv.append(chunk);
+                this.scrollFunc();
+            }
+
+            this.lastFrameTime = timestamp;
+            this.runAnimationLoop();
+        });
+    }
+
+    addFooter(footer) {
+        if (this.isProcessing) {
+            return new Promise(resolve => {
+                this.pendingFooter = { footer, resolve };
+            });
+        }
+        return super.addFooter(footer);
+    }
+}

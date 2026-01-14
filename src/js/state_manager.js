@@ -1,97 +1,163 @@
+import { ModeEnum } from './storage_utils.js';
+
+const settingsManagers = new Set();
+let storageListenerAttached = false;
+
+const dispatchStorageChanges = (changes, area) => {
+    if (area !== 'local') return;
+    settingsManagers.forEach(manager => manager.handleStorageChanges(changes));
+};
+
+const registerSettingsManager = (manager) => {
+    settingsManagers.add(manager);
+    if (!storageListenerAttached) {
+        chrome.storage.onChanged.addListener(dispatchStorageChanges);
+        storageListenerAttached = true;
+    }
+};
+
+/**
+ * Enums for application states.
+ */
+export const CHAT_STATE = { NORMAL: 0, INCOGNITO: 1, CONVERTED: 2 };
+export const THINKING_STATE = { INACTIVE: 0, THINKING: 1, SOLVING: 2 };
+export const REASONING_EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
+export const IMAGE_ASPECT_OPTIONS = ['auto', '16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3', '4:5', '5:4', '21:9'];
+export const IMAGE_RESOLUTION_OPTIONS = ['1K', '2K', '4K'];
+
+export const cycleOption = (currentValue, options) => {
+    const currentIndex = options.indexOf(currentValue);
+    return options[(currentIndex + 1) % options.length];
+};
+
+export const readThinkingState = (state, modelId = null) => {
+    if (state.isArenaModeActive && modelId) {
+        return state.thinkingStates[modelId] ?? THINKING_STATE.INACTIVE;
+    }
+    return state.thinkingStates.default;
+};
+
+export const writeThinkingState = (state, value, modelId = null) => {
+    if (state.isArenaModeActive && modelId) {
+        state.thinkingStates[modelId] = value;
+    } else {
+        state.thinkingStates.default = value;
+    }
+};
+
+export const advanceThinkingState = (state, modelId = null) => {
+    const current = readThinkingState(state, modelId);
+    const next = current === THINKING_STATE.THINKING ? THINKING_STATE.SOLVING : THINKING_STATE.INACTIVE;
+    writeThinkingState(state, next, modelId);
+};
+
+export const initializeThinkingStates = (state, modelId = null) => {
+    const initialState = state.activeThinkingMode ? THINKING_STATE.THINKING : THINKING_STATE.INACTIVE;
+
+    if (state.isArenaModeActive) {
+        if (modelId) {
+            writeThinkingState(state, initialState, modelId);
+            return;
+        }
+        const [modelA, modelB] = state.activeArenaModels;
+        state.thinkingStates = { [modelA]: initialState, [modelB]: initialState };
+        return;
+    }
+
+    state.thinkingStates = { default: initialState };
+};
+
+/**
+ * Base class for managing application settings stored in chrome.storage.local.
+ */
 export class SettingsManager {
     constructor(requestedSettings = []) {
         this.isReady = false;
-        this.funcQueue = [];
-        this.state = {
-            settings: {}
-        };
-        this.requestedSettings = ['mode', ...requestedSettings];
-        this.settingsListeners = {};
-        this.initialize();
+        this.onReadyQueue = [];
+        this.state = { settings: {} };
+        this.requestedKeys = ['mode', ...requestedSettings];
+        this.listeners = new Map();
+        
+        this.init();
     }
 
-    runOnReady(func) {
+    runOnReady(callback) {
         if (this.isReady) {
-            func();
+            callback();
         } else {
-            this.funcQueue.push(func);
+            this.onReadyQueue.push(callback);
         }
     }
 
-    markAsReady() {
+    markReady() {
         this.isReady = true;
-        this.funcQueue.forEach(func => func());
-        this.funcQueue = [];
+        this.onReadyQueue.forEach(callback => callback());
+        this.onReadyQueue = [];
     }
 
-    async initialize() {
-        if (this.requestedSettings.length === 0) return;
-        await this.loadSettings(this.requestedSettings);
-        this.setupChangeListener();
-        this.markAsReady();
+    async init() {
+        const storedSettings = await new Promise(resolve => chrome.storage.local.get(this.requestedKeys, resolve));
+        Object.assign(this.state.settings, storedSettings);
+        registerSettingsManager(this);
+
+        this.markReady();
     }
 
-    setupChangeListener() {
-        chrome.storage.onChanged.addListener((changes, areaName) => {
-            if (areaName === 'local') {
-                const filteredChanges = Object.fromEntries(
-                    Object.entries(changes)
-                        .filter(([key]) => this.requestedSettings.includes(key))
-                        .map(([key, { newValue }]) => [key, newValue])
-                );
-                if (Object.keys(filteredChanges).length > 0) {
-                    this.updateSettingsLocal(filteredChanges);
-                }
+    handleStorageChanges(changes) {
+        const settingUpdates = {};
+        for (const [key, change] of Object.entries(changes)) {
+            if (this.requestedKeys.includes(key)) {
+                settingUpdates[key] = change.newValue;
             }
-        });
-    }
-
-    async loadSettings(keys) {
-        const loadedSettings = await this.loadFromStorage(keys);
-        this.state.settings = { ...this.state.settings, ...loadedSettings };
-    }
-
-    async loadFromStorage(keys) {
-        return new Promise((resolve) => {
-            chrome.storage.local.get(keys, (settings) => {
-                resolve(settings);
-            });
-        });
+        }
+        if (Object.keys(settingUpdates).length > 0) {
+            this.updateSettingsLocal(settingUpdates);
+        }
     }
 
     subscribeToSetting(key, callback) {
-        if (!this.settingsListeners[key]) {
-            this.settingsListeners[key] = [];
+        if (!this.listeners.has(key)) {
+            this.listeners.set(key, []);
         }
-        this.settingsListeners[key].push(callback);
+        this.listeners.get(key).push(callback);
     }
 
-    updateSettingsLocal(newSettings) {
-        for (const [path, value] of Object.entries(newSettings)) {
-            this.deepUpdate(this.state.settings, path, value);
-
-            if (this.settingsListeners[path]) {
-                this.settingsListeners[path].forEach(func => func(value));
+    unsubscribeFromSetting(key, callback) {
+        if (this.listeners.has(key)) {
+            const list = this.listeners.get(key);
+            const index = list.indexOf(callback);
+            if (index !== -1) {
+                list.splice(index, 1);
             }
         }
     }
 
-    updateSettingsPersistent(newSettings) {
-        this.updateSettingsLocal(newSettings);
+    updateSettingsLocal(settingUpdates) {
+        for (const [settingPath, value] of Object.entries(settingUpdates)) {
+            const keys = settingPath.split('.');
+            let current = this.state.settings;
+
+            // Handle nested objects if necessary
+            keys.forEach((key, index) => {
+                if (index === keys.length - 1) {
+                    current[key] = value;
+                } else {
+                    current[key] = current[key] || {};
+                    current = current[key];
+                }
+            });
+
+            this.listeners.get(settingPath)?.forEach(callback => callback(value));
+        }
+    }
+
+    updateSettingsPersistent(settingUpdates) {
+        this.updateSettingsLocal(settingUpdates);
         chrome.storage.local.set(this.state.settings);
     }
 
-    deepUpdate(target, path, value) {
-        const keys = path.split('.');
-        let current = target;
-        for (let i = 0; i < keys.length - 1; i++) {
-            const key = keys[i];
-            if (!current[key] || typeof current[key] !== 'object') {
-                current[key] = {};
-            }
-            current = current[key];
-        }
-        current[keys[keys.length - 1]] = value;
+    loadFromStorage(keys) {
+        return new Promise(resolve => chrome.storage.local.get(keys, resolve));
     }
 
     getSetting(key) {
@@ -102,81 +168,63 @@ export class SettingsManager {
         return this.getSetting('mode') !== ModeEnum.Off;
     }
 
-    isSettingsEmpty() {
-        return Object.keys(this.state.settings).length === 0;
-    }
-
     isInstantPromptMode() {
         return this.getSetting('mode') === ModeEnum.InstantPromptMode;
     }
 }
 
-
+/**
+ * Manages settings for the extension Options page.
+ */
 export class SettingsStateManager extends SettingsManager {
     constructor() {
-        super(['api_keys', 'max_tokens', 'temperature', 'loop_threshold', 'current_model', 'close_on_deselect', 'show_model_name',
-            'stream_response', 'arena_mode', 'arena_models', 'auto_rename', 'auto_rename_model', 'models', 'reasoning_effort', 'web_search',
-            'persist_tabs', 'transcription_model'
+        super([
+            'api_keys', 'max_tokens', 'temperature', 'loop_threshold', 'current_model',
+            'close_on_deselect', 'show_model_name', 'stream_response', 'arena_mode',
+            'arena_models', 'auto_rename', 'auto_rename_model', 'models',
+            'reasoning_effort', 'web_search', 'persist_tabs', 'transcription_model'
         ]);
-
-        this.tempState = {
-            api_keys: {},
-            prompts: {}
-        };
+        this.temp = { api_keys: {}, prompts: {} };
         this.pendingChanges = {};
-        this.initialize();
     }
 
-    updateSettingsPersistent(newSettings) {
-        this.updateSettingsLocal(newSettings);
-        chrome.storage.local.set(newSettings);
+    updateSettingsPersistent(settingUpdates) {
+        this.updateSettingsLocal(settingUpdates);
+        chrome.storage.local.set(settingUpdates);
     }
 
-    queueSettingChange(key, value) {
-        if (typeof key === 'object') {
-            Object.entries(key).forEach(([k, v]) => this.queueSingleSetting(k, v));
-        } else {
-            this.queueSingleSetting(key, value);
+    queueSettingChange(keyOrObject, value) {
+        if (typeof keyOrObject === 'object') {
+            Object.entries(keyOrObject).forEach(([key, val]) => this.queueSettingChange(key, val));
+            return;
         }
-    }
 
-    queueSingleSetting(key, value) {
-        if (value === this.state.settings[key]) {
-            delete this.pendingChanges[key];
+        if (value === this.state.settings[keyOrObject]) {
+            delete this.pendingChanges[keyOrObject];
         } else {
-            this.pendingChanges[key] = value;
+            this.pendingChanges[keyOrObject] = value;
         }
     }
 
     getSetting(key) {
-        if (this.pendingChanges[key] !== undefined) {
-            return this.pendingChanges[key];
-        }
-        return this.state.settings[key];
+        return this.pendingChanges[key] !== undefined ? this.pendingChanges[key] : this.state.settings[key];
     }
 
     setApiKey(provider, key) {
-        this.tempState.api_keys[provider] = key;
+        this.temp.api_keys[provider] = key;
     }
 
     commitChanges() {
-        if (Object.keys(this.tempState.api_keys).length) {
-            this.pendingChanges.api_keys = {
-                ...this.state.settings.api_keys,
-                ...this.tempState.api_keys
-            };
-        }
-        
-        if (Object.keys(this.tempState.prompts).length) {
-            Object.entries(this.tempState.prompts).forEach(([key, value]) => {
-                this.pendingChanges[key] = value;
-            });
+        if (Object.keys(this.temp.api_keys).length > 0) {
+            this.pendingChanges.api_keys = { ...this.state.settings.api_keys, ...this.temp.api_keys };
         }
 
-        if (Object.keys(this.pendingChanges).length) {
+        Object.assign(this.pendingChanges, this.temp.prompts);
+
+        if (Object.keys(this.pendingChanges).length > 0) {
             this.updateSettingsPersistent(this.pendingChanges);
             this.pendingChanges = {};
-            this.tempState = { api_keys: {}, prompts: {} };
+            this.temp = { api_keys: {}, prompts: {} };
         }
     }
 
@@ -186,14 +234,13 @@ export class SettingsStateManager extends SettingsManager {
             models[provider] = {};
         }
         models[provider][apiName] = displayName;
-        
         this.updateSettingsPersistent({ models });
     }
 
     removeModel(apiName) {
         const models = this.state.settings.models;
         let found = false;
-        
+
         for (const provider in models) {
             if (apiName in models[provider]) {
                 delete models[provider][apiName];
@@ -203,131 +250,110 @@ export class SettingsStateManager extends SettingsManager {
         }
 
         if (!found) return;
-        this.updateSettingsPersistent({ models });
 
-        const updates = {};
+        const settingUpdates = { models };
 
-        if (super.getSetting('current_model') === apiName) {
-            updates.current_model = this.getFirstAvailableModel();
-            delete this.pendingChanges.current_model;
+        // Handle fallout of model removal - check both persisted and pending
+        if (this.state.settings.current_model === apiName) {
+            settingUpdates.current_model = this.getFirstAvailableModel();
         }
-        
-        if (super.getSetting('auto_rename_model') === apiName) {
-            updates.auto_rename_model = null;
-            updates.auto_rename = false;
-            delete this.pendingChanges.auto_rename_model;
-            delete this.pendingChanges.auto_rename;
-        }
-
-        if (super.getSetting('transcription_model') === apiName) {
-            updates.transcription_model = null;
-            delete this.pendingChanges.transcription_model;
-        }
-        
-        const arenaModels = super.getSetting('arena_models');
-        if (arenaModels?.includes(apiName)) {
-            updates.arena_models = arenaModels.filter(model => model !== apiName);
-            
-            if (this.pendingChanges.arena_models) {
-                this.pendingChanges.arena_models = 
-                    this.pendingChanges.arena_models.filter(model => model !== apiName);
-                
-                if (this.pendingChanges.arena_models.length < 2) {
-                    delete this.pendingChanges.arena_models;
-                    delete this.pendingChanges.arena_mode;
-                }
-            }
-        }
-
-        // If the user had a pending (unsaved) selection for current_model that was just removed,
-        // clear it so UI falls back to the persisted current_model (or the update above if persisted was removed).
         if (this.pendingChanges.current_model === apiName) {
             delete this.pendingChanges.current_model;
         }
 
+        if (this.state.settings.auto_rename_model === apiName) {
+            settingUpdates.auto_rename_model = null;
+            settingUpdates.auto_rename = false;
+        }
+        if (this.pendingChanges.auto_rename_model === apiName) {
+            delete this.pendingChanges.auto_rename_model;
+            delete this.pendingChanges.auto_rename;
+        }
+
+        if (this.state.settings.transcription_model === apiName) {
+            settingUpdates.transcription_model = null;
+        }
         if (this.pendingChanges.transcription_model === apiName) {
             delete this.pendingChanges.transcription_model;
         }
 
-        if (Object.keys(updates).length > 0) {
-            this.updateSettingsPersistent(updates);
+        const arenaModels = this.state.settings.arena_models;
+        if (arenaModels?.includes(apiName)) {
+            settingUpdates.arena_models = arenaModels.filter(modelId => modelId !== apiName);
         }
+        if (this.pendingChanges.arena_models?.includes(apiName)) {
+            this.pendingChanges.arena_models = this.pendingChanges.arena_models.filter(m => m !== apiName);
+            if (this.pendingChanges.arena_models.length < 2) {
+                delete this.pendingChanges.arena_models;
+                delete this.pendingChanges.arena_mode;
+            }
+        }
+
+        this.updateSettingsPersistent(settingUpdates);
     }
 
     getFirstAvailableModel() {
         for (const provider in this.state.settings.models) {
             const modelIds = Object.keys(this.state.settings.models[provider]);
-            if (modelIds.length > 0) {
-                return modelIds[0];
-            }
+            if (modelIds.length > 0) return modelIds[0];
         }
         return null;
     }
 
-    async getPrompt(promptType) {
-        if (this.tempState.prompts[promptType] !== undefined) {
-            return this.tempState.prompts[promptType];
+    async getPrompt(type) {
+        if (this.temp.prompts[type] === undefined) {
+            const result = await new Promise(resolve => chrome.storage.local.get([type], resolve));
+            if (result[type]) {
+                this.temp.prompts[type] = result[type];
+            }
         }
-        
-        await this.loadPrompt(promptType);
-        return this.tempState.prompts[promptType];
+        return this.temp.prompts[type];
     }
 
-    setPrompt(promptType, value) {
-        this.tempState.prompts[promptType] = value;
-    }
-
-    async loadPrompt(promptType) {
-        const result = await this.loadFromStorage([promptType]);
-        if (result[promptType]) {
-            this.tempState.prompts[promptType] = result[promptType];
-        }
+    setPrompt(type, value) {
+        this.temp.prompts[type] = value;
     }
 }
 
-
+/**
+ * Manages Arena-specific state.
+ */
 export class ArenaStateManager extends SettingsManager {
     constructor(requestedSettings = []) {
         super(requestedSettings);
-        
-        // Shared arena state
-        this.state = {
-            ...this.state,
-            isArenaModeActive: false,
-            activeArenaModels: null,
-        };
+        this.state.isArenaModeActive = false;
+        this.state.activeArenaModels = null;
     }
 
     initArenaResponse(modelA, modelB) {
-        this.state.activeArenaModels = [modelA, modelB];
-        this.state.isArenaModeActive = true;
+        Object.assign(this.state, {
+            activeArenaModels: [modelA, modelB],
+            isArenaModeActive: true
+        });
     }
 
     clearArenaState() {
-        this.state.activeArenaModels = null;
-        this.state.isArenaModeActive = false;
+        Object.assign(this.state, {
+            activeArenaModels: null,
+            isArenaModeActive: false
+        });
     }
 
     getArenaModel(index) {
-        if (!this.state.activeArenaModels || !this.isArenaModeActive) 
-            throw new Error('Active arena models are not set!');
-        return this.state.activeArenaModels[index];
+        return this.state.activeArenaModels ? this.state.activeArenaModels[index] : null;
     }
 
-    getArenaModelKey(model) {
-        if (!this.state.activeArenaModels || !this.isArenaModeActive) 
-            throw new Error('Active arena models are not set!');
-        return this.state.activeArenaModels.indexOf(model) === 0 ? 'model_a' : 'model_b';
+    getArenaModelKey(modelId) {
+        if (!this.state.activeArenaModels) return 'model_a';
+        return this.state.activeArenaModels.indexOf(modelId) === 0 ? 'model_a' : 'model_b';
     }
 
-    getModelIndex(model) {
-        if (!this.state.activeArenaModels || !this.isArenaModeActive)
-            return 0;
-        return this.state.activeArenaModels.indexOf(model);
+    getModelIndex(modelId) {
+        return this.state.activeArenaModels?.indexOf(modelId) ?? 0;
     }
 
     getArenaModels() {
-        return this.state.activeArenaModels;
+        return this.state.activeArenaModels || [];
     }
 
     get isArenaModeActive() {
@@ -335,278 +361,217 @@ export class ArenaStateManager extends SettingsManager {
     }
 }
 
-
+/**
+ * Manages state for the History page.
+ */
 export class HistoryStateManager extends ArenaStateManager {
     constructor() {
         super();
-        // Direct properties for history management, so we don't have to call .state every time...
-        this.isLoading = false;
-        this.offset = 0;
-        this.limit = 20;
-        this.hasMoreItems = true;
-        this.lastDateCategory = null;
-        this.historyList = document.querySelector('.history-list');
+        Object.assign(this, {
+            isLoading: false,
+            offset: 0,
+            limit: 20,
+            hasMoreItems: true,
+            lastDateCategory: null,
+            historyList: document.querySelector('.history-list')
+        });
     }
 
     shouldLoadMore() {
-        const { scrollHeight, clientHeight } = this.historyList;
-        return scrollHeight <= clientHeight && this.hasMoreItems;
+        return this.historyList && 
+               this.historyList.scrollHeight <= this.historyList.clientHeight && 
+               this.hasMoreItems;
     }
 
     canLoadMore() {
         return !this.isLoading && this.hasMoreItems;
     }
 
-    isThinking(_) {
-        return false;
-    }
-
-    isSolving(_) {
-        return false;
-    }
-
     reset() {
-        this.isLoading = false;
-        this.offset = 0;
-        this.hasMoreItems = true;
-        this.lastDateCategory = null;
+        Object.assign(this, {
+            isLoading: false,
+            offset: 0,
+            hasMoreItems: true,
+            lastDateCategory: null
+        });
     }
+
+    isThinking(_) { return false; }
+    isSolving(_) { return false; }
+    isInactive(_) { return true; }
 }
 
-
+/**
+ * Manages state for the Sidepanel application.
+ */
 export class SidepanelStateManager extends ArenaStateManager {
-    constructor(requestedPrompt) {
-        super(['loop_threshold', 'current_model', 'arena_models', 'stream_response', 'arena_mode', 'show_model_name', 'models', 'web_search', 'reasoning_effort', 'persist_tabs', 'transcription_model']);
+    constructor(activePromptKey) {
+        super([
+            'loop_threshold', 'current_model', 'arena_models', 'stream_response', 
+            'arena_mode', 'show_model_name', 'models', 'web_search', 
+            'reasoning_effort', 'persist_tabs', 'transcription_model'
+        ]);
+        
+        Object.assign(this, {
+            apiManager: null,
+            chatResetListeners: new Map(),
+            requestedPromptKey: activePromptKey,
+            shouldSave: true
+        });
 
-        // Additional state
-        this.state = {
-            ...this.state,
+        Object.assign(this.state, {
             pendingThinkingMode: false,
             activeThinkingMode: false,
             thinkingStates: { default: THINKING_STATE.INACTIVE },
-            chatState: CHAT_STATE.NORMAL,
-            shouldSave: true,
-            shouldThink: false,
-            shouldWebSearch: undefined,
-            openaiReasoningEffort: undefined,
-            isSidePanel: true,
-            continuedChatOptions: {},
-            chatResetOngoing: false,
-            prompts: {
-                active_prompt: {},
-                thinking: '',
-                solver: ''
-            }
-        };
+            chatState: CHAT_STATE.NORMAL
+        });
 
-        this.chatResetListeners = {};
-        this.requestedPrompt = requestedPrompt;
-        this.loadPrompts(this.requestedPrompt)
-        this.setupPromptChangeListener();
-    }
+        this.state.prompts = { active_prompt: {}, thinking: '', solver: '' };
+        this.initThinkingStateDefault();
+        this.loadPrompts(activePromptKey);
 
-    setupPromptChangeListener() {
-        chrome.storage.onChanged.addListener((changes, areaName) => {
-            if (areaName === 'local') {
-                const filteredChanges = Object.fromEntries(
-                    Object.entries(changes)
-                        .filter(([key]) => key.endsWith('_prompt'))
-                        .map(([key, { newValue }]) => [key, newValue])
-                );
-                if (Object.keys(filteredChanges).length > 0) {
-                    this.updatePromptsLocal(filteredChanges);
+        chrome.storage.onChanged.addListener((changes, area) => {
+            if (area !== 'local') return;
+            
+            const promptUpdates = {};
+            for (const [key, change] of Object.entries(changes)) {
+                if (key.endsWith('_prompt')) {
+                    promptUpdates[key] = change.newValue;
                 }
+            }
+            
+            if (Object.keys(promptUpdates).length > 0) {
+                this.updatePromptsLocal(promptUpdates);
             }
         });
     }
 
-    updatePromptsLocal(newPrompts) {
-        for (const [key, value] of Object.entries(newPrompts)) {
+    updatePromptsLocal(promptUpdates) {
+        for (const [key, value] of Object.entries(promptUpdates)) {
             if (key === 'thinking_prompt') {
                 this.state.prompts.thinking = value;
             } else if (key === 'solver_prompt') {
-                this.state.prompts.solver = value
+                this.state.prompts.solver = value;
             } else {
                 this.state.prompts.active_prompt = { [key]: value };
             }
         }
     }
 
-    async loadPrompts(requestedPrompt) {
-        const requiredPrompts = ['thinking_prompt', 'solver_prompt'];
-        const allPrompts = [...new Set([requestedPrompt, ...requiredPrompts])];
-
-        const prompts = await this.loadFromStorage(allPrompts);
-        this.updatePromptsLocal(prompts);
+    async loadPrompts(promptKey) {
+        const result = await new Promise(resolve => 
+            chrome.storage.local.get(['thinking_prompt', 'solver_prompt', promptKey], resolve)
+        );
+        this.updatePromptsLocal(result);
     }
 
-    async loadPrompt(requestedPrompt) {
-        if (requestedPrompt === Object.keys(this.state.prompts.active_prompt)[0]) return;
-        const prompt = await this.loadFromStorage([requestedPrompt]);
-        this.updatePromptsLocal(prompt);
+    async loadPrompt(promptKey) {
+        const result = await new Promise(resolve => chrome.storage.local.get([promptKey], resolve));
+        this.updatePromptsLocal(result);
     }
 
     getPrompt(type) {
         if (type === 'active_prompt') {
-            return Object.values(this.state.prompts[type])[0];
+            return Object.values(this.state.prompts.active_prompt)[0];
         }
         return this.state.prompts[type];
     }
 
-    toggleChatState(hasChatStarted) {
-        switch (this.state.chatState) {
-            case CHAT_STATE.NORMAL:
-                this.state.shouldSave = false;
-                this.state.chatState = !hasChatStarted ? CHAT_STATE.INCOGNITO : CHAT_STATE.CONVERTED;
-                break;
-            case CHAT_STATE.INCOGNITO:
-                this.state.shouldSave = true;
-                this.state.chatState = !hasChatStarted ? CHAT_STATE.NORMAL : CHAT_STATE.CONVERTED;
-                break;
-            case CHAT_STATE.CONVERTED:
-                this.state.shouldSave = false;
-                this.state.chatState = CHAT_STATE.INCOGNITO;
+    get shouldSave() { return this.state.shouldSave; }
+    set shouldSave(value) { this.state.shouldSave = !!value; }
 
-                this.state.chatResetOngoing = true;
-                this.notifyChatReset();
-                this.state.chatResetOngoing = false;
-                break;
-        }
-    }
-
-    resetChatState() {
-        if (this.state.chatResetOngoing) return;
-        this.state.chatState = CHAT_STATE.NORMAL;
-        this.state.shouldSave = true;
-        this.clearContinuedChat();
-        this.clearArenaState();
-        this.initThinkingStateDefault();
-    }
-
-    isChatNormal() {
-        return this.state.chatState === CHAT_STATE.NORMAL;
-    }
-
-    isChatIncognito() {
-        return this.state.chatState === CHAT_STATE.INCOGNITO;
-    }
-
-    isChatConverted() {
-        return this.state.chatState === CHAT_STATE.CONVERTED;
-    }
-
-    isThinking(model = null) {
-        const state = this.getThinkingState(model);
-        return state === THINKING_STATE.THINKING;
-    }
-
-    isSolving(model = null) {
-        const state = this.getThinkingState(model);
-        return state === THINKING_STATE.SOLVING;
-    }
-
-    isInactive(model = null) {
-        const state = this.getThinkingState(model);
-        return state === THINKING_STATE.INACTIVE;
-    }
-
-    subscribeToChatReset(key, callback) {
-        this.chatResetListeners[key] = callback;
+    subscribeToChatReset(id, callback) {
+        this.chatResetListeners.set(id, callback);
     }
 
     notifyChatReset() {
-        for (const callback of Object.values(this.chatResetListeners)) {
-            callback();
-        }
+        this.chatResetListeners.forEach(callback => callback());
+    }
+
+    // --- Thinking States ---
+
+    isThinking(modelId = null) {
+        return readThinkingState(this.state, modelId) === THINKING_STATE.THINKING;
+    }
+
+    isSolving(modelId = null) {
+        return readThinkingState(this.state, modelId) === THINKING_STATE.SOLVING;
+    }
+
+    isInactive(modelId = null) {
+        return readThinkingState(this.state, modelId) === THINKING_STATE.INACTIVE;
+    }
+
+    getThinkingState(modelId) {
+        return readThinkingState(this.state, modelId);
+    }
+
+    setThinkingState(state, modelId = null) {
+        writeThinkingState(this.state, state, modelId);
+    }
+
+    nextThinkingState(modelId = null) {
+        advanceThinkingState(this.state, modelId);
+    }
+
+    initThinkingStateDefault() {
+        initializeThinkingStates(this.state);
+    }
+
+    initThinkingState(modelId = null) {
+        initializeThinkingStates(this.state, modelId);
     }
 
     updateThinkingMode() {
         this.state.activeThinkingMode = this.state.pendingThinkingMode;
     }
-    
+
     toggleThinkingMode() {
         this.state.pendingThinkingMode = !this.state.pendingThinkingMode;
-    }
-
-    updateArenaMode() {
-        this.state.isArenaModeActive = this.getSetting('arena_mode');
-    }
-
-    toggleArenaMode() {
-        this.updateSettingsLocal({ arena_mode: !this.getSetting('arena_mode') });
-    }
-
-    nextThinkingState(model = null) {
-        const currentState = this.getThinkingState(model);
-        let nextState = THINKING_STATE.INACTIVE;
-
-        if (currentState === THINKING_STATE.THINKING) {
-            nextState = THINKING_STATE.SOLVING;
-        }
-
-        this.setThinkingState(nextState, model);
-    }
-
-    initArenaThinkingStates(model = null) {
-        const thinkingState = this.thinkingMode ? THINKING_STATE.THINKING : THINKING_STATE.INACTIVE;
-        if (model) {
-            this.setThinkingState(thinkingState, model);
-            return;
-        }
-        const [modelA, modelB] = this.state.activeArenaModels;
-        this.state.thinkingStates = { [modelA]: thinkingState, [modelB]: thinkingState };
-    }
-
-    initThinkingStateDefault() {
-        const thinkingState = this.thinkingMode ? THINKING_STATE.THINKING : THINKING_STATE.INACTIVE;
-        this.state.thinkingStates = { default: thinkingState };
-    }
-
-    initThinkingState(model = null) {
-        if (this.isArenaModeActive) {
-            this.initArenaThinkingStates(model);
-        } else {
-            this.initThinkingStateDefault();
-        }
-    }
-
-    getThinkingState(model) {
-        if (this.isArenaModeActive) {
-            return this.state.thinkingStates[model];
-        }
-        return this.state.thinkingStates.default;
-    }
-
-    setThinkingState(state, model = null) {
-        if (this.isArenaModeActive && model) {
-            this.state.thinkingStates[model] = state;
-        } else {
-            this.state.thinkingStates.default = state;
-        }
-    }
-
-    clearContinuedChat() {
-        this.continuedChatOptions = {};
     }
 
     get thinkingMode() {
         return this.state.activeThinkingMode;
     }
 
-    // Provider-level reasoning toggle (e.g., Anthropic Sonnet/Grok)
-    getShouldThink() {
-        return !!this.state.shouldThink;
+    // --- Chat State Toggles ---
+
+    resetChatState() {
+        this.state.chatState = CHAT_STATE.NORMAL;
+        this.shouldSave = true;
+        this.clearArenaState();
+        this.initThinkingStateDefault();
     }
 
-    setShouldThink(value) {
-        this.state.shouldThink = !!value;
+    toggleArenaMode() {
+        this.updateSettingsLocal({ arena_mode: !this.getSetting('arena_mode') });
     }
 
-    toggleShouldThink() {
-        this.state.shouldThink = !this.state.shouldThink;
+    toggleChatState(hasChatStarted) {
+        const current = this.state.chatState;
+        
+        if (current === CHAT_STATE.NORMAL) {
+            this.shouldSave = false;
+            this.state.chatState = hasChatStarted ? CHAT_STATE.CONVERTED : CHAT_STATE.INCOGNITO;
+        } else if (current === CHAT_STATE.INCOGNITO) {
+            this.shouldSave = true;
+            this.state.chatState = hasChatStarted ? CHAT_STATE.CONVERTED : CHAT_STATE.NORMAL;
+        } else if (current === CHAT_STATE.CONVERTED) {
+            this.shouldSave = false;
+            this.state.chatState = CHAT_STATE.INCOGNITO;
+            this.notifyChatReset();
+        }
     }
 
-    // --- Per-chat Web Search (initialized from settings once) ---
+    isChatNormal() { return this.state.chatState === CHAT_STATE.NORMAL; }
+    isChatIncognito() { return this.state.chatState === CHAT_STATE.INCOGNITO; }
+
+    // --- Feature Toggles ---
+
+    getShouldThink() { return !!this.state.shouldThink; }
+    setShouldThink(value) { this.state.shouldThink = !!value; }
+    toggleShouldThink() { this.state.shouldThink = !this.state.shouldThink; }
+
     ensureWebSearchInitialized() {
         if (this.state.shouldWebSearch === undefined) {
             this.state.shouldWebSearch = !!this.getSetting('web_search');
@@ -618,38 +583,22 @@ export class SidepanelStateManager extends ArenaStateManager {
         return !!this.state.shouldWebSearch;
     }
 
-    setShouldWebSearch(value) {
-        this.state.shouldWebSearch = !!value;
-    }
-
+    setShouldWebSearch(value) { this.state.shouldWebSearch = !!value; }
     toggleShouldWebSearch() {
         this.ensureWebSearchInitialized();
         this.state.shouldWebSearch = !this.state.shouldWebSearch;
     }
 
+    // --- Configuration Cyclers ---
+
     getReasoningEffort() {
         return this.state.reasoningEffort || this.getSetting('reasoning_effort') || 'medium';
     }
 
-    setReasoningEffort(value) {
-        if (!['minimal', 'low', 'medium', 'high', 'xhigh'].includes(value)) return;
-        this.state.reasoningEffort = value;
-    }
-
     cycleReasoningEffort() {
-        const order = ['minimal', 'low', 'medium', 'high', 'xhigh'];
-        const current = this.getReasoningEffort();
-        const next = order[(order.indexOf(current) + 1) % order.length];
-        this.state.reasoningEffort = next;
-        return next;
-    }
-
-    getOpenAIReasoningEffort() {
-        return this.getReasoningEffort();
-    }
-
-    getGeminiThinkingLevel() {
-        return this.getReasoningEffort();
+        const nextEffort = cycleOption(this.getReasoningEffort(), REASONING_EFFORT_OPTIONS);
+        this.state.reasoningEffort = nextEffort;
+        return nextEffort;
     }
 
     getImageAspectRatio() {
@@ -657,11 +606,9 @@ export class SidepanelStateManager extends ArenaStateManager {
     }
 
     cycleImageAspectRatio() {
-        const options = ['auto', '16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3', '4:5', '5:4', '21:9'];
-        const current = this.getImageAspectRatio();
-        const next = options[(options.indexOf(current) + 1) % options.length];
-        this.state.imageAspectRatio = next;
-        return next;
+        const nextOption = cycleOption(this.getImageAspectRatio(), IMAGE_ASPECT_OPTIONS);
+        this.state.imageAspectRatio = nextOption;
+        return nextOption;
     }
 
     getImageResolution() {
@@ -669,64 +616,8 @@ export class SidepanelStateManager extends ArenaStateManager {
     }
 
     cycleImageResolution() {
-        const options = ['1K', '2K', '4K'];
-        const current = this.getImageResolution();
-        const next = options[(options.indexOf(current) + 1) % options.length];
-        this.state.imageResolution = next;
-        return next;
-    }
-
-    get continuedChatOptions() {
-        return this.state.continuedChatOptions;
-    }
-
-    set continuedChatOptions(options) {
-        this.state.continuedChatOptions = options;
-    }
-
-    get pendingThinkingMode() {
-        return this.state.pendingThinkingMode;
-    }
-
-    set isSidePanel(value) {
-        this.state.isSidePanel = value;
-    }
-
-    get isSidePanel() {
-        return this.state.isSidePanel;
-    }
-
-    get shouldSave() {
-        return this.state.shouldSave;
-    }
-
-    set thinkingMode(value) {
-        this.state.pendingThinkingMode = value;
-        // Warn if thinking mode is active and prompts are missing
-        if (this.state.thinkingMode) {
-            if (!this.state.prompts.thinking) {
-                throw new Error('Thinking prompt is empty!');
-            }
-            if (!this.state.prompts.solver) {
-                throw new Error('Solver prompt is empty!');
-            }
-        }
+        const nextOption = cycleOption(this.getImageResolution(), IMAGE_RESOLUTION_OPTIONS);
+        this.state.imageResolution = nextOption;
+        return nextOption;
     }
 }
-
-
-export const CHAT_STATE = {
-    NORMAL: 0,      // Fresh normal chat
-    INCOGNITO: 1,   // Fresh incognito or continued as incognito
-    CONVERTED: 2    // Used the one-time transition either way
-};
-
-
-const THINKING_STATE = {
-    INACTIVE: 0,
-    THINKING: 1,
-    SOLVING: 2
-};
-
-
-const ModeEnum = {"InstantPromptMode": 0, "PromptMode": 1, "Off": 2};

@@ -1,10 +1,12 @@
 import { SidepanelRenameManager } from './rename_manager.js';
 
-
+/**
+ * Core chat data logic. Handles the structure of the current conversation.
+ */
 export class ChatCore {
     constructor(chatStorage) {
         this.chatStorage = chatStorage;
-        this.currentChat = null // Raw DB state
+        this.currentChat = null;
         this.init();
     }
 
@@ -17,22 +19,16 @@ export class ChatCore {
     }
 
     miscUpdate(update = {}) {
-        if ("messages" in update) return;
-        this.currentChat = { ...this.currentChat, ...update }
+        Object.assign(this.currentChat, update);
     }
-
-    replaceLastFromHistory(message) {
-        this.currentChat.messages.pop();
-        this.addFromHistory(message);
-    }
-
+    
     addFromHistory(message) {
-        const { chatId, messageId, timestamp, ...msg } = message;
-        this.currentChat.messages.push(msg);
+        const { chatId, messageId, timestamp, ...data } = message;
+        this.currentChat.messages.push(data);
     }
 
     addMultipleFromHistory(messages) {
-        messages.forEach(msg => this.addFromHistory(msg));
+        messages.forEach(message => this.addFromHistory(message));
     }
 
     getLatestMessage() {
@@ -55,53 +51,66 @@ export class ChatCore {
         return this.currentChat.chatId;
     }
 
+    getChat() {
+        return this.currentChat;
+    }
+
     getSystemPrompt() {
-        if (this.currentChat.messages.length === 0) return undefined;
-        return this.currentChat.messages[0].contents[0][0].content;
+        return this.currentChat.messages[0]?.contents?.[0]?.[0]?.content;
+    }
+
+    async refreshSearchDoc() {
+        const chatId = this.getChatId();
+        if (chatId) {
+            await this.chatStorage.refreshSearchDoc(chatId);
+        }
     }
 
     async loadChat(chatId) {
         this.currentChat = await this.chatStorage.loadChat(chatId);
         return this.currentChat;
     }
-
-    getChat() {
-        return this.currentChat;
-    }
 }
 
-
+/**
+ * Specialized ChatCore for the Sidepanel, including media and thinking states.
+ */
 export class SidepanelChatCore extends ChatCore {
     constructor(chatStorage, stateManager, chatHeader, onTitleChange = null, onChatIdChange = null) {
         super(chatStorage);
-        this.stateManager = stateManager;
-        this.renameManager = new SidepanelRenameManager(chatStorage);
-        this.continuedChatOptions = {};
-        this.chatHeader = chatHeader;
-        this.onTitleChange = onTitleChange;
-        this.onChatIdChange = onChatIdChange;
-        this.tempMediaId = 0;
-        this.pendingMedia = {};
-        this.thinkingChat = null;
+        Object.assign(this, {
+            stateManager,
+            chatHeader,
+            onTitleChange,
+            onChatIdChange,
+            renameManager: new SidepanelRenameManager(chatStorage)
+        });
+        this.resetState();
     }
 
     reset(title = "") {
         super.reset(title);
-        this.continuedChatOptions = {};
-        this.tempMediaId = 0;
-        this.pendingMedia = {};
-        this.thinkingChat = null;
+        this.resetState();
+    }
+
+    resetState() {
+        Object.assign(this, {
+            continuedChatOptions: {},
+            pendingMedia: {},
+            tempMediaId: 0,
+            thinkingChat: null
+        });
     }
 
     initThinkingChat() {
-        if (this.thinkingChat || !this.stateManager.thinkingMode) return;
-        this.thinkingChat = new ThinkingChat(this.stateManager);
+        if (!this.thinkingChat && this.stateManager.thinkingMode) {
+            this.thinkingChat = new ThinkingChat(this.stateManager);
+        }
     }
 
     appendMedia(media, type) {
-        const mediaId = this.tempMediaId;
+        const mediaId = this.tempMediaId++;
         this.pendingMedia[mediaId] = { media, type };
-        this.tempMediaId++;
         return mediaId;
     }
 
@@ -111,394 +120,472 @@ export class SidepanelChatCore extends ChatCore {
 
     realizeMedia(message) {
         if (message.role !== 'user') return;
-        let images = [];
-        let files = [];
-        for (const mediaId in this.pendingMedia) {
-            const { media, type } = this.pendingMedia[mediaId];
-            if (type === 'image') images.push(media);
-            else files.push(media);
+
+        const images = [];
+        const files = [];
+        
+        Object.values(this.pendingMedia).forEach(item => {
+            if (item.type === 'image') {
+                images.push(item.media);
+            } else {
+                files.push(item.media);
+            }
+        });
+
+        if (images.length > 0) {
+            message.images = images;
         }
-        if (images.length > 0) message.images = images;
-        if (files.length > 0) message.files = files;
+        if (files.length > 0) {
+            message.files = files;
+        }
+        
         this.pendingMedia = {};
     }
 
-    async appendRegenerated(message, model) {
-        // no check for if the message exists, as this should never be called in that case then
-        if (this.getLatestMessage().role !== 'assistant') {
-            this.addAssistantMessage(message, model);
-            return;
+    async appendRegenerated(parts, modelId) {
+        const latestMessage = this.getLatestMessage();
+        
+        // If the last message isn't an assistant text message, add a new one instead
+        if (latestMessage?.role !== 'assistant' || latestMessage.responses) {
+            return this.addAssistantMessage(parts, modelId);
         }
-        message.forEach(msg => msg.model = model);
-        this.getLatestMessage().contents.push(message);
+
+        parts.forEach(part => {
+            part.model = modelId;
+        });
+        latestMessage.contents.push(parts);
         await this.updateSaved();
     }
 
     initArena(modelA, modelB) {
-        const initialMessage = this.chatStorage.initArenaMessage(modelA, modelB);
-        if (this.thinkingChat) this.thinkingChat.message = initialMessage;
-        else this.currentChat.messages.push(initialMessage);
+        const arenaMessage = this.chatStorage.initArenaMessage(modelA, modelB);
+        if (this.thinkingChat) {
+            this.thinkingChat.message = arenaMessage;
+        } else {
+            this.currentChat.messages.push(arenaMessage);
+        }
     }
 
-    async updateArena(message, model, modelKey) {
+    async updateArena(parts, modelId, modelKey) {
         if (this.thinkingChat) {
-            this.thinkingChat.addMessage(message, model, modelKey);
-            if (this.thinkingChat.done) this.commitThinkingChat();
+            this.thinkingChat.addMessage(parts, modelId, modelKey);
+            if (this.thinkingChat.isDone) {
+                this.commitThinkingChat();
+            }
         } else {
-            this.getLatestMessage().responses[modelKey].messages.push(message);
+            this.getLatestMessage().responses[modelKey].messages.push(parts);
             await this.updateSaved();
         }
     }
 
-    // Update stored display name for arena model (used when llama.cpp resolves actual model)
-    async setArenaModelName(modelKey, displayName) {
-        const last = this.getLatestMessage();
-        if (!last?.responses || !last.responses[modelKey]) return;
-        last.responses[modelKey].name = displayName;
+    async setArenaModelName(modelKey, name) {
+        const latestMessage = this.getLatestMessage();
+        if (latestMessage?.responses?.[modelKey]) {
+            latestMessage.responses[modelKey].name = name;
+            await this.updateSaved();
+        }
+    }
+
+    async updateArenaMisc(choice = null, continuedWith = null) {
+        const latestMessage = this.getLatestMessage();
+        if (choice) {
+            latestMessage.choice = choice;
+        }
+        if (continuedWith) {
+            latestMessage.continued_with = continuedWith;
+        }
         await this.updateSaved();
     }
 
-    async updateArenaMisc(choice = null, continued_with = null) {
-        const message = this.getLatestMessage();
-        if (choice) message.choice = choice;
-        if (continued_with) message.continued_with = continued_with;
-        await this.updateSaved();
-    }
-
-    async addAssistantMessage(message, model) {
-        message.forEach(msg => msg.model = model);
-        const fullMessage = { role: 'assistant', contents: [message] };
+    async addAssistantMessage(parts, modelId) {
+        parts.forEach(part => {
+            part.model = modelId;
+        });
+        const message = { role: 'assistant', contents: [parts] };
+        
         if (this.thinkingChat) {
-            this.thinkingChat.addMessage(fullMessage, model);
-            if (this.thinkingChat.done) this.commitThinkingChat();
+            this.thinkingChat.addMessage(message, modelId);
+            if (this.thinkingChat.isDone) {
+                this.commitThinkingChat();
+            }
         } else {
-            this.currentChat.messages.push(fullMessage);
+            this.currentChat.messages.push(message);
             await this.saveNew();
         }
     }
 
-    async addUserMessage(message = "") {
-        const newMessage = {
+    async addUserMessage(text = "") {
+        const message = {
             role: 'user',
-            contents: [[{ type: 'text', content: message }]],
+            contents: [[{ type: 'text', content: text }]]
         };
-        this.realizeMedia(newMessage);
-        this.currentChat.messages.push(newMessage);
+        this.realizeMedia(message);
+        this.currentChat.messages.push(message);
         await this.saveNew();
     }
 
-    insertSystemMessage(message = "") {
-        const systemMessage = { role: 'system', contents: [[{ type: 'text', content: message }]] };
-        if (this.currentChat.messages.length === 0) {
-            this.currentChat.messages.push(systemMessage);
-        }
-        else if (this.currentChat.messages[0].role === 'system') {
-            this.currentChat.messages[0] = systemMessage;
-        }
-        else {
-            this.currentChat.messages.unshift(systemMessage);
+    insertSystemMessage(text = "") {
+        const message = {
+            role: 'system',
+            contents: [[{ type: 'text', content: text }]]
+        };
+        const messages = this.currentChat.messages;
+        
+        if (!messages.length) {
+            messages.push(message);
+        } else if (messages[0].role === 'system') {
+            messages[0] = message;
+        } else {
+            messages.unshift(message);
         }
     }
 
     async saveNew() {
         if (!this.stateManager.shouldSave) return;
         if (await this.handleContinuedChatSave()) return;
-        if (!this.currentChat.chatId) await this.createNewChat();
-        else await this.addMessagesToExistingChat();
+
+        if (!this.currentChat.chatId) {
+            await this.createNewChat();
+        } else {
+            await this.addMessagesToExistingChat();
+        }
     }
 
     async updateSaved() {
         if (!this.stateManager.shouldSave) return;
         await this.handleContinuedChatSave();
-        await this.chatStorage.updateMessage(this.getChatId(), this.getLength() - 1, SidepanelChatCore.stripEphemeralParts(this.getLatestMessage()));
-    }
-
-    async createNewChat(bonus_options = {}, shouldAutoRename = true) {
-        // bonus options is for the continued from chat id, and if the chat has been renamed already
-        await this.chatStorage.createChatWithMessages(
-            this.currentChat.title, 
-            this.currentChat.messages.map(SidepanelChatCore.stripEphemeralParts),
-            bonus_options
-        ).then(res => {
-            this.currentChat.chatId = res.chatId;
-            if (this.onChatIdChange) {
-                try {
-                    this.onChatIdChange(res.chatId);
-                } catch (e) {
-                    console.warn('onChatIdChange callback failed:', e);
-                }
-            }
-            if (shouldAutoRename) {
-                const renamePromise = this.renameManager.autoRename(this.currentChat.chatId, this.chatHeader);
-                if (renamePromise?.then) {
-                    renamePromise.then(result => {
-                        if (result?.newName) {
-                            this.currentChat.title = result.newName;
-                            if (this.onTitleChange) {
-                                this.onTitleChange(result.newName);
-                            }
-                        }
-                    }).catch(error => {
-                        console.warn('Auto-rename failed:', error);
-                    });
-                }
-            }
-        });
-    }
-
-    async addMessagesToExistingChat(count = 1) {
-        await this.chatStorage.addMessages(
-            this.currentChat.chatId, 
-            this.currentChat.messages.slice(-count).map(SidepanelChatCore.stripEphemeralParts), 
-            this.currentChat.messages.length - count
+        
+        const lastIndex = this.getLength() - 1;
+        const lastMessage = this.getLatestMessage();
+        
+        await this.chatStorage.updateMessage(
+            this.getChatId(), 
+            lastIndex, 
+            SidepanelChatCore.stripEphemeral(lastMessage),
+            { skipSearchRefresh: true }
         );
     }
 
-    static stripEphemeralParts(message) {
-        if (!message.contents) return message;
-        return {
-            ...message,
-            contents: message.contents.map(group => 
-                group.map(({ thoughtSignature, ...part }) => part)
-            )
-        };
-    }
+    async createNewChat(options = {}, autoRename = true) {
+        const messages = this.currentChat.messages.map(SidepanelChatCore.stripEphemeral);
+        const result = await this.chatStorage.createChatWithMessages(this.currentChat.title, messages, options);
+        
+        this.currentChat.chatId = result.chatId;
+        this.onChatIdChange?.(result.chatId);
 
-    buildFromDB(dbChat, index = null, secondaryIndex = null, modelKey = null) {
-        this.currentChat = {
-            ...dbChat,
-            messages: dbChat.messages.slice(0, index != null ? index + 1 : Infinity).map(({ messageId, timestamp, chatId, ...msg }) => msg),
-        }
-        if (secondaryIndex != null) {
-            const lastMessage = this.currentChat.messages.at(-1);
-            if (modelKey != null) {
-                lastMessage.responses[modelKey].messages = lastMessage.responses[modelKey].messages.slice(0, secondaryIndex + 1);
-                lastMessage.continued_with = modelKey;
-            }
-            else {
-                if (lastMessage.role === 'user') {
-                    this.currentChat.messages.pop();
-                    return;
+        if (autoRename) {
+            this.renameManager.autoRename(result.chatId, this.chatHeader).then(renameResult => {
+                if (renameResult?.newName) {
+                    this.currentChat.title = renameResult.newName;
+                    this.onTitleChange?.(renameResult.newName);
                 }
-                lastMessage.contents = lastMessage.contents.slice(0, secondaryIndex + 1);
+            }).catch(error => console.warn('Auto-rename failed:', error));
+        }
+    }
+
+    async addMessagesToExistingChat(count = 1) {
+        const messages = this.currentChat.messages.slice(-count).map(SidepanelChatCore.stripEphemeral);
+        const startIndex = this.currentChat.messages.length - count;
+        await this.chatStorage.addMessages(this.currentChat.chatId, messages, startIndex);
+    }
+
+    /**
+     * Removes thought signatures before saving.
+     */
+    static stripEphemeral(message) {
+        if (!message) return message;
+
+        const stripGroup = group => group.map(({ thoughtSignature, ...part }) => part);
+
+        // Handle regular messages with contents
+        if (message.contents) {
+            return {
+                ...message,
+                contents: message.contents.map(stripGroup)
+            };
+        }
+
+        // Handle arena messages with responses
+        if (message.responses) {
+            const strippedResponses = {};
+            for (const modelKey of ['model_a', 'model_b']) {
+                const modelResp = message.responses[modelKey];
+                if (modelResp?.messages) {
+                    strippedResponses[modelKey] = {
+                        ...modelResp,
+                        messages: modelResp.messages.map(stripGroup)
+                    };
+                } else {
+                    strippedResponses[modelKey] = modelResp;
+                }
+            }
+            return { ...message, responses: strippedResponses };
+        }
+
+        return message;
+    }
+
+    buildFromDB(chat, index = null, subIdx = null, modelKey = null) {
+        this.currentChat = { 
+            ...chat, 
+            messages: chat.messages
+                .slice(0, index != null ? index + 1 : Infinity)
+                .map(({ messageId, timestamp, chatId, ...rest }) => rest) 
+        };
+
+        const latestMessage = this.getLatestMessage();
+        if (subIdx != null && latestMessage) {
+            if (modelKey != null && latestMessage.responses) {
+                latestMessage.responses[modelKey].messages = latestMessage.responses[modelKey].messages.slice(0, subIdx + 1);
+                latestMessage.continued_with = modelKey;
+            } else if (latestMessage.role === 'assistant') {
+                latestMessage.contents = latestMessage.contents.slice(0, subIdx + 1);
+            } else if (latestMessage.role === 'user') {
+                this.currentChat.messages.pop();
             }
         }
     }
 
-    getMessagesForAPI(model = null) {
-        // Normalize all messages to a consistent structure: { role, parts: [{type, content}], images?: [] }
-        const messages = this.currentChat.messages.map(msg => {
-            if (msg.role === 'user' || msg.role === 'system') {
-                const { contents, images, ...rest } = msg;
+    getMessagesForAPI(modelId = null) {
+        const messages = this.currentChat.messages.map(message => {
+            if (message.role === 'user' || message.role === 'system') {
                 const normalized = { 
-                    ...rest, 
-                    parts: [{ type: 'text', content: contents.at(-1).at(-1).content }]
+                    role: message.role, 
+                    parts: [{ type: 'text', content: message.contents.at(-1).at(-1).content }] 
                 };
-                if (images) normalized.images = images;
+                if (message.images) {
+                    normalized.images = message.images;
+                }
+                if (message.files) {
+                    normalized.files = message.files;
+                }
                 return normalized;
             }
-            if (msg.responses) {
-                if (!msg.continued_with || msg.continued_with === "none") return undefined;
-                return { role: msg.role, parts: msg.responses[msg.continued_with].messages.at(-1) };
+            
+            if (message.responses) {
+                const modelKey = message.continued_with;
+                if (modelKey && modelKey !== 'none') {
+                    return { role: message.role, parts: message.responses[modelKey].messages.at(-1) };
+                }
+                return null;
             }
-            // Assistant messages
-            return { role: msg.role, parts: msg.contents.at(-1) };
-        }).filter(msg => msg !== undefined);
+            
+            return { role: message.role, parts: message.contents.at(-1) };
+        }).filter(Boolean);
         
-        if (messages.at(-1).role === 'assistant') {
+        // Remove trailing assistant message for regeneration
+        if (messages.at(-1)?.role === 'assistant') {
             messages.pop();
         }
-        if (!model) return messages;
-        if (this.stateManager.thinkingMode) this.thinkingChat.getMessagesForAPI(messages, model);
+
+        if (modelId && this.stateManager.thinkingMode) {
+            this.thinkingChat.getMessagesForAPI(messages, modelId);
+        }
+        
         return messages;
     }
 
     commitThinkingChat() {
         if (!this.thinkingChat) return;
-        if (this.getLatestMessage()?.role === 'assistant') {
-            const latestMessage = this.getLatestMessage();
-            if (this.getLatestMessage().responses) {
-                ['model_a', 'model_b'].forEach(modelKey => {
-                    latestMessage.responses[modelKey].messages.push(this.thinkingChat.message.responses[modelKey].messages.at(-1));
-                });
-            }
-            else {
-                latestMessage.contents.push(this.thinkingChat.message.contents.at(-1));
+
+        const latestMessage = this.getLatestMessage();
+        const thinkingMessage = this.thinkingChat.message;
+
+        if (latestMessage?.role === 'assistant') {
+            if (latestMessage.responses) {
+                for (const modelKey of ['model_a', 'model_b']) {
+                    const newMessages = thinkingMessage.responses[modelKey].messages;
+                    if (newMessages.length > 0) {
+                        latestMessage.responses[modelKey].messages.push(newMessages.at(-1));
+                    }
+                }
+            } else {
+                latestMessage.contents.push(thinkingMessage.contents.at(-1));
             }
             this.updateSaved();
-            this.thinkingChat = null;
-            return;
+        } else {
+            this.currentChat.messages.push(thinkingMessage);
+            this.saveNew();
+        }
+        this.thinkingChat = null;
+    }
+
+    canContinue(options, userMessage = null) {
+        const { lastMessage, index, secondaryIndex, modelChoice, fullChatLength, secondaryLength } = options;
+        
+        if (!lastMessage || index == null || secondaryIndex == null || secondaryLength == null || fullChatLength == null) return false;
+        if (fullChatLength !== index + 1 || secondaryLength !== secondaryIndex + 1) return false;
+
+        if (lastMessage.role === 'system') return true;
+        if (lastMessage.role === 'user') return this.isUserMessageEqual(lastMessage, userMessage);
+        
+        if (lastMessage.role === 'assistant') {
+            if (lastMessage.responses) {
+                return (modelChoice && modelChoice !== 'none' && lastMessage.continued_with === modelChoice && lastMessage.responses[modelChoice].messages.length === secondaryIndex + 1);
+            }
+            return lastMessage.contents.length === secondaryIndex + 1;
         }
         
-        this.currentChat.messages.push(this.thinkingChat.message);
-        this.thinkingChat = null;
-        this.saveNew();
+        return false;
     }
 
-    canContinueWithSameChatId(options, userMsg = null) {
-        const { lastMessage, index, secondaryIndex, modelChoice, fullChatLength, secondaryLength } = options;
-        if (!lastMessage || index == null || secondaryIndex == null || secondaryLength == null || fullChatLength == null) return false;
-        if (fullChatLength !== index + 1) return false;
-        if (secondaryLength !== secondaryIndex + 1) return false;
-
-        const role = lastMessage.role;
-        return role === 'system' || 
-               (role === 'user' && this.isUserMessageEqual(lastMessage, userMsg)) ||
-               (role === 'assistant' && !lastMessage.responses && lastMessage.contents.length === secondaryIndex + 1) ||
-               (secondaryIndex != null && 
-                modelChoice && modelChoice !== "none" &&
-                lastMessage.continued_with === modelChoice && 
-                lastMessage.responses[modelChoice].messages.length === secondaryIndex + 1);
-    }
-
-    isUserMessageEqual(msg1, msg2) {
-        if (!msg1 || !msg2) return false;
+    isUserMessageEqual(msgA, msgB) {
+        if (!msgA || !msgB) return false;
 
         let isContentSame = true;
-        msg1.contents.forEach((item, index) => {
-            if (item[0].content !== msg2.contents[index][0]?.content) {
+        msgA.contents?.forEach((item, index) => {
+            if (item[0]?.content !== msgB.contents?.[index]?.[0]?.content) {
                 isContentSame = false;
             }
         });
         if (!isContentSame) return false;
 
-        if (msg1.files?.length !== msg2.files?.length) return false;
-        if (msg1.images?.length !== msg2.images?.length) return false;
-        if (msg1.files) {
-            for (let i = 0; i < msg1.files.length; i++) {
-                if (msg1.files[i].name !== msg2.files[i].name || msg1.files[i].content !== msg2.files[i].content) return false;
+        if (msgA.files?.length !== msgB.files?.length) return false;
+        if (msgA.images?.length !== msgB.images?.length) return false;
+
+        if (msgA.files) {
+            for (let i = 0; i < msgA.files.length; i++) {
+                if (msgA.files[i].name !== msgB.files[i].name || msgA.files[i].content !== msgB.files[i].content) {
+                    return false;
+                }
             }
         }
-        if (msg1.images) {
-            for (let i = 0; i < msg1.images.length; i++) {
-                if (msg1.images[i] !== msg2.images[i]) return false;
+
+        if (msgA.images) {
+            for (let i = 0; i < msgA.images.length; i++) {
+                if (msgA.images[i] !== msgB.images[i]) return false;
             }
         }
+
         return true;
     }
 
     async handleContinuedChatSave() {
         if (Object.keys(this.continuedChatOptions).length === 0) return false;
+        
         const options = this.continuedChatOptions;
         this.continuedChatOptions = {};
 
-        if (this.canContinueWithSameChatId(options, this.currentChat.messages[options.index])) {
-            const toAdd = this.currentChat.messages.length - options.fullChatLength;
-            if (toAdd > 0) await this.addMessagesToExistingChat(toAdd);
+        if (this.canContinue(options, this.currentChat.messages[options.index])) {
+            const addedCount = this.currentChat.messages.length - options.fullChatLength;
+            if (addedCount > 0) await this.addMessagesToExistingChat(addedCount);
         } else {
-            // Create a branched chat and preserve the link to the source chat
-            const bonus_options = { continued_from_chat_id: this.currentChat.chatId, renamed: this.currentChat.renamed || false };
-            await this.createNewChat(bonus_options, false);
+            const createOptions = {
+                continued_from_chat_id: this.currentChat.chatId,
+                renamed: this.currentChat.renamed || false
+            };
+            await this.createNewChat(createOptions, false);
         }
         return true;
     }
 
     isDoneThinking() {
-        return !this.thinkingChat || this.thinkingChat.done;
+        return !this.thinkingChat || this.thinkingChat.isDone;
     }
 
     collectPendingUserMessage(text) {
-        const message = {role: 'user', contents: [[{type: 'text', content: text}]]};
+        const message = {
+            role: 'user',
+            contents: [[{ type: 'text', content: text }]]
+        };
         this.realizeMedia(message);
-        if (!text && message.images?.length === 0 && message.files?.length === 0) return null;
-        return message;
+        
+        const hasMedia = message.images?.length || message.files?.length;
+        return (text || hasMedia) ? message : null;
     }
 }
 
-
+/**
+ * Manages the "thinking" loop for multi-step prompting.
+ */
 class ThinkingChat {
     constructor(stateManager) {
-        this.message = null;
-        this.thinkingLoops = [0, 0];
-        this.stateManager = stateManager; // For prompt toggling and state checks
-        this.done = false;
-        this.loopThreshold = this.stateManager.getSetting('loop_threshold')
+        Object.assign(this, {
+            stateManager,
+            message: null,
+            loopCounts: [0, 0],
+            isDone: false,
+            loopThreshold: stateManager.getSetting('loop_threshold')
+        });
     }
 
-    getLatestThinking(model) {
+    getLatestParts(modelId) {
         if (!this.message) return null;
-        if (this.message.responses) {
-            const modelKey = this.stateManager.getArenaModelKey(model);
-            if (this.message.responses[modelKey].messages.length === 0) return null;
-        }
-        let messages = null
-        if (this.message.responses) { // Arena mode
-            if (!model) return null;
-            const modelKey = this.stateManager.getArenaModelKey(model);
-            messages = this.message.responses[modelKey].messages;
-        } else {
-            messages = this.message.contents;
-        }
-        return {
-            role: 'assistant',
-            parts: messages.at(-1)
-        };
+        
+        const partsList = this.message.responses 
+            ? this.message.responses[this.stateManager.getArenaModelKey(modelId)]?.messages 
+            : this.message.contents;
+            
+        return partsList?.length ? { role: 'assistant', parts: partsList.at(-1) } : null;
     }
 
-    getMessagesForAPI(messages, model) {
-        const latestThinking = this.getLatestThinking(model);
-        if (latestThinking) {
-            messages.push(latestThinking);
+    getMessagesForAPI(messages, modelId) {
+        const latestParts = this.getLatestParts(modelId);
+        if (latestParts) {
+            messages.push(latestParts);
         }
-        let userPrompt = "";
-        if (this.stateManager.isThinking(model) && this.message) {
-            userPrompt = "Please reflect and improve your thoughts.";
-        } else if (this.stateManager.isSolving(model)) {
-            userPrompt = "Using the detailed thoughts given to you, please solve now.";
+
+        const promptText = this.stateManager.isThinking(modelId) && this.message 
+            ? "Please reflect and improve your thoughts."
+            : (this.stateManager.isSolving(modelId) ? "Using the detailed thoughts given to you, please solve now." : "");
+            
+        if (promptText) {
+            messages.push({ role: 'user', parts: [{ type: 'text', content: promptText }] });
         }
-        if (userPrompt) messages.push({ role: 'user', parts: [{ type: 'text', content: userPrompt }] });
-        return this.togglePrompt(messages, model);
+        
+        return this.injectSystemPrompts(messages, modelId);
     }
 
-    togglePrompt(messages, model) {
-        if (messages.length === 0) return messages;
+    injectSystemPrompts(messages, modelId) {
+        if (!messages.length) return messages;
 
-        let prompt = messages[0].parts?.[0]?.content || "";
-        if (messages[0].role !== 'system') prompt = "";
+        let systemContent = (messages[0].role === 'system' ? messages[0].parts?.[0]?.content || "" : "");
+        const promptType = this.stateManager.isThinking(modelId) ? 'thinking' : (this.stateManager.isSolving(modelId) ? 'solver' : null);
+        
+        if (!promptType) return messages;
 
-        // Add appropriate prompt based on state
-        if (this.stateManager.isThinking(model)) {
-            prompt += "\n\n" + this.stateManager.getPrompt('thinking');
-        } else if (this.stateManager.isSolving(model)) {
-            prompt += "\n\n" + this.stateManager.getPrompt('solver');
-        }
+        systemContent += "\n\n" + this.stateManager.getPrompt(promptType);
 
         if (messages[0].role === 'system') {
-            messages[0].parts[0].content = prompt;
+            messages[0].parts[0].content = systemContent;
         } else {
-            messages.unshift({ role: 'system', parts: [{ type: 'text', content: prompt }] });
+            messages.unshift({ role: 'system', parts: [{ type: 'text', content: systemContent }] });
         }
+        
         return messages;
     }
 
-    addMessage(message, model, modelKey = null) {
-        if (this.done) return;
+    addMessage(parts, modelId, modelKey = null) {
+        if (this.isDone) return;
+
         if (modelKey) {
-            // Arena message
-            if (this.message.responses[modelKey].messages.length === 0) this.message.responses[modelKey].messages.push([]);
-            this.message.responses[modelKey].messages.at(-1).push(...message);
-            const index = modelKey === 'model_a' ? 0 : 1;
-            const models = this.stateManager.getArenaModels();
-            this.updateThinkingState(index, model, modelKey, models);
+            const modelMsgs = this.message.responses[modelKey].messages;
+            if (!modelMsgs.length) {
+                modelMsgs.push([]);
+            }
+            modelMsgs.at(-1).push(...parts);
+            this.updateLoopState(modelKey === 'model_a' ? 0 : 1, modelId, modelKey);
         } else {
-            if (!this.message) this.message = message;
-            else this.message.contents.at(-1).push(...message.contents.at(-1));
-            this.updateThinkingState(0, model);
+            if (!this.message) {
+                this.message = parts;
+            } else {
+                this.message.contents.at(-1).push(...parts.contents.at(-1));
+            }
+            this.updateLoopState(0, modelId);
         }
     }
 
-    updateThinkingState(index, model, modelKey = null, models = null) {
-        this.thinkingLoops[index]++;
-        if (this.stateManager.isSolving(model)) {
-            this.stateManager.nextThinkingState(model);
-            if (!modelKey || this.stateManager.isInactive(models[1 - index])) {
-                this.done = true;
-            }
-            return;
-        }
+    updateLoopState(index, modelId, modelKey = null) {
+        this.loopCounts[index]++;
         
-        if (this.thinkingLoops[index] >= this.loopThreshold) {
-            this.stateManager.nextThinkingState(model);
+        if (this.stateManager.isSolving(modelId)) {
+            this.stateManager.nextThinkingState(modelId);
+            // In Arena, wait for both to be inactive
+            if (!modelKey || this.stateManager.isInactive(this.stateManager.getArenaModels()[1 - index])) {
+                this.isDone = true;
+            }
+        } else if (this.loopCounts[index] >= this.loopThreshold) {
+            this.stateManager.nextThinkingState(modelId);
         }
     }
 }

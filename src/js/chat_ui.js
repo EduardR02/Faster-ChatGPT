@@ -1,685 +1,673 @@
-import { createElementWithClass, formatContent, update_textfield_height, highlightCodeBlocks, Footer } from './utils.js';
+import { createElementWithClass, formatContent, updateTextfieldHeight, highlightCodeBlocks } from './ui_utils.js';
+import { Footer } from './Footer.js';
 
+// UI constants
+const SCROLL_THRESHOLD_PX = 5;          // Pixels from bottom to consider "at bottom"
+const POPUP_OFFSET_PX = 5;              // Offset for popup positioning
+const HISTORY_SCROLL_BUFFER = 10;       // Pixels from bottom to trigger loading more history
+const KEYBOARD_NAV_HIGHLIGHT_MS = 300;  // Duration for keyboard navigation highlight
+const ERROR_FLASH_MS = 1000;            // Duration for error flash animation
+const MS_PER_DAY = 86400000;            // Milliseconds in a day
 
+// Unicode character constants (for readability)
+const UNICODE = {
+    REGEN_ARROW: '\u{27F3}',    // ↻ Regeneration indicator
+    TRIANGLE: '\u{25B6}',        // ▶ Collapsible toggle
+    CONTINUE: '\u{2197}',        // ↗ Continue conversation
+    REMOVE: '\u{2715}',          // ✕ Remove/close button
+    ELLIPSIS: '\u{22EF}',        // ⋯ Horizontal ellipsis
+    HOOK_ARROW: '\u{21AA}'       // ↪ Linked chat indicator
+};
+
+/**
+ * Base class for handling Chat UI components and rendering.
+ */
 class ChatUI {
     constructor(options) {
-        const {
-            conversationWrapperId = 'conversation-wrapper',
-            stateManager,
-        } = options;
-
-        this.conversationDiv = document.getElementById(conversationWrapperId);
-        this.stateManager = stateManager;
+        this.conversationDiv = document.getElementById(options.conversationWrapperId || 'conversation-wrapper');
+        this.stateManager = options.stateManager;
         this.pendingMediaDiv = null;
-
-        this.roleLabels = {
-            user: "You",
-            assistant: "Assistant",
-            system: "System"
+        this.roleLabels = { 
+            user: "You", 
+            assistant: "Assistant", 
+            system: "System" 
         };
     }
 
     addMessage(role, parts = [], options = {}) {
-        if (role === 'user' && this.pendingMediaDiv) this.appendToExistingMessage(parts);
-        else this.conversationDiv.appendChild(this.createMessage(role, parts, options));
+        if (role === 'user' && this.pendingMediaDiv) {
+            this.appendToExistingPendingMessage(parts);
+        } else {
+            const messageElement = this.createMessage(role, parts, options);
+            this.conversationDiv.appendChild(messageElement);
+        }
     }
 
-    // Core message creation methods
     createMessage(role, parts = [], options = {}) {
         const { files, images, messageId, allowContinue = true, ...prefixOptions } = options;
-        if (parts.length > 0 && parts.at(-1).model) prefixOptions.model = parts.at(-1).model;
-        const messageBlock = createElementWithClass('div', `${role}-message`);
         
+        // Attach model info from the last part if available
+        if (parts.length > 0 && parts.at(-1).model) {
+            prefixOptions.model = parts.at(-1).model;
+        }
+
+        const messageBlock = createElementWithClass('div', `${role}-message`);
         if (messageId != null) {
             messageBlock.dataset.messageId = messageId;
         }
 
-        const prefixWrapper = this.createPrefixWrapper(role, { ...prefixOptions, allowContinue });
-        const messageWrapper = this.createMessageWrapper(role, parts, { files, images });
+        const prefixWrapper = createElementWithClass('div', 'history-prefix-wrapper');
+        const prefixText = this.generatePrefix(role, prefixOptions);
+        const prefixSpan = createElementWithClass('span', `message-prefix ${role}-prefix`, prefixText);
+        prefixWrapper.appendChild(prefixSpan);
 
-        messageBlock.appendChild(prefixWrapper);
-        messageBlock.appendChild(messageWrapper);
+        if (options.continueFunc && allowContinue) {
+            prefixWrapper.appendChild(this.createContinueButton(options.continueFunc));
+        }
 
+        const messageWrapper = createElementWithClass('div', 'message-wrapper');
+        
+        // Render images
+        if (images) {
+            images.forEach(imageSource => {
+                messageWrapper.appendChild(this.createImageContent(imageSource, role));
+            });
+        }
+        
+        // Render files
+        if (files) {
+            files.forEach(file => {
+                messageWrapper.appendChild(this.createFileDisplay(file));
+            });
+        }
+
+        // Render content parts
+        if (parts.length === 0) {
+            messageWrapper.appendChild(this.createContentDiv(role, ''));
+        } else {
+            parts.forEach(part => {
+                const isThought = (part.type === 'thought');
+                const contentDiv = this.produceNextContentDiv(role, isThought, part.content, part.type);
+                messageWrapper.appendChild(contentDiv);
+            });
+        }
+
+        messageBlock.append(prefixWrapper, messageWrapper);
         return messageBlock;
     }
 
-    createMessageWrapper(role, parts, { files, images } = {}) {
-        const wrapper = createElementWithClass('div', 'message-wrapper');
-
-        if (images?.length) {
-            images.forEach(img => wrapper.appendChild(this.createImageContent(img, role)));
-        }
-
-        if (files?.length) {
-            files.forEach(file => wrapper.appendChild(this.createFileDisplay(file)));
-        }
-        if (parts.length === 0) wrapper.appendChild(this.createContentDiv(role, ''));
-        else parts.forEach(part => wrapper.appendChild(this.produceNextContentDiv(role, part.type === 'thought', part.content, part.type)));
-
-        return wrapper;
-    }
-
-    createPrefixWrapper(role, options) {
-        const wrapper = createElementWithClass('div', 'history-prefix-wrapper');
-        const prefix = createElementWithClass('span', `message-prefix ${role}-prefix`);
-        prefix.textContent = this.generatePrefixText(role, options);
-
-        wrapper.appendChild(prefix);
-        if (options.continueFunc && options.allowContinue !== false) {
-            const button = this.createContinueButton(options.continueFunc);
-            wrapper.appendChild(button);
-        }
-        return wrapper;
-    }
-
-    generatePrefixText(role, options) {
+    generatePrefix(role, options = {}) {
         const { model, isRegeneration = false, hideModels = true } = options;
-        let prefix = this.roleLabels[role];
-
+        let label = (hideModels || role !== 'assistant') ? this.roleLabels[role] : model;
+        
         if (role === 'assistant') {
-            prefix = hideModels ? prefix : model;
-            if (isRegeneration) prefix += ' \u{27F3}';
-            if (this.stateManager.isThinking(model)) prefix += ' 🧠';
-            else if (this.stateManager.isSolving(model)) prefix += ' 💡';
+            if (isRegeneration) label += ` ${UNICODE.REGEN_ARROW}`;
+            
+            if (this.stateManager.isThinking(model)) {
+                label += ' 🧠';
+            } else if (this.stateManager.isSolving(model)) {
+                label += ' 💡';
+            }
         }
-
-        return prefix;
+        return label;
     }
 
     createSystemMessage(content, title = 'System Prompt') {
-        const messageDiv = createElementWithClass('div', 'history-system-message collapsed');
+        const systemMessageDiv = createElementWithClass('div', 'history-system-message collapsed');
         const toggleButton = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
-        const toggleIcon = createElementWithClass('span', 'toggle-icon', '\u{25B6}');
-        const contentDiv = createElementWithClass('div', 'message-content history-system-content');
+        const toggleIcon = createElementWithClass('span', 'toggle-icon', UNICODE.TRIANGLE);
+        const bodyDiv = createElementWithClass('div', 'message-content history-system-content');
 
-        contentDiv.innerHTML = formatContent(content);
-        highlightCodeBlocks(contentDiv);
+        bodyDiv.innerHTML = formatContent(content);
+        highlightCodeBlocks(bodyDiv);
+        
         toggleButton.append(toggleIcon, title);
-        toggleButton.onclick = () => messageDiv.classList.toggle('collapsed');
-        messageDiv.append(toggleButton, contentDiv);
-
-        return messageDiv;
+        toggleButton.onclick = () => systemMessageDiv.classList.toggle('collapsed');
+        
+        systemMessageDiv.append(toggleButton, bodyDiv);
+        return systemMessageDiv;
     }
 
-    addSystemMessage(content, title = 'System Prompt') {
-        this.conversationDiv.appendChild(this.createSystemMessage(content, title));
+    addSystemMessage(content, title) {
+        const systemMessage = this.createSystemMessage(content, title);
+        this.conversationDiv.appendChild(systemMessage);
     }
 
-    // reconstruction of the chat
     buildChat(chat, options = {}) {
-        const { hideModels = false, continueFunc = null, addSystemMsg = false } = options;
-        this.clearConversation();
-
+        this.clearConversation(options);
+        
         chat.messages.forEach((message, index) => {
             if (message.responses) {
-                this.createArenaMessageWrapperFunc(message, { continueFunc, messageIndex: index });
-            } else {
-                if (!addSystemMsg && message.role === 'system') return;
-                this.addFullMessage(message, hideModels, index, continueFunc);
-            }
-            if (index !== chat.messages.length - 1) this.pendingMediaDiv = null;
-        });
-    }
-
-    addFullMessage(message, hideModels = false, index = null, continueFunc = null) {
-        const { contents, timestamp, chatId, messageId, ...rest } = message;
-        message.contents.forEach((parts, secIdx) => {
-            const new_options = { hideModels, messageId, ...rest };
-            if (continueFunc) new_options.continueFunc = () => continueFunc(index, secIdx);
-            if (secIdx !== 0) new_options.isRegeneration = true;
-            const messageBlock = this.createMessageWrapperFunc(parts, new_options);
-            if (messageBlock) this.conversationDiv.appendChild(messageBlock);
-        });
-    }
-
-    // Arena Mode Methods
-    createArenaMessage(message = {}, options = {}) {
-        const { responses, role } = message || {};
-        const messageBlock = createElementWithClass('div', `assistant-message`);
-        
-        if (message.messageId != null) {
-            messageBlock.dataset.messageId = message.messageId;
-        }
-        
-        const container = createElementWithClass('div', 'arena-full-container');
-        messageBlock.appendChild(container);
-        const arenaDivs = [null, null];
-        ['model_a', 'model_b'].forEach((model, index) => {
-            const arenaDiv = createElementWithClass('div', 'arena-wrapper');
-            // Track logical model id for later lookups (e.g., reveal names)
-            arenaDiv.dataset.modelId = this.stateManager.getArenaModel(index);
-            arenaDivs[index] = arenaDiv;
-            container.appendChild(arenaDiv);
-            let new_options = {
-                model: this.stateManager.getArenaModel(index),
-                isRegeneration: false,
-                hideModels: true
-            };
-            if (responses) {
-                responses[model].messages.forEach((parts, i) => {
-                    new_options.isRegeneration = i !== 0;
-                    if (options.continueFunc) new_options.continueFunc = () => options.continueFunc(options.messageIndex, i, model);
-                    arenaDiv.appendChild(this.createMessage(role, parts || [], new_options));
+                this.createArenaWrapper(message, { 
+                    continueFunc: options.continueFunc, 
+                    messageIndex: index 
+                });
+            } else if (options.addSystemMsg || message.role !== 'system') {
+                message.contents.forEach((parts, subIndex) => {
+                    const runOptions = { 
+                        ...message, 
+                        hideModels: options.hideModels, 
+                        isRegeneration: subIndex !== 0 
+                    };
+                    
+                    if (options.continueFunc) {
+                        runOptions.continueFunc = () => options.continueFunc(index, subIndex);
+                    }
+                    
+                    const messageBlock = this.createMessageFromParts(parts, runOptions);
+                    if (messageBlock) {
+                        this.conversationDiv.appendChild(messageBlock);
+                    }
                 });
             }
-            else {
-                if (options.continueFunc) new_options.continueFunc = () => options.continueFunc(options.messageIndex, 0, model);
-                arenaDiv.appendChild(this.createMessage('assistant', [], new_options));
+            
+            if (index !== chat.messages.length - 1) {
+                this.pendingMediaDiv = null;
             }
         });
-        this.conversationDiv.appendChild(messageBlock);
-        return arenaDivs;
     }
 
-    resolveArena(choice, continued_with, arenaDivs, updatedElo = null) {
-        // !!! sidepanel child function only has 2 params, uses class internal for arena divs
+    createArenaMessage(messageData, options = {}) {
+        messageData = messageData || {};
+        const arenaMessageBlock = createElementWithClass('div', 'assistant-message');
+        if (options.messageIndex != null) {
+            arenaMessageBlock.dataset.messageIndex = options.messageIndex;
+        }
+
+        const arenaFullContainer = createElementWithClass('div', 'arena-full-container');
         const modelKeys = ['model_a', 'model_b'];
-        arenaDivs.forEach((wrapper, index) => {
-            const className = continued_with === modelKeys[index] ? 'arena-winner' : 'arena-loser';
-            wrapper.querySelectorAll('.assistant-message').forEach(message => {
-                message.querySelectorAll('.message-content').forEach(content => {
-                    if (!content.classList.contains('thoughts')) content.classList.add(className);
-                  });
-                const prefix = message.querySelector('.message-prefix');
+        
+        const columnDivs = modelKeys.map((modelKey, modelIndex) => {
+            const arenaWrapper = createElementWithClass('div', 'arena-wrapper');
+            arenaWrapper.dataset.modelId = this.stateManager.getArenaModel(modelIndex);
+            arenaWrapper.dataset.modelKey = modelKey;
+            
+            const baseOptions = { 
+                model: arenaWrapper.dataset.modelId, 
+                hideModels: true, 
+                allowContinue: options.allowContinue 
+            };
 
-                const elo = updatedElo ? updatedElo[index] : null;
-                const displayName = wrapper.dataset.displayName || this.stateManager.getArenaModel(index);
-                prefix.textContent = this.formatArenaPrefix(prefix.textContent, displayName, choice, modelKeys[index], elo);
+            if (messageData.responses) {
+                messageData.responses[modelKey].messages.forEach((parts, partIndex) => {
+                    const runOptions = { ...baseOptions, isRegeneration: partIndex !== 0 };
+                    if (options.continueFunc) {
+                        runOptions.continueFunc = () => options.continueFunc(options.messageIndex, partIndex, modelKey);
+                    }
+                    arenaWrapper.appendChild(this.createMessage(messageData.role, parts, runOptions));
+                });
+            } else {
+                if (options.continueFunc) {
+                    baseOptions.continueFunc = () => options.continueFunc(options.messageIndex, 0, modelKey);
+                }
+                arenaWrapper.appendChild(this.createMessage('assistant', [], baseOptions));
+            }
+            
+            arenaFullContainer.appendChild(arenaWrapper);
+            return arenaWrapper;
+        });
 
-                this.arenaUpdateTokenFooter(message.querySelector('.message-footer'));
+        arenaMessageBlock.appendChild(arenaFullContainer);
+        this.conversationDiv.appendChild(arenaMessageBlock);
+        return columnDivs;
+    }
+
+    resolveArena(choice, continuedWith, arenaDivs, eloRatings = null) {
+        const modelKeys = ['model_a', 'model_b'];
+        
+        arenaDivs.forEach((arenaDiv, index) => {
+            const isWinner = (continuedWith === modelKeys[index]);
+            const assistantMessages = arenaDiv.querySelectorAll('.assistant-message');
+            
+            assistantMessages.forEach(messageBlock => {
+                // Apply winner/loser styles to non-thought content
+                messageBlock.querySelectorAll('.message-content:not(.thoughts)').forEach(contentDiv => {
+                    contentDiv.classList.add(isWinner ? 'arena-winner' : 'arena-loser');
+                });
+
+                // Update the model label with rating and icons
+                const prefixSpan = messageBlock.querySelector('.message-prefix');
+                const displayName = arenaDiv.dataset.displayName || this.stateManager.getArenaModel(index);
+                const elo = eloRatings ? eloRatings[index] : null;
+                
+                prefixSpan.textContent = this.formatArenaPrefix(
+                    prefixSpan.textContent, 
+                    displayName, 
+                    choice, 
+                    modelKeys[index], 
+                    elo
+                );
+                
+                this.updateTokenLabel(messageBlock.querySelector('.message-footer'));
             });
         });
     }
 
-    formatArenaPrefix(currentText, modelName, choice, modelKey, elo) {
+    formatArenaPrefix(originalText, modelName, choice, modelKey, elo) {
         let suffix = '';
         if (choice) {
-            switch (choice) {
+            switch(choice) {
                 case modelKey: suffix = ' 🏆'; break;
                 case 'draw': suffix = ' 🤝'; break;
                 case 'reveal': suffix = ' 👁️'; break;
                 case 'ignored': suffix = ' n/a'; break;
-                default: suffix = ' ❌';    // loser or bothbad
+                default: suffix = ' ❌';
             }
         }
-        if (elo) modelName += ` (${Math.round(elo * 10) / 10})`;    // round to 1 decimal place
-        return currentText.replace(this.roleLabels.assistant, modelName) + suffix;
+        
+        const ratingText = elo ? ` (${Math.round(elo * 10) / 10})` : '';
+        return originalText.replace(this.roleLabels.assistant, modelName + ratingText) + suffix;
     }
 
-    arenaUpdateTokenFooter(footerDiv) {
+    updateTokenLabel(footerDiv) {
         if (!footerDiv) return;
-        const span = footerDiv.querySelector('span');
-        span.textContent = span.textContent.replace('~', footerDiv.getAttribute('input-tokens'))
+        const tokensSpan = footerDiv.querySelector('span');
+        if (tokensSpan) {
+            tokensSpan.textContent = tokensSpan.textContent.replace('~', footerDiv.getAttribute('input-tokens'));
+        }
     }
 
-    // UI Component Creation Methods
     createContentDiv(role, content) {
-        const div = createElementWithClass('div', `message-content ${role}-content`);
-        if (content) div.innerHTML = formatContent(content);
-        highlightCodeBlocks(div);
-        return div;
+        const contentDiv = createElementWithClass('div', `message-content ${role}-content`);
+        if (content) {
+            contentDiv.innerHTML = formatContent(content);
+        }
+        highlightCodeBlocks(contentDiv);
+        return contentDiv;
     }
 
-    createImageContent(imageBase64, role, onRemove = null) {
-        const content = createElementWithClass('div', `image-content ${role}-content`);
+    createImageContent(imageSource, role, onRemove = null) {
+        const imageContentDiv = createElementWithClass('div', `image-content ${role}-content`);
+        const imageElement = document.createElement('img');
 
-        const img = document.createElement('img');
-        let retried = false;
-
-        const addError = (message) => {
-            img.style.display = 'none';
-            const errorDiv = createElementWithClass('div', 'image-error');
-            errorDiv.textContent = message;
-            errorDiv.style.cssText = 'padding: 1em; color: #e06c75; background: #282c34; border: 1px solid #e06c75; border-radius: 4px; text-align: center;';
-            content.appendChild(errorDiv);
+        const displayError = (errorMessage) => {
+            imageElement.style.display = 'none';
+            const errorDiv = createElementWithClass('div', 'image-error', errorMessage);
+            Object.assign(errorDiv.style, {
+                padding: '1em',
+                color: '#e06c75',
+                background: '#282c34',
+                border: '1px solid #e06c75',
+                borderRadius: '4px',
+                textAlign: 'center'
+            });
+            imageContentDiv.appendChild(errorDiv);
         };
 
-        const isValidImage = imageBase64 && (
-            imageBase64.startsWith('data:image/') ||
-            imageBase64.startsWith('http://') ||
-            imageBase64.startsWith('https://')
-        );
+        if (!imageSource?.match(/^data:image\/|https?:\/\//)) {
+            displayError('Invalid image data');
+            if (onRemove) {
+                imageContentDiv.appendChild(this.createRemoveButton(() => { 
+                    imageContentDiv.remove(); 
+                    onRemove(); 
+                }));
+            }
+            return imageContentDiv;
+        }
 
-        if (!isValidImage) {
-            addError('Invalid image data');
-        } else {
-            img.src = imageBase64;
+        imageElement.src = imageSource;
+        imageElement.onload = () => this.scrollIntoView?.();
+        let retried = false;
+        imageElement.onerror = async () => {
+            // Only attempt repair for data:image/ URLs (not http/https)
+            if (!retried && imageSource.startsWith('data:image/')) {
+                retried = true;
+                const repairResult = await chrome.runtime.sendMessage({
+                    type: 'repair_blob_from_data_url',
+                    dataUrl: imageSource
+                }).catch(() => null);
 
-            img.onerror = async () => {
-                if (!retried && imageBase64.startsWith('data:image/')) {
-                    retried = true;
-                    try {
-                        const result = await chrome.runtime.sendMessage({
-                            type: 'repair_blob_from_data_url',
-                            dataUrl: imageBase64
-                        });
-                        if (result?.ok && result.dataUrl) {
-                            imageBase64 = result.dataUrl;
-                            img.src = imageBase64;
-                            return;
-                        }
-                    } catch (_) {
-                        // fall through to error UI
-                    }
+                if (repairResult?.ok && repairResult.dataUrl) {
+                    imageElement.src = repairResult.dataUrl;
+                    return;
                 }
-                addError('Failed to load image');
-            };
+            }
+            displayError('Failed to load image');
+        };
 
-            content.appendChild(img);
-        }
-
+        imageContentDiv.appendChild(imageElement);
+        
         if (onRemove) {
-            const removeButton = this.createRemoveFileButton(() => {
-                content.remove();
-                onRemove();
-            });
-            content.appendChild(removeButton);
+            imageContentDiv.appendChild(this.createRemoveButton(() => { 
+                imageContentDiv.remove(); 
+                onRemove(); 
+            }));
         }
-
-        return content;
+        return imageContentDiv;
     }
 
     createFileDisplay(file, onRemove = null) {
         const fileDiv = createElementWithClass('div', 'history-system-message collapsed');
         const buttonsWrapper = createElementWithClass('div', 'file-buttons-wrapper');
-
         const toggleButton = this.createFileToggleButton(file.name);
+        
         buttonsWrapper.appendChild(toggleButton);
-
+        
         if (onRemove) {
-            const removeButton = this.createRemoveFileButton(() => {
-                fileDiv.remove();
-                onRemove();
-            });
-            buttonsWrapper.appendChild(removeButton);
+            buttonsWrapper.appendChild(this.createRemoveButton(() => { 
+                fileDiv.remove(); 
+                onRemove(); 
+            }));
         }
-
+        
         const contentDiv = createElementWithClass('div', 'history-system-content user-file', file.content);
         fileDiv.append(buttonsWrapper, contentDiv);
-
         return fileDiv;
     }
 
-    // Media Handling Methods
-    initPendingMedia() {
+    initPendingMediaDiv() {
         if (this.pendingMediaDiv) return;
         this.pendingMediaDiv = this.createMessage('user');
-        this.pendingMediaDiv.querySelector('.message-content').remove();
+        this.pendingMediaDiv.querySelector('.message-content')?.remove();
         this.conversationDiv.appendChild(this.pendingMediaDiv);
     }
 
-    appendImage(imageBase64, onRemove = null) {
-        this.initPendingMedia()
-        const wrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
-        const imgContent = this.createImageContent(imageBase64, 'user', onRemove);
-        wrapper.appendChild(imgContent);
+    appendImage(imageSource, onRemove) {
+        this.initPendingMediaDiv();
+        const messageWrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
+        messageWrapper.appendChild(this.createImageContent(imageSource, 'user', onRemove));
+        this.scrollIntoView?.();
     }
 
-    appendFile(file, onRemove = null) {
-        this.initPendingMedia()
-        const wrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
-        const fileDisplay = this.createFileDisplay(file, onRemove);
-        wrapper.appendChild(fileDisplay);
+    appendFile(file, onRemove) {
+        this.initPendingMediaDiv();
+        const messageWrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
+        messageWrapper.appendChild(this.createFileDisplay(file, onRemove));
+        this.scrollIntoView?.();
     }
 
-    appendToExistingMessage(parts) {
-        if (parts?.length === 0) return;
-        const wrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
-        parts.forEach(part => wrapper.appendChild(this.produceNextContentDiv('user', part.type === 'thought', part.content, part.type)));
+    appendToExistingPendingMessage(parts) {
+        if (!parts?.length) return;
+        const messageWrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
+        
+        parts.forEach(part => {
+            const isThought = (part.type === 'thought');
+            const contentDiv = this.produceNextContentDiv('user', isThought, part.content, part.type);
+            messageWrapper.appendChild(contentDiv);
+        });
+        
         this.pendingMediaDiv = null;
     }
 
-    // Utility Methods
-    createContinueButton(func) {
-        const button = createElementWithClass('button', 'unset-button continue-conversation-button', '\u{2197}');
-        button.onclick = func;
-        return button;
+    createContinueButton(callback) {
+        const continueButton = createElementWithClass('button', 'unset-button continue-conversation-button', UNICODE.CONTINUE);
+        continueButton.onclick = callback;
+        return continueButton;
     }
 
     createFileToggleButton(fileName) {
-        const button = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
-        const icon = createElementWithClass('span', 'toggle-icon', '\u{25B6}');
-        button.append(icon, fileName);
-        button.onclick = () => button.closest('.history-system-message').classList.toggle('collapsed');
-        return button;
+        const toggleButton = createElementWithClass('button', 'message-prefix system-toggle system-prefix history-sidebar-item');
+        const toggleIcon = createElementWithClass('span', 'toggle-icon', UNICODE.TRIANGLE);
+        
+        toggleButton.append(toggleIcon, fileName);
+        toggleButton.onclick = () => toggleButton.closest('.history-system-message').classList.toggle('collapsed');
+        return toggleButton;
     }
 
-    createRemoveFileButton(onClickHandler) {
-        const button = createElementWithClass('button', 'unset-button rename-cancel remove-file-button', '\u{2715}');
-        button.onclick = onClickHandler;
-        return button;
+    createRemoveButton(callback) {
+        const removeButton = createElementWithClass('button', 'unset-button rename-cancel remove-file-button', UNICODE.REMOVE);
+        removeButton.onclick = callback;
+        return removeButton;
     }
 
     produceNextContentDiv(role, isThought, content = '', type = 'text') {
         if (type === 'image') {
             return this.createImageContent(content, role);
         }
-        
-        const div = this.createContentDiv(role, content);
-        if (isThought) div.classList.add('thoughts');
-        return div;
+        const contentDiv = this.createContentDiv(role, content);
+        if (isThought) {
+            contentDiv.classList.add('thoughts');
+        }
+        return contentDiv;
     }
 
-    clearConversation() {
+    clearConversation(options = {}) {
         this.conversationDiv.innerHTML = '';
         this.pendingMediaDiv = null;
     }
 
-    createArenaMessageWrapperFunc(message, options = {}) {
-        this.stateManager.initArenaResponse(message.responses['model_a'].name, message.responses['model_b'].name);
-        const arenaDivs = this.createArenaMessage(message, options);
-        this.resolveArena(message.choice, message.continued_with, arenaDivs);
+    createArenaWrapper(message, options = {}) {
+        this.stateManager.initArenaResponse(message.responses.model_a.name, message.responses.model_b.name);
+        const columnDivs = this.createArenaMessage(message, options);
+        this.resolveArena(message.choice, message.continued_with, columnDivs);
         this.stateManager.clearArenaState();
-        return arenaDivs;
+        return columnDivs;
     }
 
-    createMessageWrapperFunc(parts, options = {}) {
+    createMessageFromParts(parts, options = {}) {
         if (options.role === 'system') {
             parts.forEach(part => this.addSystemMessage(part.content));
-            return;
+            return null;
         }
         return this.createMessage(options.role, parts, options);
     }
 }
 
-
+/**
+ * UI Controller for the Sidepanel.
+ */
 export class SidepanelChatUI extends ChatUI {
     constructor(options) {
-        const {
-            inputWrapperId = '.textarea-wrapper',
-            scrollElementId = null,
-            continueFunc = null,
-            ...baseOptions
-        } = options;
-
-        super(baseOptions);
-        this.continueFunc = continueFunc;
-
-        // Scroll behavior
-        const scrollTarget = scrollElementId
-            ? document.getElementById(scrollElementId)
-            : this.conversationDiv;
-        this.scrollToElement = scrollTarget || this.conversationDiv;
-        this.shouldScroll = true;
-        this.scrollListenerActive = false;
-        this._lastProgrammaticScrollTime = 0;
-
-        this.activeMessageDivs = null;  // Single div for normal mode, array [modelA, modelB] for arena
-        this.inputWrapper = document.querySelector(inputWrapperId);
-        this.textarea = this.inputWrapper.querySelector('textarea');
-        this.initResize();
-    }
-
-    initResize() {
-        if (SidepanelChatUI._resizeListenerAttached) return;
-        this.textarea.addEventListener('input', () => this.updateTextareaHeight());
-        SidepanelChatUI._resizeListenerAttached = true;
-    }
-
-    updateTextareaHeight() {
-        update_textfield_height(this.textarea);
-    }
-
-    // Thinking/reasoning toggle for Sonnet/Grok and OpenAI reasoners
-    initSonnetThinking() {
-        const sonnetThinkButton = document.getElementById('sonnet-thinking-toggle');
-        if (!sonnetThinkButton) return;
-
-        sonnetThinkButton.style.display = 'none';
-
-        const isGeminiImage = (model) => model.includes('gemini') && model.includes('image');
-        const hasReasoningLevels = (model) => (
-            /o\d/.test(model) || model.includes('gpt-5') ||
-            (/gemini-[3-9]\.?\d*|gemini-\d{2,}/.test(model) && !isGeminiImage(model))
-        );
-        const isGemini25Flash = (model) => model.includes('gemini-2.5') && model.includes('flash') && !isGeminiImage(model);
-        const hasToggleThinking = (model) => (
-            ['3-7-sonnet', 'sonnet-4', 'opus-4'].some(sub => model.includes(sub)) ||
-            isGemini25Flash(model)
-        );
-        
-        const setReasoningLabel = (model) => {
-            const span = sonnetThinkButton.querySelector('.reasoning-label');
-            if (!span) return;
-            span.textContent = hasReasoningLevels(model)
-                ? this.stateManager.getReasoningEffort()
-                : 'reason';
-        };
-
-        sonnetThinkButton.addEventListener('click', () => {
-            const model = this.stateManager.getSetting('current_model') || '';
-            if (hasReasoningLevels(model)) {
-                const next = this.stateManager.cycleReasoningEffort();
-                sonnetThinkButton.title = `Reasoning: ${next}`;
-                setReasoningLabel(model);
-                sonnetThinkButton.classList.add('active');
-            } else {
-                this.stateManager.toggleShouldThink();
-                sonnetThinkButton.classList.toggle('active', this.stateManager.getShouldThink());
-                setReasoningLabel(model);
-            }
+        super(options);
+        Object.assign(this, {
+            continueFunc: options.continueFunc,
+            scrollToElement: options.scrollElementId ? document.getElementById(options.scrollElementId) : this.conversationDiv,
+            shouldScroll: true,
+            isScrollActive: false,
+            lastScrollTop: 0,
+            inputWrapper: document.querySelector(options.inputWrapperId || '.textarea-wrapper'),
+            textarea: document.querySelector('.textarea-wrapper textarea'),
+            _settingCallbacks: []
         });
+    }
 
-        const updateSonnetThinkingButton = () => {
-            const model = this.stateManager.getSetting('current_model') || '';
-            const canThink = hasToggleThinking(model) || hasReasoningLevels(model);
+    _subscribe(key, callback) {
+        this._settingCallbacks.push({ key, callback });
+        this.stateManager.subscribeToSetting(key, callback);
+    }
 
+    destroy() {
+        this._settingCallbacks.forEach(({ key, callback }) => {
+            this.stateManager.unsubscribeFromSetting(key, callback);
+        });
+        this._settingCallbacks = [];
+    }
+
+    initSonnetThinking() {
+        const button = document.getElementById('sonnet-thinking-toggle');
+        if (!button) return;
+
+        const updateVisuals = () => {
+            const currentModel = this.stateManager.getSetting('current_model') || '';
+            const canThink = this.stateManager.apiManager.hasToggleThinking(currentModel) || 
+                             this.stateManager.apiManager.hasReasoningLevels(currentModel);
+            const hasLevels = this.stateManager.apiManager.hasReasoningLevels(currentModel);
+            
+            button.style.display = canThink ? 'flex' : 'none';
+            
             if (canThink) {
-                sonnetThinkButton.style.display = 'flex';
-                if (hasReasoningLevels(model)) {
-                    const effort = this.stateManager.getReasoningEffort();
-                    sonnetThinkButton.title = `Reasoning: ${effort}`;
-                    sonnetThinkButton.classList.add('active');
-                } else {
-                    sonnetThinkButton.title = 'Reasoning';
-                    sonnetThinkButton.classList.toggle('active', this.stateManager.getShouldThink());
+                const effort = this.stateManager.getReasoningEffort();
+                button.title = hasLevels ? `Reasoning: ${effort}` : 'Reasoning';
+                button.classList.toggle('active', hasLevels || this.stateManager.getShouldThink());
+                
+                const label = button.querySelector('.reasoning-label');
+                if (label) {
+                    label.textContent = hasLevels ? effort : 'reason';
                 }
-                setReasoningLabel(model);
             } else {
-                sonnetThinkButton.style.display = 'none';
                 this.stateManager.setShouldThink(false);
             }
-            update_textfield_height(this.textarea);
+            updateTextfieldHeight(this.textarea);
         };
 
-        this.stateManager.runOnReady(updateSonnetThinkingButton);
-        this.stateManager.subscribeToSetting('current_model', updateSonnetThinkingButton);
+        button.onclick = () => {
+            const model = this.stateManager.getSetting('current_model') || '';
+            if (this.stateManager.apiManager.hasReasoningLevels(model)) {
+                this.stateManager.cycleReasoningEffort();
+            } else {
+                this.stateManager.toggleShouldThink();
+            }
+            updateVisuals();
+        };
+
+        this.stateManager.runOnReady(updateVisuals);
+        this.stateManager.apiManager?.settingsManager?.runOnReady?.(updateVisuals);
+        this._subscribe('current_model', updateVisuals);
     }
 
-    // Web search toggle (per-chat, init from global setting)
     initWebSearchToggle() {
-        const webButton = document.getElementById('web-search-toggle');
-        if (!webButton) return;
+        const button = document.getElementById('web-search-toggle');
+        if (!button) return;
 
-        webButton.style.display = 'none';
-
-        const openaiSupport = (model) => {
-            const include = ['gpt-4.1', 'gpt-5'];
-            const exclude = ['gpt-4.1-nano', 'gpt-5-nano'];
-            return include.some(s => model.includes(s)) && !exclude.some(s => model.includes(s));
-        };
-        const anthropicSupport = (model) => {
-            const subs = ['claude-3-7-sonnet', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest', 'sonnet-4', 'opus-4'];
-            return subs.some(s => model.includes(s));
-        };
-        const grokSupport = (model) => {
-            const subs = ['grok-4'];
-            return subs.some(s => model.includes(s));
-        };
-
-        const hasSupport = (model) => openaiSupport(model) || anthropicSupport(model) || grokSupport(model);
-
-        webButton.addEventListener('click', () => {
-            this.stateManager.toggleShouldWebSearch();
-            webButton.classList.toggle('active', this.stateManager.getShouldWebSearch());
-        });
-
-        const updateWebButton = () => {
+        const updateVisuals = () => {
             const model = this.stateManager.getSetting('current_model') || '';
-            if (hasSupport(model)) {
+            const support = this.stateManager.apiManager.hasWebSearchSupport(model);
+            
+            button.style.display = support ? 'flex' : 'none';
+            if (support) {
                 this.stateManager.ensureWebSearchInitialized();
-                webButton.style.display = 'flex';
-                webButton.classList.toggle('active', this.stateManager.getShouldWebSearch());
+                button.classList.toggle('active', this.stateManager.getShouldWebSearch());
             } else {
-                webButton.style.display = 'none';
                 this.stateManager.setShouldWebSearch(false);
             }
-            update_textfield_height(this.textarea);
+            updateTextfieldHeight(this.textarea);
         };
 
-        this.stateManager.runOnReady(updateWebButton);
-        this.stateManager.subscribeToSetting('current_model', updateWebButton);
+        button.onclick = () => {
+            this.stateManager.toggleShouldWebSearch();
+            button.classList.toggle('active', this.stateManager.getShouldWebSearch());
+        };
+
+        this.stateManager.runOnReady(updateVisuals);
+        this.stateManager.apiManager?.settingsManager?.runOnReady?.(updateVisuals);
+        this._subscribe('current_model', updateVisuals);
     }
 
     initImageConfigToggles() {
-        const aspectBtn = document.getElementById('image-aspect-toggle');
-        const resBtn = document.getElementById('image-res-toggle');
-        if (!aspectBtn || !resBtn) return;
+        const aspectButton = document.getElementById('image-aspect-toggle');
+        const resButton = document.getElementById('image-res-toggle');
+        if (!aspectButton || !resButton) return;
 
-        const setLabel = (btn, value) => btn.querySelector('.reasoning-label').textContent = value;
-
-        aspectBtn.addEventListener('click', () => setLabel(aspectBtn, this.stateManager.cycleImageAspectRatio()));
-        resBtn.addEventListener('click', () => setLabel(resBtn, this.stateManager.cycleImageResolution()));
-
-        const update = () => {
-            const model = this.stateManager.getSetting('current_model') || '';
-            const isImage = model.includes('gemini') && model.includes('image');
-            const isGemini3 = isImage && /gemini-[3-9]|gemini-\d{2,}/.test(model);
-            
-            aspectBtn.style.display = isImage ? 'flex' : 'none';
-            resBtn.style.display = isGemini3 ? 'flex' : 'none';
-            
-            if (isImage) setLabel(aspectBtn, this.stateManager.getImageAspectRatio());
-            if (isGemini3) setLabel(resBtn, this.stateManager.getImageResolution());
+        const setLabel = (btn, value) => {
+            btn.querySelector('.reasoning-label').textContent = value;
         };
 
-        this.stateManager.runOnReady(update);
-        this.stateManager.subscribeToSetting('current_model', update);
+        aspectButton.onclick = () => setLabel(aspectButton, this.stateManager.cycleImageAspectRatio());
+        resButton.onclick = () => setLabel(resButton, this.stateManager.cycleImageResolution());
+
+        const updateVisuals = () => {
+            const model = this.stateManager.getSetting('current_model') || '';
+            const isImage = model.includes('gemini') && model.includes('image');
+            const isG3 = isImage && /gemini-[3-9]|gemini-\d{2,}/.test(model);
+            
+            aspectButton.style.display = isImage ? 'flex' : 'none';
+            resButton.style.display = isG3 ? 'flex' : 'none';
+            
+            if (isImage) setLabel(aspectButton, this.stateManager.getImageAspectRatio());
+            if (isG3) setLabel(resButton, this.stateManager.getImageResolution());
+        };
+
+        this.stateManager.runOnReady(updateVisuals);
+        this._subscribe('current_model', updateVisuals);
     }
 
-    // Model picker popup next to the textarea controls
     initModelPicker() {
-        const controlsContainer = document.querySelector('.textarea-bottom-left-controls');
-        const pickerBtn = document.getElementById('model-picker-toggle');
-        if (!pickerBtn || !controlsContainer) return;
+        const controls = document.querySelector('.textarea-bottom-left-controls');
+        const trigger = document.getElementById('model-picker-toggle');
+        if (!trigger || !controls) return;
 
-        const containerStyle = window.getComputedStyle(controlsContainer);
-        if (containerStyle.position === 'static') {
-            controlsContainer.style.position = 'relative';
+        const controlsStyle = window.getComputedStyle(controls);
+        if (controlsStyle.position === 'static') {
+            controls.style.position = 'absolute';
         }
-
-		const getModelArr = () => {
-			const modelsObj = this.stateManager.getSetting('models') || {};
-			const arr = [];
-			for (const provider in modelsObj) {
-				for (const apiName in modelsObj[provider]) {
-					arr.push({ apiName, display: modelsObj[provider][apiName] });
-				}
-			}
-			return arr;
-		};
-
-		const getDisplayName = (apiName) => {
-			const modelsObj = this.stateManager.getSetting('models') || {};
-			for (const provider in modelsObj) {
-				if (apiName in modelsObj[provider]) return modelsObj[provider][apiName];
-			}
-			return apiName;
-		};
-
-		const getFirstApiName = () => {
-			const arr = getModelArr();
-			return arr.length ? arr[0].apiName : null;
-		};
+        
+        const getModelList = () => {
+            const models = this.stateManager.getSetting('models') || {};
+            return Object.entries(models).flatMap(([provider, map]) => 
+                Object.entries(map).map(([api, display]) => ({ api, display }))
+            );
+        };
 
         const popup = document.createElement('div');
         popup.id = 'model-picker-popup';
         popup.className = 'model-picker-popup';
-		const ul = document.createElement('ul');
-		const rebuildList = () => {
-			ul.innerHTML = '';
-			getModelArr().forEach(m => {
-				const li = document.createElement('li');
-				li.textContent = m.display;
-				li.addEventListener('click', (e) => {
-					e.stopPropagation();
-					this.stateManager.updateSettingsLocal({ current_model: m.apiName });
-					popup.style.display = 'none';
-				});
-				ul.appendChild(li);
-			});
-		};
-		rebuildList();
-        popup.appendChild(ul);
-        controlsContainer.appendChild(popup);
         popup.style.display = 'none';
+        
+        const list = document.createElement('ul');
+        const rebuildList = () => {
+            list.innerHTML = '';
+            getModelList().forEach(model => {
+                const item = document.createElement('li');
+                item.textContent = model.display;
+                item.onclick = (e) => {
+                    e.stopPropagation();
+                    this.stateManager.updateSettingsLocal({ current_model: model.api });
+                    popup.style.display = 'none';
+                };
+                list.appendChild(item);
+            });
+        };
 
-		const updateButtonText = (key) => {
-			if (!key) {
-				pickerBtn.textContent = `Select model \u25BE`;
-				return;
-			}
-			const currentDisp = getDisplayName(key);
-			pickerBtn.textContent = `${currentDisp} \u25BE`;
-		};
-        this.stateManager.runOnReady(() => updateButtonText(this.stateManager.getSetting('current_model')));
-        this.stateManager.subscribeToSetting('current_model', updateButtonText);
-		this.stateManager.subscribeToSetting('models', async () => {
-			rebuildList();
-			const models = getModelArr();
-			const currentLocal = this.stateManager.getSetting('current_model');
-			const localValid = models.some(m => m.apiName === currentLocal);
-			if (!localValid) {
-				try {
-					const stored = await this.stateManager.loadFromStorage(['current_model']);
-					const persisted = stored.current_model;
-					if (persisted && models.some(m => m.apiName === persisted)) {
-						this.stateManager.updateSettingsLocal({ current_model: persisted });
-						return;
-					}
-				} catch (_) {}
-				const fallback = getFirstApiName();
-				this.stateManager.updateSettingsLocal({ current_model: fallback });
-			}
-		});
+        rebuildList();
+        popup.appendChild(list);
+        controls.appendChild(popup);
 
-        pickerBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const isOpen = popup.style.display === 'flex';
-            if (isOpen) {
-                popup.style.display = 'none';
-            } else {
-                const buttonTopRelContainer = pickerBtn.offsetTop;
-                const buttonHeight = pickerBtn.offsetHeight;
+        const updateTriggerText = (key) => {
+            const models = this.stateManager.getSetting('models') || {};
+            let display = key;
+            for (const provider in models) {
+                if (key in models[provider]) display = models[provider][key];
+            }
+            trigger.textContent = (key ? display : 'Select model') + ' ▾';
+        };
 
-                popup.style.visibility = 'hidden';
-                popup.style.display = 'flex';
-                const popupHeight = popup.offsetHeight;
-                popup.style.display = 'none';
-                popup.style.visibility = 'visible';
-
-                const buttonRectViewport = pickerBtn.getBoundingClientRect();
-                const spaceBelowViewport = window.innerHeight - buttonRectViewport.bottom;
-                const spaceAboveViewport = buttonRectViewport.top;
-
-                let popupTopStyle = 'auto';
-                let popupBottomStyle = 'auto';
-
-                if (spaceBelowViewport >= popupHeight || spaceBelowViewport >= spaceAboveViewport) {
-                    popupTopStyle = `${buttonTopRelContainer + buttonHeight + 5}px`;
-                } else {
-                    popupBottomStyle = `${controlsContainer.offsetHeight - buttonTopRelContainer + 5}px`;
+        this.stateManager.runOnReady(() => updateTriggerText(this.stateManager.getSetting('current_model')));
+        this._subscribe('current_model', updateTriggerText);
+        
+        this._subscribe('models', async () => {
+            rebuildList();
+            const models = getModelList();
+            const current = this.stateManager.getSetting('current_model');
+            if (!models.some(m => m.api === current)) {
+                const stored = await this.stateManager.loadFromStorage(['current_model']);
+                if (stored.current_model && models.some(m => m.api === stored.current_model)) {
+                    this.stateManager.updateSettingsLocal({ current_model: stored.current_model });
+                } else if (models.length > 0) {
+                    this.stateManager.updateSettingsLocal({ current_model: models[0].api });
                 }
-
-                popup.style.top = popupTopStyle;
-                popup.style.bottom = popupBottomStyle;
-                popup.style.left = `${pickerBtn.offsetLeft}px`;
-                popup.style.display = 'flex';
             }
         });
 
+        trigger.onclick = (e) => {
+            e.stopPropagation();
+            if (popup.style.display === 'flex') {
+                popup.style.display = 'none';
+                return;
+            }
+            
+            popup.style.visibility = 'hidden';
+            popup.style.display = 'flex';
+            const height = popup.offsetHeight;
+            popup.style.display = 'none';
+            popup.style.visibility = 'visible';
+
+            const rect = trigger.getBoundingClientRect();
+            const spaceBelow = window.innerHeight - rect.bottom;
+
+            if (spaceBelow >= height || spaceBelow >= rect.top) {
+                popup.style.top = `${trigger.offsetTop + trigger.offsetHeight + POPUP_OFFSET_PX}px`;
+                popup.style.bottom = 'auto';
+            } else {
+                popup.style.top = 'auto';
+                popup.style.bottom = `${controls.offsetHeight - trigger.offsetTop + POPUP_OFFSET_PX}px`;
+            }
+            
+            popup.style.left = `${trigger.offsetLeft}px`;
+            popup.style.display = 'flex';
+        };
+
         document.addEventListener('click', (e) => {
-            if (popup.style.display === 'flex' && !popup.contains(e.target) && !pickerBtn.contains(e.target)) {
+            if (popup.style.display === 'flex' && !popup.contains(e.target) && !trigger.contains(e.target)) {
                 popup.style.display = 'none';
             }
         });
@@ -687,7 +675,7 @@ export class SidepanelChatUI extends ChatUI {
 
     setTextareaText(text) {
         this.textarea.value = text;
-        this.updateTextareaHeight();
+        updateTextfieldHeight(this.textarea);
     }
 
     getTextareaText() {
@@ -700,435 +688,377 @@ export class SidepanelChatUI extends ChatUI {
     }
 
     createMessage(role, parts = [], options = {}) {
-        const message = super.createMessage(role, parts, options);
+        const element = super.createMessage(role, parts, options);
         if (!this.stateManager.isArenaModeActive) {
-            this.activeMessageDivs = message;
+            this.activeDivs = element;
         }
-        return message;
+        return element;
     }
 
-    createArenaMessage(message = null, options = {}) {
-        this.activeMessageDivs = super.createArenaMessage(message, options);
+    createArenaMessage(messageData = null, options = {}) {
+        this.activeDivs = super.createArenaMessage(messageData, options);
         this.scrollIntoView();
-        return this.activeMessageDivs;
+        return this.activeDivs;
     }
 
-    regenerateResponse(model, isRegeneration = true, hideModels = true, continueFunc = undefined, allowContinue = true) {
-        const newMessage = this.createMessage('assistant', [], { model, isRegeneration, hideModels, continueFunc, allowContinue });
+    regenerateResponse(modelId, isRegeneration = true, hideModelName = true, continueFunc, allowContinue = true) {
+        const options = { 
+            model: modelId, 
+            isRegeneration, 
+            hideModels: hideModelName, 
+            continueFunc, 
+            allowContinue 
+        };
+        
+        const block = this.createMessage('assistant', [], options);
+        
         if (this.stateManager.isArenaModeActive) {
-            const modelIndex = this.stateManager.getModelIndex(model);
-            if (modelIndex === -1) return null;
-            this.activeMessageDivs[modelIndex].appendChild(newMessage);
+            const index = this.stateManager.getModelIndex(modelId);
+            if (index !== -1) {
+                this.activeDivs[index].appendChild(block);
+            }
         } else {
-            this.conversationDiv.appendChild(newMessage);
+            this.conversationDiv.appendChild(block);
         }
         this.scrollIntoView();
     }
 
     removeCurrentRemoveMediaButtons() {
-        const buttons = this.conversationDiv.lastChild.querySelectorAll('.remove-file-button');
-        buttons.forEach(button => button.remove());
+        this.conversationDiv.lastChild?.querySelectorAll('.remove-file-button').forEach(btn => btn.remove());
     }
 
     buildChat(chat) {
-        // Hide models and disable continue buttons for sidepanel
         this.shouldScroll = false;
-        super.buildChat(chat, { 
-            hideModels: !this.stateManager.getSetting('show_model_name'),
-            continueFunc: this.continueFunc || undefined
-        });
+        const options = { 
+            hideModels: !this.stateManager.getSetting('show_model_name'), 
+            continueFunc: this.continueFunc,
+            skipTextarea: true
+        };
+        super.buildChat(chat, options);
         this.shouldScroll = true;
         this.updateChatHeader(chat.title);
         this.scrollIntoView();
     }
 
-    addErrorMessage(message) {
-        this.conversationDiv.appendChild(this.createSystemMessage(message, 'System Message: Error'));
+    addErrorMessage(text) {
+        this.conversationDiv.appendChild(this.createSystemMessage(text, 'System Message: Error'));
     }
 
-    addWarningMessage(message) {
-        this.conversationDiv.appendChild(this.createSystemMessage(message, 'System Message: Warning'));
+    addWarningMessage(text) {
+        this.conversationDiv.appendChild(this.createSystemMessage(text, 'System Message: Warning'));
     }
-    
+
     removeRegenerateButtons() {
-        // Scope to this tab's conversation only, not all tabs
-        const buttons = this.conversationDiv.querySelectorAll('.regenerate-button');
-        buttons.forEach(button => {
-            const parent = button.parentElement;
-            button.remove();
-            parent.classList.add('centered');
+        this.conversationDiv.querySelectorAll('.regenerate-button').forEach(btn => {
+            btn.parentElement.classList.add('centered');
+            btn.remove();
         });
     }
 
-    // Scroll Handling
     scrollIntoView() {
         if (!this.shouldScroll || !this.scrollToElement) return;
-        const el = this.scrollToElement;
-        const targetScrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
-        if (Math.abs(el.scrollTop - targetScrollTop) <= 1) return;
-        this._lastProgrammaticScrollTime = performance.now();
-        el.scrollTop = targetScrollTop;
+        
+        const element = this.scrollToElement;
+        const target = element.scrollHeight - element.clientHeight;
+        
+        if (Math.abs(element.scrollTop - target) <= 1) return;
+        
+        element.scrollTop = target;
     }
 
-    ensureContinueButton(messageElement, continueFunc) {
-        const prefixWrapper = messageElement.querySelector('.history-prefix-wrapper');
-        if (!prefixWrapper) return;
-        if (prefixWrapper.querySelector('.continue-conversation-button')) return;
-        const button = this.createContinueButton(continueFunc);
-        prefixWrapper.appendChild(button);
-    }
-
-    addContinueButtonAt(index, continueFunc) {
-        if (continueFunc == null) return;
-        const target = this.conversationDiv.children[index];
-        if (!target) return;
-        this.ensureContinueButton(target, continueFunc);
-    }
-
-    renderContinueForAssistant(index, secondaryIndex = 0, modelKey = null) {
+    renderContinueForAssistant(index, subIndex = 0, modelKey = null) {
         if (!this.continueFunc) return;
-        const func = () => this.continueFunc(index, secondaryIndex, modelKey);
-        this.addContinueButtonAt(index, func);
+        
+        const wrapper = this.conversationDiv.children[index]?.querySelector('.history-prefix-wrapper');
+        if (wrapper && !wrapper.querySelector('.continue-conversation-button')) {
+            wrapper.appendChild(this.createContinueButton(() => this.continueFunc(index, subIndex, modelKey)));
+        }
     }
 
-    addRegenerateFooterToLastMessage(regenHandler) {
-        const lastMessage = this.conversationDiv.lastElementChild;
-        if (!lastMessage || !lastMessage.classList.contains('assistant-message')) return;
-        if (lastMessage.querySelector('.message-footer')) return;
+    addRegenerateFooterToLastMessage(handler) {
+        const assistantMessages = this.conversationDiv.querySelectorAll('.assistant-message');
+        const last = assistantMessages[assistantMessages.length - 1];
+        if (!last || last.querySelector('.message-footer')) return;
 
-        const content =
-            lastMessage.querySelector('.message-content:last-of-type') ||
-            lastMessage.querySelector('.image-content:last-of-type') ||
-            lastMessage.querySelector('.message-wrapper');
-        if (!content) return;
-
-        const footer = new Footer(0, 0, false, () => false, regenHandler);
-        footer.create(content);
-        this.scrollIntoView();
+        const candidates = last.querySelectorAll('.message-content, .image-content');
+        const content = candidates.length ? candidates[candidates.length - 1] : last.querySelector('.message-wrapper');
+        
+        if (content) {
+            new Footer(0, 0, false, () => false, handler).create(content);
+            this.scrollIntoView();
+        }
     }
 
     initScrollListener() {
-        if (!this.scrollListenerActive && this.scrollToElement) {
-            if (!this._handleScrollBound) {
-                this._handleScrollBound = this.handleScroll.bind(this);
+        if (this.isScrollActive || !this.scrollToElement) return;
+        
+        this.lastScrollTop = this.scrollToElement.scrollTop;
+        this.scrollToElement.addEventListener('scroll', () => {
+            const element = this.scrollToElement;
+            const current = element.scrollTop;
+            const previous = this.lastScrollTop;
+            this.lastScrollTop = current;
+
+            // If user scrolls up, disable auto-scroll
+            if (current < previous) {
+                this.shouldScroll = false;
+                return;
             }
-            this.scrollToElement.addEventListener('scroll', this._handleScrollBound, { passive: true });
-            this.scrollListenerActive = true;
-        }
+
+            // If user scrolls back to bottom, re-enable auto-scroll
+            if (element.scrollHeight - element.clientHeight - current <= SCROLL_THRESHOLD_PX) {
+                this.shouldScroll = true;
+            }
+        }, { passive: true });
+
+        this.isScrollActive = true;
         this.shouldScroll = true;
     }
 
-    handleScroll() {
-        if (!this.scrollToElement) return;
-        // Ignore scroll events that occur shortly after programmatic scroll
-        // This prevents false "user scrolled" detection from scroll event cascades
-        const timeSinceProgrammaticScroll = performance.now() - this._lastProgrammaticScrollTime;
-        if (timeSinceProgrammaticScroll < 50) return;
-
-        const threshold = 5;
-        const distanceFromBottom =
-            this.scrollToElement.scrollHeight -
-            this.scrollToElement.clientHeight -
-            this.scrollToElement.scrollTop;
-        this.shouldScroll = distanceFromBottom <= threshold;
-    }
-
     addArenaFooter(onChoice) {
-        const container = this.activeMessageDivs[0].parentElement.parentElement;
-        if (!container) return;
-
         const footer = createElementWithClass('div', 'arena-footer');
         const buttons = [
-            { text: '\u{1F441}', choice: 'reveal', class: 'reveal' },
-            { text: '\u{2713}', choice: 'model_a', class: 'choice' },
-            { text: '==', choice: 'draw', class: 'draw' },
-            { text: '\u{2713}', choice: 'model_b', class: 'choice' },
-            { text: 'X', choice: 'no_choice(bothbad)', class: 'no-choice' }
+            { text: '👁', choice: 'reveal', style: 'reveal' },
+            { text: '✓', choice: 'model_a', style: 'choice' },
+            { text: '==', choice: 'draw', style: 'draw' },
+            { text: '✓', choice: 'model_b', style: 'choice' },
+            { text: 'X', choice: 'no_choice(bothbad)', style: 'no-choice' }
         ];
 
-        buttons.forEach(btn => {
-            const button = createElementWithClass('button', `button arena-button ${btn.class}`);
-            button.textContent = btn.text;
+        buttons.forEach(btnConfig => {
+            const button = createElementWithClass('button', `button arena-button ${btnConfig.style}`, btnConfig.text);
             button.onclick = () => {
-                this.removeArenaFooterWithParam(footer);
+                this.removeArenaFooter();
                 this.removeRegenerateButtons();
-                onChoice(btn.choice);
+                onChoice(btnConfig.choice);
             };
             this.setupArenaButtonHover(button);
             footer.appendChild(button);
         });
 
-        container.appendChild(footer);
+        this.activeDivs[0].parentElement.parentElement.appendChild(footer);
+        this.scrollIntoView();
     }
 
-    resolveArena(choice, continued_with, _, updatedElo = null) {
-        super.resolveArena(choice, continued_with, this.activeMessageDivs, updatedElo);
+    resolveArena(choice, continuedWith, _, eloRatings = null) {
+        super.resolveArena(choice, continuedWith, this.activeDivs, eloRatings);
+        this.addArenaContinueButtons();
         this.scrollIntoView();
-        this.activeMessageDivs = null;
+        this.activeDivs = null;
+    }
+
+    addArenaContinueButtons() {
+        if (!this.continueFunc || !Array.isArray(this.activeDivs)) return;
+        
+        const index = Number(this.activeDivs[0]?.closest('.assistant-message')?.dataset?.messageIndex);
+        if (!Number.isFinite(index)) return;
+
+        this.activeDivs.forEach(wrapper => {
+            const modelKey = wrapper.dataset.modelKey;
+            wrapper.querySelectorAll('.assistant-message').forEach((msg, subIdx) => {
+                const prefix = msg.querySelector('.history-prefix-wrapper');
+                if (prefix && !prefix.querySelector('.continue-conversation-button')) {
+                    prefix.appendChild(this.createContinueButton(() => this.continueFunc(index, subIdx, modelKey)));
+                }
+            });
+        });
     }
 
     setupArenaButtonHover(button) {
-        const updateOtherButtons = (isEnter) => {
-            const allButtons = button.parentElement.querySelectorAll('button');
-            allButtons.forEach(otherBtn => {
-                if (otherBtn !== button) {
-                    if (isEnter) {
-                        if (button.classList.contains('choice') && otherBtn.classList.contains('choice')) {
-                            otherBtn.classList.add('choice-not-hovered');
-                            otherBtn.textContent = 'X';
-                        } else {
-                            otherBtn.classList.add('hovered');
-                        }
-                    } else {
-                        if (button.classList.contains('choice') && otherBtn.classList.contains('choice')) {
-                            otherBtn.classList.remove('choice-not-hovered');
-                            otherBtn.textContent = '\u{2713}';
-                        } else {
-                            otherBtn.classList.remove('hovered');
-                        }
+        const updateOthers = (isEntering) => {
+            const all = button.parentElement.querySelectorAll('button');
+            all.forEach(other => {
+                if (other === button) return;
+                
+                if (isEntering && button.classList.contains('choice') && other.classList.contains('choice')) {
+                    other.classList.add('choice-not-hovered');
+                    other.textContent = 'X';
+                } else {
+                    other.classList.toggle('hovered', isEntering);
+                    if (!isEntering && other.classList.contains('choice')) {
+                        other.classList.remove('choice-not-hovered');
+                        other.textContent = '✓';
                     }
                 }
             });
         };
-
-        button.addEventListener('mouseenter', () => updateOtherButtons(true));
-        button.addEventListener('mouseleave', () => updateOtherButtons(false));
+        
+        button.onmouseenter = () => updateOthers(true);
+        button.onmouseleave = () => updateOthers(false);
     }
 
     removeArenaFooter() {
-        const footer = this.activeMessageDivs[0].parentElement.parentElement.querySelector('.arena-footer');
+        const footer = this.activeDivs[0].parentElement.parentElement.querySelector('.arena-footer');
         if (footer) {
-            this.removeArenaFooterWithParam(footer);
+            footer.classList.add('slide-left');
+            footer.ontransitionend = (e) => {
+                if (e.propertyName === 'opacity') {
+                    footer.classList.add('slide-up');
+                } else if (e.propertyName === 'margin-top') {
+                    footer.remove();
+                }
+            };
         }
     }
 
-    removeArenaFooterWithParam(footer) {
-        footer.classList.add('slide-left');
+    updateIncognitoButtonVisuals(button) {
+        button?.classList.toggle('active', !this.stateManager.shouldSave);
+    }
 
-        const handleTransitionEnd = (event) => {
-            if (event.propertyName === 'opacity') {
-                footer.classList.add('slide-up');
-            } else if (event.propertyName === 'margin-top') {
-                footer.removeEventListener('transitionend', handleTransitionEnd);
-                footer.remove();
-            }
+    setupIncognitoButtonHandlers(button, footer, hoverLabels, hasChatStarted) {
+        const updateHoverText = () => {
+            const started = hasChatStarted();
+            const normal = this.stateManager.isChatNormal();
+            const incognito = this.stateManager.isChatIncognito();
+            
+            hoverLabels[0].textContent = (started && normal) ? "continue" : (!started && incognito) ? "leave" : (started && incognito) ? "actually," : "start new";
+            hoverLabels[1].textContent = (started && normal) ? "in incognito" : (!started && incognito) ? "incognito" : (started && incognito) ? "save it please" : "incognito chat";
         };
 
-        footer.addEventListener('transitionend', handleTransitionEnd);
-    }
-
-    // Incognito handling methods
-    updateIncognitoButtonVisuals(button) {
-        button.classList.toggle('active', !this.stateManager.shouldSave);
-    }
-
-    setupIncognitoButtonHandlers(button, footer, hoverText, hasChatStarted) {
-        button.addEventListener('mouseenter', () => {
-            this.updateIncognitoHoverText(hoverText, hasChatStarted());
+        button.onmouseenter = () => {
+            updateHoverText();
             footer.classList.add('showing-text');
-        });
+        };
 
-        button.addEventListener('mouseleave', () => {
+        button.onmouseleave = () => {
             footer.classList.remove('showing-text');
-            this.handleIncognitoHoverTextTransition(hoverText);
-        });
+            hoverLabels.forEach(label => {
+                label.ontransitionend = () => {
+                    if (!footer.classList.contains('showing-text')) label.textContent = "";
+                };
+            });
+        };
 
-        button.addEventListener('click', () => {
+        button.onclick = () => {
             this.stateManager.toggleChatState(hasChatStarted());
-            this.updateIncognitoHoverText(hoverText);
+            updateHoverText();
             this.updateIncognitoButtonVisuals(button);
-        });
+        };
     }
 
-    updateIncognito(hasChatStarted = false) {
-        const tabContainer = this.conversationDiv?.closest?.('.tab-content-container');
-        if (tabContainer && !tabContainer.classList.contains('active')) return;
-
-        const buttonFooter = document.getElementById('sidepanel-button-footer');
-        const incognitoToggle = document.getElementById('incognito-toggle');
-        const hoverText = buttonFooter.querySelectorAll('.hover-text');
-        this.updateIncognitoHoverText(hoverText, hasChatStarted);
-        this.updateIncognitoButtonVisuals(incognitoToggle);
+    updateIncognito(started = false) {
+        // Prevent updates if tab is not active
+        if (this.conversationDiv.closest('.tab-content-container:not(.active)')) return;
+        this.updateIncognitoButtonVisuals(document.getElementById('incognito-toggle'));
     }
 
-    updateIncognitoHoverText(hoverText, hasChatStarted) {
-        const [hoverTextLeft, hoverTextRight] = hoverText;
-
-        let leftText = "start new";
-        let rightText = "incognito chat";
-
-        if (hasChatStarted && this.stateManager.isChatNormal()) {
-            leftText = "continue";
-            rightText = "in incognito";
-        } else if (!hasChatStarted && this.stateManager.isChatIncognito()) {
-            leftText = "leave";
-            rightText = "incognito";
-        } else if (hasChatStarted && this.stateManager.isChatIncognito()) {
-            leftText = "actually,";
-            rightText = "save it please";
-        }
-
-        hoverTextLeft.textContent = leftText;
-        hoverTextRight.textContent = rightText;
-    }
-
-    handleIncognitoHoverTextTransition(hoverText) {
-        hoverText.forEach(label => {
-            const handler = (event) => {
-                if (!label.parentElement.classList.contains('showing-text')) {
-                    label.textContent = "";
-                }
-                label.removeEventListener('transitionend', handler);
-            };
-            label.addEventListener('transitionend', handler);
-        });
-    }
-
-    getContentDiv(model) {
-        const container = this.getActiveMessageElement(model);
-        if (!container) return null;
-        const candidates = container.querySelectorAll('.message-content, .image-content');
-        if (candidates.length) return candidates[candidates.length - 1];
-        return container.querySelector('.message-wrapper') || null;
+    getContentDiv(modelId) {
+        const element = this.getActiveMessageElement(modelId);
+        if (!element) return null;
+        
+        const candidates = element.querySelectorAll('.message-content, .image-content');
+        return candidates.length ? candidates[candidates.length - 1] : element.querySelector('.message-wrapper');
     }
 
     updateChatHeader(title) {
-        // Find the title element within this chatUI's conversation wrapper
-        const titleEl = this.conversationDiv.querySelector('.conversation-title');
-        if (titleEl) {
-            titleEl.textContent = title;
-        }
+        const element = this.conversationDiv.querySelector('.conversation-title');
+        if (element) element.textContent = title;
     }
 
     updateLastMessageModelName(actualModelName) {
-        if (!this.stateManager.getSetting('show_model_name') || this.stateManager.isArenaModeActive) {
-            return;
-        }
+        if (!this.stateManager.getSetting('show_model_name') || this.stateManager.isArenaModeActive) return;
         
-        const messages = this.conversationDiv.querySelectorAll('.assistant-message');
-        const lastMessage = messages[messages.length - 1];
-        
-        if (lastMessage) {
-            const prefixElement = lastMessage.querySelector('.message-prefix');
-            if (prefixElement) {
-                let newText = actualModelName;
-                if (prefixElement.textContent.includes('🧠')) newText += ' 🧠';
-                if (prefixElement.textContent.includes('💡')) newText += ' 💡';
-                if (prefixElement.textContent.includes('\u{27F3}')) newText += ' \u{27F3}';
-                
-                prefixElement.textContent = newText;
-            }
-        }
+        const assistantMessages = this.conversationDiv.querySelectorAll('.assistant-message');
+        const lastAssistantMessage = assistantMessages[assistantMessages.length - 1];
+        if (!lastAssistantMessage) return;
+
+        const prefixSpan = lastAssistantMessage.querySelector('.message-prefix');
+        if (!prefixSpan) return;
+
+        let newPrefixText = actualModelName;
+        if (prefixSpan.textContent.includes('🧠')) newPrefixText += ' 🧠';
+        if (prefixSpan.textContent.includes('💡')) newPrefixText += ' 💡';
+        if (prefixSpan.textContent.includes('\u{27F3}')) newPrefixText += ' \u{27F3}';
+        prefixSpan.textContent = newPrefixText;
     }
 
     getChatHeader() {
         return this.conversationDiv.querySelector('.conversation-title');
     }
 
-    clearConversation() {
-        // Preserve the title wrapper when clearing
+    clearConversation(options = {}) {
         const titleWrapper = this.conversationDiv.querySelector('.title-wrapper');
-        super.clearConversation();
-        if (titleWrapper) {
-            this.conversationDiv.prepend(titleWrapper);
-        }
-        this.activeMessageDivs = null;
+        super.clearConversation(options);
+        if (titleWrapper) this.conversationDiv.prepend(titleWrapper);
+        this.activeDivs = null;
         this.updateChatHeader('conversation');
-        this.setTextareaText('');
-    }
-
-    // Returns the active message container for the given model.
-    getActiveMessageElement(model) {
-        if (this.stateManager.isArenaModeActive) {
-            const index = this.stateManager.getModelIndex(model);
-            return (index !== -1 && Array.isArray(this.activeMessageDivs))
-                ? this.activeMessageDivs[index]
-                : null;
+        if (!options.skipTextarea) {
+            this.setTextareaText('');
         }
-        return this.activeMessageDivs;
     }
 
-    getActiveMessagePrefixElement(model) {
-        const container = this.getActiveMessageElement(model);
-        if (!container) return null;
-        if (this.stateManager.isArenaModeActive) {
-            const prefixes = container.querySelectorAll('.history-prefix-wrapper');
-            return prefixes.length ? prefixes[prefixes.length - 1] : container;
-        }
-        return container.querySelector('.history-prefix-wrapper') || container;
+    getActiveMessageElement(modelId) {
+        if (!this.stateManager.isArenaModeActive) return this.activeDivs;
+        const index = this.stateManager.getModelIndex(modelId);
+        return (index !== -1 && Array.isArray(this.activeDivs)) ? this.activeDivs[index] : null;
     }
 
-    // Store display name for a given logical arena model id (used when revealing)
-    setArenaModelDisplayName(logicalModelId, displayName) {
-        if (!this.stateManager.isArenaModeActive) return;
-        const container = this.getActiveMessageElement(logicalModelId);
-        if (!container) return;
-        container.dataset.displayName = displayName;
+    getActiveMessagePrefixElement(modelId) {
+        const element = this.getActiveMessageElement(modelId);
+        if (!element) return null;
+        
+        const wrappers = element.querySelectorAll('.history-prefix-wrapper');
+        return wrappers.length ? wrappers[wrappers.length - 1] : element;
     }
 
-    addManualAbortButton(model, manualAbort) {
-        const prefixElem = this.getActiveMessagePrefixElement(model);
-        if (!prefixElem) return;
-        const abortButton = this.createRemoveFileButton(manualAbort);
-        abortButton.classList.add('manual-abort-button');
-        abortButton.textContent = '\u{23F8}'; // Unicode for a stop button.
-        prefixElem.appendChild(abortButton);
+    setArenaModelDisplayName(id, name) {
+        const element = this.getActiveMessageElement(id);
+        if (element) element.dataset.displayName = name;
     }
 
-    removeManualAbortButton(model) {
-        const prefixElem = this.getActiveMessagePrefixElement(model);
-        if (!prefixElem) return;
-        const abortButton = prefixElem.querySelector('.manual-abort-button');
-        if (abortButton) {
-            abortButton.disabled = true;
-            abortButton.classList.add('fade-out');
-            const onTransitionEnd = (event) => {
-                if (event.propertyName === "opacity") {
-                    abortButton.removeEventListener('transitionend', onTransitionEnd);
-                    abortButton.remove();
-                }
+    addManualAbortButton(modelId, onAbort) {
+        const element = this.getActiveMessagePrefixElement(modelId);
+        if (!element) return;
+        
+        const button = this.createRemoveButton(onAbort);
+        button.classList.add('manual-abort-button');
+        button.textContent = '⏸';
+        element.appendChild(button);
+    }
+
+    removeManualAbortButton(modelId) {
+        const button = this.getActiveMessagePrefixElement(modelId)?.querySelector('.manual-abort-button');
+        if (button) {
+            button.disabled = true;
+            button.classList.add('fade-out');
+            button.ontransitionend = (e) => {
+                if (e.propertyName === 'opacity') button.remove();
             };
-            abortButton.addEventListener('transitionend', onTransitionEnd);
         }
     }
 }
 
-
+/**
+ * UI Controller for the History page.
+ */
 export class HistoryChatUI extends ChatUI {
     constructor(options) {
-        const {
-            continueFunc = () => {},
-            addPopupActions,
-            loadHistoryItems,
-            loadChat,
-            getChatMeta,
-            ...baseOptions
-        } = options;
+        super(options);
+        Object.assign(this, {
+            historyList: this.stateManager.historyList,
+            continueFunc: options.continueFunc,
+            addPopup: options.addPopupActions,
+            loadHistory: options.loadHistoryItems,
+            loadChat: options.loadChat,
+            getMeta: options.getChatMeta,
+            mode: 'history',
+            inSearch: false,
+            requestMoreSearch: null,
+            paginator: this.createPaginator(),
+            renderedIds: new Set(),
+            resultCategories: new Map(),
+            activeHighlights: []
+        });
 
-        super(baseOptions);
-        this.historyList = this.stateManager.historyList;
+        this.historyList.onscroll = () => {
+            const { scrollTop, scrollHeight, clientHeight } = this.historyList;
+            if (scrollHeight - (scrollTop + clientHeight) < HISTORY_SCROLL_BUFFER) {
+                this.paginator.requestMore({ reason: 'scroll' });
+            }
+        };
 
-        this.continueFunc = continueFunc;
-        this.addPopupActions = addPopupActions;
-        this.loadHistoryItems = loadHistoryItems;
-        this.loadChat = loadChat;
-        this.getChatMeta = getChatMeta;
-
-        this.handleHistoryScroll = this.handleHistoryScroll.bind(this);
-
-        this.activeChatId = null;
-        this.searchHighlightConfig = null;
-        this.activeHighlights = [];
-
-        this.mode = 'history';
-        this.searchRenderedIds = new Set();
-        this.searchDividerCache = new Map();
-        this.requestMoreSearchResults = null;
-
-        this.paginator = this.createPaginator();
-
-        this.initHistoryListHandling();
-        this.initKeyboardNavigation();
+        this.initKeyboardNav();
+        this.paginator.requestMore({ reason: 'initial' });
     }
 
     createPaginator() {
@@ -1136,13 +1066,22 @@ export class HistoryChatUI extends ChatUI {
         let offset = 0;
         let hasMore = true;
 
-        const loadHistory = async (reason) => {
-            if (!this.stateManager.canLoadMore() || pending) return false;
+        const requestMore = async ({ reason = 'manual' } = {}) => {
+            const hasSearchLoader = typeof this.requestMoreSearch === 'function';
+            if (pending || (this.mode !== 'search' && !hasMore) || (this.mode === 'search' && !hasSearchLoader)) {
+                return false;
+            }
 
+            this.stateManager.isLoading = true;
             pending = (async () => {
-                this.stateManager.isLoading = true;
                 try {
-                    const items = await this.loadHistoryItems(this.stateManager.limit, offset);
+                    if (this.mode === 'search') {
+                        const beforeCount = this.getVisibleCount();
+                        await this.requestMoreSearch(reason);
+                        return this.getVisibleCount() > beforeCount;
+                    }
+
+                    const items = await this.loadHistory(this.stateManager.limit, offset);
                     if (!items.length) {
                         hasMore = false;
                         return false;
@@ -1152,154 +1091,82 @@ export class HistoryChatUI extends ChatUI {
                     offset += items.length;
                     this.stateManager.offset = offset;
                     return true;
-                } catch (error) {
-                    console.error(error);
-                    hasMore = false;
-                    return false;
                 } finally {
                     this.stateManager.isLoading = false;
                     pending = null;
                     if (hasMore && this.mode === 'history' && this.stateManager.shouldLoadMore()) {
-                        void requestMore({ reason: 'auto' });
+                        requestMore({ reason: 'auto' });
                     }
                 }
             })();
-
             return pending;
-        };
-
-        const loadSearch = async (reason) => {
-            if (typeof this.requestMoreSearchResults !== 'function' || pending) return false;
-
-            const before = this.getVisibleHistoryItemCount();
-            pending = Promise.resolve(this.requestMoreSearchResults(reason))
-                .then(() => this.getVisibleHistoryItemCount() > before)
-                .finally(() => {
-                    pending = null;
-                });
-
-            return pending;
-        };
-
-        const requestMore = ({ reason = 'manual' } = {}) => {
-            if (this.mode === 'search') {
-                return loadSearch(reason);
-            }
-            if (!hasMore) return false;
-            return loadHistory(reason);
-        };
-
-        const reset = ({ mode = 'history' } = {}) => {
-            pending = null;
-            offset = 0;
-            hasMore = true;
-            this.mode = mode;
-            this.stateManager.offset = 0;
-            this.stateManager.hasMoreItems = true;
         };
 
         return {
             requestMore,
-            reset,
-            get pending() {
-                return pending;
+            reset: (modeOrOptions = 'history', options = {}) => {
+                let mode = modeOrOptions;
+                let preserveOffset = options?.preserveOffset ?? false;
+                if (modeOrOptions && typeof modeOrOptions === 'object') {
+                    mode = modeOrOptions.mode ?? 'history';
+                    preserveOffset = modeOrOptions.preserveOffset ?? false;
+                }
+                pending = null;
+                hasMore = true;
+                this.mode = mode;
+                if (!preserveOffset) {
+                    offset = 0;
+                    this.stateManager.offset = 0;
+                }
             }
         };
     }
 
-    initKeyboardNavigation() {
-        const navState = { targetItem: null, transitionHandler: null, timeoutId: null };
-
-        const cleanup = (item) => {
-            if (!item) return;
-            item.classList.remove('keyboard-navigating');
-            if (navState.targetItem === item) {
-                if (navState.transitionHandler) item.removeEventListener('transitionend', navState.transitionHandler);
-                if (navState.timeoutId) clearTimeout(navState.timeoutId);
-                navState.targetItem = navState.transitionHandler = navState.timeoutId = null;
+    initKeyboardNav() {
+        const findNext = (current, direction) => {
+            let next = direction === 'up' ? current.previousElementSibling : current.nextElementSibling;
+            while (next && (next.classList.contains('history-divider') || next.classList.contains('search-hidden'))) {
+                next = direction === 'up' ? next.previousElementSibling : next.nextElementSibling;
             }
-        };
-
-        const isItem = (el) => el?.classList?.contains('history-sidebar-item');
-        const isDivider = (el) => el?.classList?.contains('history-divider');
-        const isHidden = (el) => el?.classList?.contains('search-hidden');
-
-        const findNext = (current, dir) => {
-            const prop = dir === 'up' ? 'previousElementSibling' : 'nextElementSibling';
-            let candidate = current[prop];
-            while (candidate && (isDivider(candidate) || !isItem(candidate) || isHidden(candidate))) {
-                candidate = candidate[prop];
-            }
-            return isItem(candidate) ? candidate : null;
+            return next?.classList.contains('history-sidebar-item') ? next : null;
         };
 
         document.addEventListener('keydown', async (e) => {
             if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
-
+            
             const current = document.activeElement;
-            if (!current || !current.classList.contains('history-sidebar-item') || !this.historyList.contains(current)) {
-                return;
-            }
+            if (!current?.classList.contains('history-sidebar-item') || !this.historyList.contains(current)) return;
 
             e.preventDefault();
-
             const direction = e.key === 'ArrowUp' ? 'up' : 'down';
             let next = findNext(current, direction);
-
-            if (!next && direction === 'down') {
-                const loaded = await this.paginator.requestMore({ reason: 'keyboard' });
-                if (loaded) next = findNext(current, direction);
+            
+            if (!next && direction === 'down' && await this.paginator.requestMore({ reason: 'keyboard' })) {
+                next = findNext(current, direction);
             }
 
             if (next) {
-                cleanup(navState.targetItem);
-                cleanup(next);
-
                 next.focus();
                 next.click();
                 next.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-
-                const onTransitionEnd = (event) => {
-                    if (event.target === next && event.propertyName === 'transform') {
-                        if (navState.targetItem === next) {
-                            if (navState.timeoutId) clearTimeout(navState.timeoutId);
-                            cleanup(next);
-                        } else {
-                            next.removeEventListener('transitionend', onTransitionEnd);
-                        }
-                    }
-                };
-
                 next.classList.add('keyboard-navigating');
-                next.addEventListener('transitionend', onTransitionEnd);
-                navState.targetItem = next;
-                navState.transitionHandler = onTransitionEnd;
-
-                const duration = parseFloat(getComputedStyle(next).transitionDuration) * 1000;
-                const delay = isNaN(duration) ? 300 : duration + 100;
-
-                if (navState.timeoutId) clearTimeout(navState.timeoutId);
-                navState.timeoutId = setTimeout(() => {
-                    if (navState.targetItem === next) cleanup(next);
-                    else navState.timeoutId = null;
-                }, delay);
+                setTimeout(() => next.classList.remove('keyboard-navigating'), KEYBOARD_NAV_HIGHLIGHT_MS);
             }
         });
     }
 
-    getVisibleHistoryItemCount() {
-        return this.historyList.querySelectorAll('.history-sidebar-item:not(.search-hidden)').length;
-    }
-
     _setSearchMatch(elements, value) {
-        elements.forEach(el => {
-            if (value === null) delete el.dataset.searchMatch;
-            else el.dataset.searchMatch = value;
+        elements.forEach(element => {
+            if (value === null) {
+                delete element.dataset.searchMatch;
+            } else {
+                element.dataset.searchMatch = value;
+            }
         });
     }
 
-    _toggleSearchHidden(elements, hidden) {
-        elements.forEach(el => el.classList.toggle('search-hidden', hidden));
+    _toggleSearchHidden(elements, isHidden) {
+        elements.forEach(element => element.classList.toggle('search-hidden', isHidden));
     }
 
     _getHistoryItems() {
@@ -1310,117 +1177,14 @@ export class HistoryChatUI extends ChatUI {
         return this.historyList.querySelectorAll('.history-divider');
     }
 
-    reloadHistoryList() {
-        this.stateManager.reset();
-        this.historyList.innerHTML = '';
-        this.paginator.reset({ mode: 'history' });
-        this.initHistoryListHandling();
-    }
-
-    initHistoryListHandling() {
-        this.historyList.addEventListener('scroll', this.handleHistoryScroll);
-        void this.paginator.requestMore({ reason: 'initial' });
-    }
-
-    handleHistoryScroll() {
-        const { scrollTop, scrollHeight, clientHeight } = this.historyList;
-
-        if (scrollHeight - (scrollTop + clientHeight) < 10) {
-            void this.paginator.requestMore({ reason: 'scroll' });
-        }
-    }
-
-    addHistoryItem(chat) {
-        const existing = this.getHistoryItem(`${chat.chatId}`);
-        if (existing) {
-            if (existing.dataset.searchTemp === 'true') {
-                existing.remove();
-            } else {
-                return existing;
-            }
-        }
-
-        const currentCategory = this.getDateCategory(chat.timestamp);
-
-        if (currentCategory !== this.stateManager.lastDateCategory) {
-            const divider = this.createDateDivider(currentCategory);
-            this.historyList.appendChild(divider);
-            this.stateManager.lastDateCategory = currentCategory;
-        }
-
-        const item = this.createHistoryItem(chat);
-        this.historyList.appendChild(item);
-        if (this.inSearchMode) {
-            item.dataset.searchMatch = 'false';
-        }
-        return item;
-    }
-
-    ensureSearchResults(results = []) {
-        const desiredIds = new Set(results.map(r => `${r.id}`));
-
-        results.forEach(({ doc, id }) => {
-            const idStr = `${id}`;
-            let item = this.getHistoryItem(idStr);
-            if (!item) {
-                if (!doc) return;
-                item = this.createSearchTempItem(doc);
-            }
-            if (item) {
-                item.classList.remove('search-hidden');
-            }
-        });
-
-        const tempItems = this.historyList.querySelectorAll('.history-sidebar-item[data-search-temp="true"]');
-        tempItems.forEach(item => {
-            if (!desiredIds.has(item.id)) {
-                item.remove();
-            }
-        });
-
-        this.searchRenderedIds = desiredIds;
-    }
-
-    createSearchTempItem(doc) {
-        const normalizedId = `${doc.id}`;
-        const item = createElementWithClass('button', 'unset-button history-sidebar-item');
-        item.id = normalizedId;
-        item.dataset.searchTemp = 'true';
-
-        const title = doc?.title || 'Untitled chat';
-        const textSpan = createElementWithClass('span', 'item-text', title);
-        const dotsSpan = createElementWithClass('div', 'action-dots', '\u{22EF}');
-
-        item.append(textSpan, dotsSpan);
-        item.onclick = () => this.buildChat(doc.id);
-        this.addPopupActions(item);
-
-        this.historyList.appendChild(item);
-        return item;
-    }
-
-    clearSearchResults() {
-        this.historyList.querySelectorAll('.history-sidebar-item[data-search-temp="true"]').forEach(item => item.remove());
-        this.historyList.querySelectorAll('.history-divider[data-search-temp="true"]').forEach(divider => divider.remove());
-        this._setSearchMatch(this._getHistoryItems(), null);
-        this._setSearchMatch(this._getDividers(), null);
-        this.historyList.querySelector('.search-no-results')?.remove();
-        this.historyList.querySelector('.search-counter')?.remove();
-        this.searchRenderedIds.clear();
-        this.searchDividerCache.clear();
-    }
-
-    setSearchLoader(loader) {
-        this.requestMoreSearchResults = typeof loader === 'function' ? loader : null;
-    }
-
     startSearchMode() {
-        if (!this.inSearchMode) {
-            this.inSearchMode = true;
+        if (!this.inSearch) {
+            this.inSearch = true;
             this.historyList.classList.add('is-searching');
         }
 
         this.historyList.querySelectorAll('.history-sidebar-item[data-search-temp="true"]').forEach(item => item.remove());
+        
         const items = this._getHistoryItems();
         this._setSearchMatch(items, 'false');
         this._toggleSearchHidden(items, true);
@@ -1433,11 +1197,12 @@ export class HistoryChatUI extends ChatUI {
     }
 
     exitSearchMode() {
-        if (!this.inSearchMode) return;
-        this.inSearchMode = false;
+        if (!this.inSearch) return;
+        this.inSearch = false;
         this.historyList.classList.remove('is-searching');
 
         this.historyList.querySelectorAll('.history-sidebar-item[data-search-temp="true"]').forEach(item => item.remove());
+        
         const items = this._getHistoryItems();
         this._setSearchMatch(items, null);
         this._toggleSearchHidden(items, false);
@@ -1447,22 +1212,64 @@ export class HistoryChatUI extends ChatUI {
         this._toggleSearchHidden(dividers, false);
 
         this.clearSearchResults();
-        this.setSearchLoader(null);
-        this.paginator.reset({ mode: 'history' });
+        this.requestMoreSearch = null;
+        this.paginator.reset();
+    }
+
+    clearSearchResults() {
+        this.historyList.querySelectorAll('.history-sidebar-item[data-search-temp="true"]').forEach(item => item.remove());
+        this.historyList.querySelectorAll('.history-divider[data-search-temp="true"]').forEach(divider => divider.remove());
+        this._setSearchMatch(this._getHistoryItems(), null);
+        this._setSearchMatch(this._getDividers(), null);
+        this.historyList.querySelector('.search-no-results')?.remove();
+        this.historyList.querySelector('.search-counter')?.remove();
+        this.renderedIds.clear();
+        this.resultCategories.clear();
+    }
+
+    setSearchLoader(loader) {
+        this.requestMoreSearch = typeof loader === 'function' ? loader : null;
     }
 
     renderSearchResults(results = [], options = {}) {
-        const desiredIds = new Set(results.map(r => `${r.id}`));
+        return this.renderResults(results, options);
+    }
+
+    setSearchHighlight(config) {
+        if (!config) {
+            this.setHighlight(null);
+            return;
+        }
+        const { rawQuery, resultIds, normalizedQuery, highlightAllowed } = config;
+        this.setHighlight({
+            raw: rawQuery,
+            ids: resultIds,
+            norm: normalizedQuery,
+            allowed: highlightAllowed
+        });
+    }
+
+    getSearchContainer() {
+        return this.historyList;
+    }
+
+    renderResults(results = [], options = {}) {
+        const desiredIds = new Set(results.map(result => `${result.id}`));
         const shouldAppend = options?.append === true;
 
-        if (!shouldAppend) this.clearSearchResults();
+        if (!shouldAppend) {
+            this.clearSearchResults();
+        }
 
         results.forEach(({ doc, id }) => {
-            const idStr = `${id}`;
-            let item = this.getHistoryItem(idStr);
+            const idString = `${id}`;
+            let item = this.getHistoryItem(idString);
             const category = this.getDateCategorySafe(doc?.timestamp);
 
-            if (!item && doc) item = this.createSearchTempItem(doc);
+            if (!item && doc) {
+                item = this.createSearchTempItem(doc);
+            }
+            
             if (item) {
                 item.dataset.searchMatch = 'true';
                 item.classList.remove('search-hidden');
@@ -1472,32 +1279,54 @@ export class HistoryChatUI extends ChatUI {
 
         if (!shouldAppend) {
             this.historyList.querySelectorAll('.history-sidebar-item[data-search-temp="true"]').forEach(item => {
-                if (!desiredIds.has(item.id)) item.remove();
+                if (!desiredIds.has(item.id)) {
+                    item.remove();
+                }
             });
-            this.searchRenderedIds = new Set(desiredIds);
+            this.renderedIds = new Set(desiredIds);
         } else {
-            results.forEach(({ id }) => this.searchRenderedIds.add(`${id}`));
+            results.forEach(({ id }) => this.renderedIds.add(`${id}`));
         }
 
         this._getHistoryItems().forEach(item => {
-            if (item.dataset.searchTemp === 'true') item.classList.remove('search-hidden');
-            else item.classList.toggle('search-hidden', item.dataset.searchMatch !== 'true');
+            if (item.dataset.searchTemp === 'true') {
+                item.classList.remove('search-hidden');
+            } else {
+                item.classList.toggle('search-hidden', item.dataset.searchMatch !== 'true');
+            }
         });
 
         this._getDividers().forEach(divider => {
             divider.classList.toggle('search-hidden', divider.dataset.searchMatch !== 'true');
         });
 
-        const noResultsMsg = this.historyList.querySelector('.search-no-results');
-        if (!results.length && !noResultsMsg) {
+        const noResultsMessage = this.historyList.querySelector('.search-no-results');
+        if (!results.length && !noResultsMessage) {
             this.historyList.appendChild(createElementWithClass('div', 'search-no-results', 'No results found'));
-        } else if (results.length && noResultsMsg) {
-            noResultsMsg.remove();
+        } else if (results.length && noResultsMessage) {
+            noResultsMessage.remove();
         }
 
         if (options?.showCounter) {
-            this.updateSearchCounter(options.totalCount ?? 0, this.searchRenderedIds.size);
+            this.updateSearchCounter(options.totalCount ?? 0, this.renderedIds.size);
         }
+    }
+
+    createSearchTempItem(doc) {
+        const historyItem = createElementWithClass('button', 'unset-button history-sidebar-item');
+        historyItem.id = `${doc.id}`;
+        historyItem.dataset.searchTemp = 'true';
+
+        const titleText = doc?.title || 'Untitled chat';
+        const textSpan = createElementWithClass('span', 'item-text', titleText);
+        const dotsSpan = createElementWithClass('div', 'action-dots', UNICODE.ELLIPSIS);
+
+        historyItem.append(textSpan, dotsSpan);
+        historyItem.onclick = () => this.buildChat(doc.id);
+        this.addPopup(historyItem);
+
+        this.historyList.appendChild(historyItem);
+        return historyItem;
     }
 
     updateSearchCounter(total = 0, visible = 0) {
@@ -1507,408 +1336,413 @@ export class HistoryChatUI extends ChatUI {
             return;
         }
 
-        const text = visible >= total ? `${visible} results` : `${visible} of ${total} results`;
+        const counterText = visible >= total ? `${visible} results` : `${visible} of ${total} results`;
 
         if (existingCounter) {
-            existingCounter.textContent = text;
+            existingCounter.textContent = counterText;
             return;
         }
 
-        const counter = createElementWithClass('div', 'search-counter', text);
-        counter.setAttribute('role', 'status');
-        counter.setAttribute('aria-live', 'polite');
-        this.historyList.prepend(counter);
-    }
-
-    getSearchContainer() {
-        return this.historyList;
-    }
-
-    revealDividerForItem(item) {
-        let previous = item.previousElementSibling;
-        while (previous) {
-            if (previous.classList.contains('history-divider')) {
-                previous.dataset.searchMatch = 'true';
-                break;
-            }
-            previous = previous.previousElementSibling;
-        }
-    }
-
-    createHistoryItem(chat) {
-        const item = createElementWithClass('button', 'unset-button history-sidebar-item');
-        item.id = chat.chatId;
-
-        const textSpan = createElementWithClass('span', 'item-text', chat.title);
-        const dotsSpan = createElementWithClass('div', 'action-dots', '\u{22EF}');
-
-        item.append(textSpan, dotsSpan);
-        item.onclick = () => this.buildChat(chat.chatId);
-        this.addPopupActions(item);
-
-        return item;
-    }
-
-    handleItemDeletion(item) {
-        const header = item.previousElementSibling;
-        const nextItem = item.nextElementSibling;
-
-        item.remove();
-
-        if (header?.classList.contains('history-divider') && 
-            (!nextItem || nextItem.classList.contains('history-divider'))) {
-            header.remove();
-        }
-
-        if (this.historyList.scrollHeight <= this.historyList.clientHeight) {
-            void this.paginator.requestMore({ reason: 'deletion' });
-        }
-    }
-
-    handleNewChatSaved(chat) {
-        const currentCategory = this.getDateCategory(chat.timestamp);
-        const firstItem = this.historyList.firstElementChild;
-        const newItem = this.createHistoryItem(chat);
-
-        if (firstItem?.classList.contains('history-divider') && firstItem.textContent === currentCategory) {
-            this.historyList.insertBefore(newItem, firstItem.nextSibling);
-        } else {
-            this.historyList.prepend(newItem);
-            this.historyList.prepend(this.createDateDivider(currentCategory));
-        }
-    }
-
-    appendMessages(newMessages, currentMessageIndex) {
-        newMessages.forEach(message => {
-            if (message.responses) {
-                this.createArenaMessageWrapperFunc(message, { continueFunc: this.continueFunc, messageIndex: currentMessageIndex });
-            } else {
-                this.addFullMessage(message, false, currentMessageIndex, this.continueFunc);
-            }
-            currentMessageIndex++;
-            this.pendingMediaDiv = null;
-        });
-    }
-
-    appendSingleRegeneratedMessage(message, index) {
-        const {contents, role, timestamp, messageId, chatId,  ...options} = message
-        const continueFunc = () => this.continueFunc(index, contents.length - 1, role);
-        const new_options = { hideModels: false, isRegeneration: true, continueFunc, messageId, ...options };
-        this.addMessage(role, contents.at(-1), new_options);
-    }
-
-    updateArenaMessage(updatedMessage, messageIndex) {
-        const oldMessageElement = this.conversationDiv.children[messageIndex];
-
-        if (oldMessageElement) {
-            const newMessageElement = this.createArenaMessageWrapperFunc(updatedMessage, { continueFunc: this.continueFunc, messageIndex })[0].parentElement.parentElement;
-            newMessageElement.remove();
-            this.conversationDiv.replaceChild(newMessageElement, oldMessageElement);
-        }
-    }
-
-    createDateDivider(category) {
-        return createElementWithClass('div', 'history-divider', category);
+        const counterElement = createElementWithClass('div', 'search-counter', counterText);
+        counterElement.setAttribute('role', 'status');
+        counterElement.setAttribute('aria-live', 'polite');
+        this.historyList.prepend(counterElement);
     }
 
     ensureSearchDividerForItem(item, category) {
         const targetCategory = category || 'Unknown';
-        const cached = this.searchDividerCache.get(targetCategory);
+        const cachedDivider = this.resultCategories.get(targetCategory);
 
-        if (cached && cached.isConnected) {
-            cached.dataset.searchMatch = 'true';
-            cached.classList.remove('search-hidden');
+        if (cachedDivider && cachedDivider.isConnected) {
+            cachedDivider.dataset.searchMatch = 'true';
+            cachedDivider.classList.remove('search-hidden');
             return;
         }
 
-        // Check if there is already a matching divider immediately before
-        const prev = item.previousElementSibling;
-        if (prev?.classList.contains('history-divider') && prev.textContent === targetCategory) {
-            prev.dataset.searchMatch = 'true';
-            prev.classList.remove('search-hidden');
-            this.searchDividerCache.set(targetCategory, prev);
+        const previousSibling = item.previousElementSibling;
+        if (previousSibling?.classList.contains('history-divider') && previousSibling.textContent === targetCategory) {
+            previousSibling.dataset.searchMatch = 'true';
+            previousSibling.classList.remove('search-hidden');
+            this.resultCategories.set(targetCategory, previousSibling);
             return;
         }
 
-        const divider = this.createDateDivider(targetCategory);
-        divider.dataset.searchTemp = 'true';
-        divider.dataset.searchMatch = 'true';
-        divider.classList.remove('search-hidden');
-        this.searchDividerCache.set(targetCategory, divider);
-        this.historyList.insertBefore(divider, item);
+        const dateDivider = createElementWithClass('div', 'history-divider', targetCategory);
+        dateDivider.dataset.searchTemp = 'true';
+        dateDivider.dataset.searchMatch = 'true';
+        dateDivider.classList.remove('search-hidden');
+        this.resultCategories.set(targetCategory, dateDivider);
+        this.historyList.insertBefore(dateDivider, item);
     }
 
     getDateCategorySafe(timestamp) {
         if (typeof timestamp === 'number' && Number.isFinite(timestamp)) {
             return this.getDateCategory(timestamp);
         }
-        const parsed = Number(timestamp);
-        if (Number.isFinite(parsed)) {
-            return this.getDateCategory(parsed);
+        const parsedTimestamp = Number(timestamp);
+        if (Number.isFinite(parsedTimestamp)) {
+            return this.getDateCategory(parsedTimestamp);
         }
         return 'Unknown';
     }
 
+    getVisibleCount() {
+        return this.historyList.querySelectorAll('.history-sidebar-item:not(.search-hidden)').length;
+    }
+
+    getHistoryItem(id) {
+        return document.getElementById(id);
+    }
+
+    reloadHistoryList() {
+        this.stateManager.reset();
+        this.historyList.innerHTML = '';
+        this.paginator.reset();
+        this.paginator.requestMore({ reason: 'initial' });
+    }
+
+    addHistoryItem(chat) {
+        const existing = document.getElementById(chat.chatId);
+        if (existing) {
+            if (existing.dataset.searchTemp) existing.remove();
+            else return existing;
+        }
+
+        const category = this.getDateCategory(chat.timestamp);
+        if (category !== this.stateManager.lastDateCategory) {
+            const divider = createElementWithClass('div', 'history-divider', category);
+            if (this.inSearch) {
+                divider.dataset.searchMatch = 'false';
+                divider.classList.add('search-hidden');
+            }
+            this.historyList.appendChild(divider);
+            this.stateManager.lastDateCategory = category;
+        }
+
+        const item = this.createHistoryItem(chat);
+        this.historyList.appendChild(item);
+        
+        if (this.inSearch) {
+            item.dataset.searchMatch = 'false';
+            item.classList.add('search-hidden');
+        }
+        return item;
+    }
+
+    createHistoryItem(chat) {
+        const button = createElementWithClass('button', 'unset-button history-sidebar-item');
+        button.id = chat.chatId;
+        button.append(
+            createElementWithClass('span', 'item-text', chat.title), 
+            createElementWithClass('div', 'action-dots', '⋯')
+        );
+        button.onclick = () => this.buildChat(chat.chatId);
+        this.addPopup(button);
+        return button;
+    }
+
+    handleItemDeletion(item) {
+        const previous = item.previousElementSibling;
+        const next = item.nextElementSibling;
+        item.remove();
+        
+        // Remove divider if it becomes empty
+        if (previous?.classList.contains('history-divider') && (!next || next.classList.contains('history-divider'))) {
+            previous.remove();
+        }
+        
+        if (this.historyList.scrollHeight <= this.historyList.clientHeight) {
+            this.paginator.requestMore({ reason: 'deletion' });
+        }
+    }
+
+    handleNewChatSaved(chat) {
+        const category = this.getDateCategory(chat.timestamp);
+        const first = this.historyList.firstElementChild;
+        const item = this.createHistoryItem(chat);
+
+        if (this.inSearch) {
+            item.dataset.searchMatch = 'false';
+            item.classList.add('search-hidden');
+        }
+
+        if (first?.classList.contains('history-divider') && first.textContent === category) {
+            this.historyList.insertBefore(item, first.nextSibling);
+        } else {
+            const divider = createElementWithClass('div', 'history-divider', category);
+            if (this.inSearch) {
+                divider.dataset.searchMatch = 'false';
+                divider.classList.add('search-hidden');
+            }
+            this.historyList.prepend(item);
+            this.historyList.prepend(divider);
+        }
+    }
+
+    appendMessages(messages, start) {
+        messages.forEach((msg, i) => {
+            if (msg.responses) {
+                this.createArenaWrapper(msg, { continueFunc: this.continueFunc, messageIndex: start + i });
+            } else {
+                this.buildFullMessage(msg, start + i);
+            }
+            this.pendingMediaDiv = null;
+        });
+    }
+
+    buildFullMessage(message, index) {
+        message.contents.forEach((parts, subIndex) => {
+            const options = { ...message, hideModels: false, isRegeneration: subIndex !== 0 };
+            if (this.continueFunc) {
+                options.continueFunc = () => this.continueFunc(index, subIndex);
+            }
+            const block = this.createMessageFromParts(parts, options);
+            if (block) {
+                this.conversationDiv.appendChild(block);
+            }
+        });
+    }
+
+    appendSingleRegen(message, index) {
+        const callback = () => this.continueFunc(index, message.contents.length - 1, message.role);
+        const options = { 
+            hideModels: false, 
+            isRegeneration: true, 
+            continueFunc: callback, 
+            messageId: message.messageId, 
+            ...message 
+        };
+        this.addMessage(message.role, message.contents.at(-1), options);
+    }
+
+    updateArena(message, index) {
+        const oldBlock = this.conversationDiv.children[index];
+        if (oldBlock) {
+            const divs = this.createArenaWrapper(message, { 
+                continueFunc: this.continueFunc, 
+                messageIndex: index 
+            });
+            const newBlock = divs[0].parentElement.parentElement;
+            newBlock.remove(); // Prevent duplicate append from createArenaWrapper
+            this.conversationDiv.replaceChild(newBlock, oldBlock);
+        }
+    }
 
     getDateCategory(timestamp) {
         const date = new Date(timestamp);
         const now = new Date();
+        const getMidnight = dateObject => new Date(dateObject.getFullYear(), dateObject.getMonth(), dateObject.getDate()).getTime();
+        const dayDifference = (getMidnight(now) - getMidnight(date)) / MS_PER_DAY;
         
-        // Get timestamps for midnights
-        const dateMidnight = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-        const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-        const dayDiff = (todayMidnight - dateMidnight) / (1000 * 60 * 60 * 24);
+        if (dayDifference === 0) return 'Today';
+        if (dayDifference === 1) return 'Yesterday';
+        if (dayDifference <= 7) return 'Last 7 Days';
+        if (dayDifference <= 30) return 'Last 30 Days';
         
-        if (dayDiff === 0) return 'Today';
-        if (dayDiff === 1) return 'Yesterday';
-        if (dayDiff <= 7) return 'Last 7 Days';
-        if (dayDiff <= 30) return 'Last 30 Days';
-        
-        if (date.getFullYear() === now.getFullYear()) {
-            return date.toLocaleString('default', { month: 'long' });
+        return date.getFullYear() === now.getFullYear() 
+            ? date.toLocaleString('default', { month: 'long' }) 
+            : `${date.getFullYear()}`;
+    }
+
+    updateChatHeader(titleText) {
+        const headerElement = document.getElementById('history-chat-header');
+        if (headerElement) {
+            headerElement.textContent = titleText;
         }
-        
-        return `${date.getFullYear()}`;
     }
 
-    updateChatHeader(title) {
-        document.getElementById('history-chat-header').textContent = title;
+    handleRenamed(chatId, newTitle) {
+        const historyItem = document.getElementById(chatId);
+        const textSpan = historyItem?.querySelector('.item-text');
+        if (textSpan) {
+            textSpan.textContent = newTitle;
+        }
     }
 
-    updateChatFooter(footerText) {
-        document.getElementById('history-chat-footer').textContent = footerText;
+    autoUpdateHeader(chatId) {
+        const historyItem = document.getElementById(chatId);
+        const titleText = historyItem?.querySelector('.item-text')?.textContent;
+        if (titleText && !['Renaming...', 'Rename failed'].includes(titleText)) {
+            this.updateChatHeader(titleText);
+            return titleText;
+        }
+        return null;
     }
 
     addLinkedChat(chatId) {
         if (!chatId) return;
-        const header = document.getElementById('title-wrapper');
-        this.clearLinkedChatFromHeader();
+        const titleWrapper = document.getElementById('title-wrapper');
+        const existingLinkedChat = titleWrapper.querySelector('.linked-chat');
+        if (existingLinkedChat) {
+            existingLinkedChat.remove();
+        }
         
-        const button = createElementWithClass('button', 'unset-button linked-chat', '\u{21AA}');
-        button.onclick = async () => {
-            const chat = await this.getChatMeta(chatId);
-            if (chat) {
-                this.highlightHistoryItem(chatId);
+        const linkedChatButton = createElementWithClass('button', 'unset-button linked-chat', '\u{21AA}');
+        linkedChatButton.onclick = async () => {
+            if (await this.getMeta(chatId)) {
+                this.highlightItem(chatId);
                 this.buildChat(chatId);
             } else {
-                button.classList.add('settings-error');
-                button.addEventListener('animationend', () => {
-                    button.classList.remove('settings-error');
-                }, { once: true });
+                linkedChatButton.classList.add('settings-error');
+                setTimeout(() => linkedChatButton.classList.remove('settings-error'), ERROR_FLASH_MS);
             }
         };
-        header.appendChild(button);
+        titleWrapper.appendChild(linkedChatButton);
     }
 
-    clearLinkedChatFromHeader() {
-        document.getElementById('title-wrapper').querySelector('.linked-chat')?.remove();
-    }
-
-    highlightHistoryItem(chatId) {
-        const item = this.getHistoryItem(chatId);
-        if (item) {
-            item.classList.add('highlight');
-            item.addEventListener('transitionend', () => {
-                item.classList.remove('highlight');
-            }, { once: true });
+    highlightItem(chatId) {
+        const historyItem = document.getElementById(chatId);
+        if (historyItem) {
+            historyItem.classList.add('highlight');
+            historyItem.addEventListener('transitionend', () => historyItem.classList.remove('highlight'), { once: true });
         }
-    }
-
-    getHistoryItem(chatId) {
-        return document.getElementById(chatId);
-    }
-
-    autoUpdateChatHeader(chatId) {
-        if (!chatId) return null;
-        const historyItem = this.getHistoryItem(chatId)?.querySelector('.item-text');
-        if (historyItem && historyItem.textContent !== "Renaming..." && historyItem.textContent !== "Rename failed") {
-            this.updateChatHeader(historyItem.textContent);
-            return historyItem.textContent;
-        }
-    }
-
-    handleChatRenamed(chatId, newName) {
-        const historyItem = this.getHistoryItem(chatId)?.querySelector('.item-text');
-        if (historyItem) historyItem.textContent = newName;
-    }
-
-    updateChatTimestamp(timestamp) {
-        const date = new Date(timestamp);
-        document.getElementById('history-chat-footer').textContent =
-            date.toString().split(' GMT')[0];
     }
 
     async buildChat(chatId) {
-        // Show models and enable continue buttons for history
-        this.activeChatId = chatId;
-        const chatFull = await this.loadChat(chatId);
-        super.buildChat(chatFull, {
-            hideModels: false,
-            addSystemMsg: true,
-            continueFunc: this.continueFunc
+        this.activeId = chatId;
+        const fullChatData = await this.loadChat(chatId);
+        
+        super.buildChat(fullChatData, { 
+            hideModels: false, 
+            addSystemMsg: true, 
+            continueFunc: this.continueFunc 
         });
-
-        this.updateChatHeader(chatFull.title);
-        this.addLinkedChat(chatFull.continued_from_chat_id);
-        this.updateChatTimestamp(chatFull.timestamp);
-
-        this.applySearchHighlight({ forceScroll: true });
+        
+        this.updateChatHeader(fullChatData.title);
+        this.addLinkedChat(fullChatData.continued_from_chat_id);
+        
+        const footerElement = document.getElementById('history-chat-footer');
+        if (footerElement) {
+            footerElement.textContent = new Date(fullChatData.timestamp).toString().split(' GMT')[0];
+        }
+        
+        this.applyHighlight({ force: true });
     }
 
     clearConversation() {
-        this.clearSearchHighlights();
+        this.clearHighlights();
         super.clearConversation();
         this.updateChatHeader('conversation');
-        this.clearLinkedChatFromHeader();
-        this.updateChatFooter('');
+        const titleWrapper = document.getElementById('title-wrapper');
+        const linkedChatButton = titleWrapper.querySelector('.linked-chat');
+        if (linkedChatButton) {
+            linkedChatButton.remove();
+        }
+        const footerElement = document.getElementById('history-chat-footer');
+        if (footerElement) {
+            footerElement.textContent = '';
+        }
     }
 
-    setSearchHighlight(config) {
-        this.searchHighlightConfig = (config?.rawQuery?.length) ? {
-            rawQuery: config.rawQuery,
-            normalizedQuery: config.normalizedQuery ?? null,
-            resultIds: Array.isArray(config.resultIds) ? config.resultIds : null,
-            highlightAllowed: config.highlightAllowed !== false
-        } : null;
+    // --- Search Highlighting ---
 
-        this.applySearchHighlight();
+    setHighlight(config) {
+        this.highlightConfig = config?.raw?.length 
+            ? { ...config, allowed: config.allowed !== false } 
+            : null;
+        this.applyHighlight();
     }
 
-    applySearchHighlight({ forceScroll = false } = {}) {
-        this.clearSearchHighlights();
+    applyHighlight({ force = false } = {}) {
+        this.clearHighlights();
+        if (!this.highlightConfig?.raw || this.activeId == null) return;
+        
+        const { ids, raw, norm, allowed } = this.highlightConfig;
+        if ((allowed === false && !force) || (ids?.length && !ids.includes(this.activeId))) return;
 
-        if (!this.searchHighlightConfig || !this.searchHighlightConfig.rawQuery || !this.conversationDiv) {
-            return;
-        }
-
-        if (this.activeChatId == null) return;
-
-        const { resultIds, rawQuery, normalizedQuery, highlightAllowed } = this.searchHighlightConfig;
-        if (highlightAllowed === false && !forceScroll) {
-            return;
-        }
-
-        if (Array.isArray(resultIds) && resultIds.length > 0 && !resultIds.includes(this.activeChatId)) {
-            return;
-        }
-
-        const highlights = this.highlightMatchesInConversation({ rawQuery, normalizedQuery });
-        this.activeHighlights = highlights;
-
-        if (highlights.length) {
-            highlights[0].classList.add('is-first');
-            if (forceScroll) {
-                requestAnimationFrame(() => {
-                    highlights[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
-                });
+        const matches = this.findMatches({ raw, norm });
+        this.highlights = matches;
+        
+        if (matches.length > 0) {
+            matches[0].classList.add('is-first');
+            if (force) {
+                requestAnimationFrame(() => matches[0].scrollIntoView({ behavior: 'smooth', block: 'center' }));
             }
         }
     }
 
-    clearSearchHighlights() {
-        if (!this.activeHighlights?.length) {
-            this.activeHighlights = [];
-            return;
-        }
-
-        const parentsToNormalize = new Set();
-
-        this.activeHighlights.forEach(span => {
-            if (!(span instanceof HTMLElement) || !span.parentNode) return;
-            span.classList.remove('is-first');
+    clearHighlights() {
+        if (!this.highlights?.length) return;
+        
+        const parents = new Set();
+        this.highlights.forEach(span => {
             const parent = span.parentNode;
-            const fragment = document.createDocumentFragment();
-            while (span.firstChild) {
-                fragment.appendChild(span.firstChild);
-            }
-            parent.replaceChild(fragment, span);
-            parentsToNormalize.add(parent);
+            if (!parent) return;
+            while (span.firstChild) parent.insertBefore(span.firstChild, span);
+            span.remove();
+            parents.add(parent);
         });
-
-        parentsToNormalize.forEach(parent => parent.normalize());
-        this.activeHighlights = [];
+        
+        parents.forEach(p => p.normalize());
+        this.highlights = [];
     }
 
-    highlightMatchesInConversation({ rawQuery, normalizedQuery }) {
-        const pattern = this.buildHighlightPattern(rawQuery, normalizedQuery);
-        if (!pattern) return [];
-        const highlights = [];
-        const elements = this.conversationDiv?.querySelectorAll('.message-content');
-        if (!elements) return highlights;
-
-        elements.forEach(element => {
+    findMatches({ raw, norm }) {
+        const source = raw?.trim() || norm?.trim();
+        if (!source) return [];
+        
+        const pattern = source.split(/(\s+)/)
+            .filter(Boolean)
+            .map(p => /^\s+$/.test(p) ? '\\s+' : p.replace(/[.*+?^${}()|[\\]/g, '\\$&'))
+            .join('');
+            
+        const matches = [];
+        const regex = new RegExp(pattern, 'gi');
+        
+        this.conversationDiv.querySelectorAll('.message-content').forEach(element => {
             const text = element.textContent;
             if (!text) return;
-            const regex = new RegExp(pattern, 'gi');
-            const matches = [...text.matchAll(regex)];
-            if (!matches.length) return;
-            const elementHighlights = [];
-            for (let i = matches.length - 1; i >= 0; i--) {
-                const match = matches[i];
-                const startIndex = match.index ?? 0;
-                const matchText = match[0] ?? '';
-                const range = this.createRangeForSubstring(element, startIndex, matchText.length);
+            
+            const results = [...text.matchAll(regex)];
+            const localMatches = [];
+            
+            for (let i = results.length - 1; i >= 0; i--) {
+                const range = this.createRange(element, results[i].index, results[i][0].length);
                 if (!range) continue;
+                
                 const span = document.createElement('span');
                 span.className = 'search-highlight';
                 try {
                     range.surroundContents(span);
-                    elementHighlights.push(span);
-                } catch (error) {
-                    // Silently skip matches that span across element boundaries
-                }
+                    localMatches.unshift(span);
+                } catch(e) {}
             }
-
-            elementHighlights.reverse();
-            highlights.push(...elementHighlights);
+            if (localMatches.length > 0) matches.push(...localMatches);
         });
-
-        return highlights;
+        
+        return matches;
     }
 
-    buildHighlightPattern(rawQuery, normalizedQuery) {
-        const source = rawQuery?.trim() || normalizedQuery?.trim();
-        if (!source) return null;
-        return source.split(/(\s+)/).filter(Boolean).map(part => 
-            /^\s+$/.test(part) ? '\\s+' : part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        ).join('');
-    }
-
-    createRangeForSubstring(container, start, length) {
-        if (!container) return null;
-        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
-
-        let currentNode = walker.nextNode();
-        let remainingStart = start;
-
-        while (currentNode) {
-            const nodeLength = currentNode.textContent.length;
-            if (remainingStart < nodeLength) break;
-            remainingStart -= nodeLength;
-            currentNode = walker.nextNode();
+    createRange(element, start, length) {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        let current = walker.nextNode();
+        let remainingOffset = start;
+        
+        while (current && remainingOffset >= current.textContent.length) {
+            remainingOffset -= current.textContent.length;
+            current = walker.nextNode();
         }
-
-        if (!currentNode) return null;
-
+        
+        if (!current) return null;
+        
         const range = document.createRange();
-        range.setStart(currentNode, remainingStart);
-
+        range.setStart(current, remainingOffset);
+        
+        let endNode = current;
+        let endOffset = remainingOffset;
         let remainingLength = length;
-        let endNode = currentNode;
-        let endOffset = remainingStart;
-
+        
         while (endNode && remainingLength > 0) {
             const available = endNode.textContent.length - endOffset;
             if (remainingLength <= available) {
                 range.setEnd(endNode, endOffset + remainingLength);
                 return range;
             }
-
             remainingLength -= available;
             endNode = walker.nextNode();
             endOffset = 0;
         }
-
+        
         return null;
     }
 }
