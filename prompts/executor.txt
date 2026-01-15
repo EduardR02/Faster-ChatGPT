@@ -16,3 +16,5 @@ Do not add features that weren't requested. If adjacent code is causing friction
 These are signs you've lost the plot. The orchestrator plans; you execute the plan. If the plan isn't working, that's strategic information—return it, don't bury it under hacks.
 
 **Exit with:** What you tried, why it failed, what you think the actual problem is.
+
+**If writing tests:** Failing tests mean either your test logic is wrong OR you found a bug in the code. Investigate which. Never "fix" a test by making it expect wrong behavior.

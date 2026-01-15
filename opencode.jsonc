@@ -179,6 +179,16 @@
       },
       "prompt": "{file:./prompts/investigator-lite.txt}"
     },
+    "lookup": {
+      "description": "Quick codebase queries. Where is X? What calls Y? Returns locations, not analysis.",
+      "mode": "subagent",
+      "model": "opencode/minimax-m2.1-free",
+      "tools": {
+        "write": false,
+        "edit": false
+      },
+      "prompt": "{file:./prompts/lookup.txt}"
+    },
     "explorer": {
       "description": "Codebase exploration and knowledge retrieval. Ask it how things work.",
       "mode": "subagent",

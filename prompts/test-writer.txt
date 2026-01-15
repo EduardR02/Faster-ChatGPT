@@ -8,3 +8,10 @@ Report:
 - Whether they pass
 
 Do not modify the code under test unless it's genuinely untestable. If you find bugs, report them but don't fix them.
+
+**Exit when tests fail legitimately.** If tests fail because the code under test has bugs:
+- Report the bug you discovered
+- Stop—do not rewrite tests to match buggy behavior
+- Do not write trivial always-passing tests
+
+A failing test that catches a real bug is more valuable than a passing test that ignores it.

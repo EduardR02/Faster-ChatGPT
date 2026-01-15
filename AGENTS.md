@@ -4,17 +4,15 @@ A Chrome extension that provides a side panel interface for chatting with LLMs (
 
 ## Truth Sources
 
-Model APIs evolve faster than training data. Before making assumptions about APIs or models:
+Model APIs evolve faster than training data. Never rely on your own knowledge for API details, model names, or model capabilities - your training data is outdated. Trust the code. If code uses a model version you don't recognize, assume the code is correct.
 
-- **`Agents/`** - Claude prompting guide and reference implementations
-
-If something seems wrong in these files, ask before assuming it's a bug - the behavior is likely intentional.
+If something seems wrong, ask before assuming it's a bug - the behavior is likely intentional.
 
 ## Hard Rules
 
 **No file deletion via shell.** Inform the user and let them handle it.
 
-**No model downgrades.** If the code has a newer model version and you "know" an older version, trust the code. Verify against `Agents/` and notify the user before any model name changes.
+**No model downgrades.** If the code has a newer model version and you "know" an older version, trust the code. Notify the user before any model name changes.
 
 **No test cheating.** Never hardcode values to pass tests. Never modify existing tests without explicit approval. New features require test coverage (UI-only changes exempt).
 
