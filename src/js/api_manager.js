@@ -250,35 +250,51 @@ export class ApiManager {
         }
     }
 
+    /**
+     * Parses a chunk of SSE data.
+     * @param {Object} state Object containing 'buffer' string.
+     * @param {string} chunk New data to parse.
+     * @returns {Array<Object>} Array of parsed event data objects.
+     */
+    static parseSSEChunk(state, chunk) {
+        state.buffer += chunk;
+        const lines = state.buffer.split('\n');
+        state.buffer = lines.pop(); // Keep the last incomplete line in the buffer
+
+        const events = [];
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('data: ') && trimmed.slice(6) !== '[DONE]') {
+                try {
+                    events.push(JSON.parse(trimmed.slice(6)));
+                } catch (_) {
+                    continue;
+                }
+            }
+        }
+        return events;
+    }
+
     async handleStreamResponse(response, modelId, tokenCounter, writer) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
         const provider = this.getProvider(modelId);
-        let buffer = '';
+        const state = { buffer: '' };
 
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
 
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop(); // Keep the last incomplete line in the buffer
+            const chunk = decoder.decode(value, { stream: true });
+            const events = ApiManager.parseSSEChunk(state, chunk);
 
-            for (const line of lines) {
-                const trimmed = line.trim();
-                if (trimmed.startsWith('data: ') && trimmed.slice(6) !== '[DONE]') {
-                    let parsed;
-                    try {
-                        parsed = JSON.parse(trimmed.slice(6));
-                    } catch (_) {
-                        continue;
-                    }
-                    provider.handleStream({ parsed, tokenCounter, writer });
-                }
+            for (const parsed of events) {
+                provider.handleStream({ parsed, tokenCounter, writer });
             }
         }
         return true;
     }
+
 
     processFiles(messages) {
         return messages.map(message => {
