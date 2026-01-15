@@ -44,7 +44,13 @@ export class ChatStorage {
     async dbOp(storeNames, mode, operation) {
         const db = await this.getDB();
         const transaction = db.transaction(storeNames, mode);
-        const result = await operation(transaction);
+        let result;
+        try {
+            result = await operation(transaction);
+        } catch (error) {
+            transaction.abort();
+            throw error;
+        }
 
         return new Promise((resolve, reject) => {
             transaction.oncomplete = () => resolve(result);
@@ -610,12 +616,26 @@ export class ChatStorage {
     // ==================== SEARCH & MEDIA ====================
 
     static normaliseForSearch(string) {
-        return string?.toLowerCase()
+        if (!string) return '';
+        return string.toLowerCase()
             .normalize('NFKD')
             .replace(/[\u0300-\u036f]/g, '')
             .replace(/\s+/g, ' ')
-            .trim() || '';
+            .trim();
     }
+
+    static tokenizeForMiniSearch(text) {
+        if (!text) return [];
+        return text
+            .toLowerCase()
+            .normalize('NFKD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[\u0000-\u001f]+/g, ' ')
+            .split(/\s+/)
+            .map(token => token.replace(/^[^a-z0-9_\-"'=\/:.#]+|[^a-z0-9_\-"'=\/:.#]+$/g, ''))
+            .filter(Boolean);
+    }
+
 
     static extractTextFromMessages(messages) {
         if (!Array.isArray(messages) || messages.length === 0) return '';

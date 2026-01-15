@@ -1,6 +1,7 @@
 src/prompts/
-.DS_STORE
+.DS_Store
 .cursor/*
 .claude/*
 src_old/
 Agents/
+node_modules/

@@ -185,7 +185,8 @@ export class OpenAIProvider extends BaseProvider {
         const shouldWebSearch = (options.webSearch ?? options.getWebSearch?.() ?? false) && 
                               this.supports('web_search', model);
         const noImage = model.includes('o1-mini') || model.includes('o1-preview') || model.includes('o3-mini');
-        const systemMessage = messages.find(message => message.role === RoleEnum.system)?.parts?.[0]?.content;
+        const systemMessage = messages.find(message => message.role === RoleEnum.system)?.parts
+            ?.map(part => part.content).join('\n');
 
         if (isReasoner && options.streamWriter) {
             options.streamWriter.addThinkingCounter();
@@ -334,11 +335,15 @@ export class AnthropicProvider extends BaseProvider {
         
         const body = { 
             model, 
-            system: [formatted[0].content[0]], 
-            messages: formatted.slice(1), 
+            messages: formatted.length > 0 ? formatted.slice(1) : [], 
             max_tokens: maxTokens, 
             stream 
         };
+
+        if (formatted.length > 0 && formatted[0].content?.[0]) {
+            body.system = [formatted[0].content[0]];
+        }
+
 
         if (isThinking) {
             body.thinking = { 

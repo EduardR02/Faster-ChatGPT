@@ -1196,6 +1196,7 @@ const MINI_SEARCH_OPTIONS = Object.freeze({
     }
 });
 
+
 class ChatSearch {
     constructor(chatUI) {
         this.chatUI = chatUI;

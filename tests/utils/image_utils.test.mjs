@@ -1,13 +1,6 @@
+import { test } from 'bun:test';
 import assert from 'assert';
-import { sanitizeBase64Image, base64NeedsRepair } from '../src/js/image_utils.js';
-
-// Polyfill atob/btoa for Node
-if (typeof atob === 'undefined') {
-    globalThis.atob = (str) => Buffer.from(str, 'base64').toString('binary');
-}
-if (typeof btoa === 'undefined') {
-    globalThis.btoa = (str) => Buffer.from(str, 'binary').toString('base64');
-}
+import { sanitizeBase64Image, base64NeedsRepair } from '../../src/js/image_utils.js';
 
 const basePng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwIB/AL+X1EAAAAASUVORK5CYII=';
 
@@ -24,12 +17,37 @@ const fixtures = [
     { name: 'Wow=', input: `${basePng}Wow=`, expect: basePng },
 ];
 
-assert.strictEqual(base64NeedsRepair(basePng, 'image/png'), false, 'Clean base image should not need repair');
-assert.strictEqual(sanitizeBase64Image(basePng, 'image/png'), basePng, 'Clean base image should stay unchanged');
+test('image_utils clean base image', () => {
+    assert.strictEqual(base64NeedsRepair(basePng, 'image/png'), false, 'Clean base image should not need repair');
+    assert.strictEqual(sanitizeBase64Image(basePng, 'image/png'), basePng, 'Clean base image should stay unchanged');
+});
 
-for (const { name, input, expect } of fixtures) {
-    assert.strictEqual(base64NeedsRepair(input, 'image/png'), true, `${name}: should detect need for repair`);
-    assert.strictEqual(sanitizeBase64Image(input, 'image/png'), expect, `${name}: sanitized output should strip trailing text`);
-}
+test('image_utils repair base64 images', () => {
+    for (const { name, input, expect } of fixtures) {
+        assert.strictEqual(base64NeedsRepair(input, 'image/png'), true, `${name}: should detect need for repair`);
+        assert.strictEqual(sanitizeBase64Image(input, 'image/png'), expect, `${name}: sanitized output should strip trailing text`);
+    }
+});
 
-console.log('image_utils tests passed');
+test('image_utils handles JPEG mime type', () => {
+    // JPEG doesn't have a specific trailer like PNG
+    const jpeg = 'iVBORw0KGgo='; // Not a real JPEG, just for testing
+    assert.strictEqual(base64NeedsRepair(jpeg, 'image/jpeg'), false, 'Clean base64 JPEG should not need repair');
+});
+
+test('image_utils handles base64 with invalid characters', () => {
+    const invalid = 'iVBORw0KGgo===!!!invalid';
+    assert.strictEqual(base64NeedsRepair(invalid, 'image/png'), true);
+});
+
+test('image_utils handles empty string', () => {
+    assert.strictEqual(base64NeedsRepair('', 'image/png'), true);
+});
+
+test('image_utils handles very long corrupted base64', () => {
+    const longCorrupted = basePng + 'A'.repeat(10000) + ' trailing garbage';
+    assert.strictEqual(base64NeedsRepair(longCorrupted, 'image/png'), true);
+    const sanitized = sanitizeBase64Image(longCorrupted, 'image/png');
+    assert.strictEqual(sanitized, basePng);
+});
+

@@ -142,17 +142,26 @@ export class StreamWriterSimple {
         current.content = current.content.join('');
         
         if (current.type === 'image') {
-            this.contentDiv.classList.remove('message-content');
-            this.contentDiv.classList.add('image-content');
-            const img = document.createElement('img');
-            img.src = current.content;
-            this.contentDiv.innerHTML = '';
-            this.contentDiv.appendChild(img);
+            this.updateImageContent(current.content);
         } else {
-            this.contentDiv.innerHTML = formatContent(current.content);
-            highlightCodeBlocks(this.contentDiv);
+            this.updateTextContent(current.content);
         }
     }
+
+    updateImageContent(content) {
+        this.contentDiv.classList.remove('message-content');
+        this.contentDiv.classList.add('image-content');
+        const img = document.createElement('img');
+        img.src = content;
+        this.contentDiv.innerHTML = '';
+        this.contentDiv.appendChild(img);
+    }
+
+    updateTextContent(content) {
+        this.contentDiv.innerHTML = formatContent(content);
+        highlightCodeBlocks(this.contentDiv);
+    }
+
 
     async addFooter(footer) {
         this.stopThinkingCounter();
@@ -222,9 +231,9 @@ export class StreamWriter extends StreamWriterSimple {
                 // Finalize previous thought part
                 const previousPart = this.parts.length >= 2 ? this.parts.at(-2) : null;
                 if (previousPart) {
-                    this.contentDiv.innerHTML = formatContent(previousPart.content);
-                    highlightCodeBlocks(this.contentDiv);
+                    this.updateTextContent(previousPart.content);
                 }
+
 
                 this.switchDiv(this.parts.at(-1).type === 'thought');
             }

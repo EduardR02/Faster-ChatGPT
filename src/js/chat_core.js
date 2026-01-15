@@ -56,7 +56,11 @@ export class ChatCore {
     }
 
     getSystemPrompt() {
-        return this.currentChat.messages[0]?.contents?.[0]?.[0]?.content;
+        const firstMessage = this.currentChat.messages[0];
+        if (firstMessage?.role === 'system') {
+            return firstMessage.contents?.[0]?.[0]?.content;
+        }
+        return undefined;
     }
 
     async refreshSearchDoc() {

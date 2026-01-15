@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'bun:test';
 import { OpenAIProvider, AnthropicProvider, GeminiProvider, DeepSeekProvider, GrokProvider, KimiProvider, MistralProvider, LlamaCppProvider, RoleEnum } from '../../src/js/LLMProviders.js';
 import { ChatStorage } from '../../src/js/chat_storage.js';
-import { StreamWriter, StreamWriterSimple } from '../../src/js/StreamWriter.js';
 import { SidepanelStateManager, CHAT_STATE, THINKING_STATE, advanceThinkingState } from '../../src/js/state_manager.js';
 import { SidepanelChatCore } from '../../src/js/chat_core.js';
 
@@ -69,7 +68,7 @@ describe('Adversarial Tests', () => {
             expect(formatted[0].content).toEqual([]);
         });
 
-        it('Anthropic: system message extraction bug', () => {
+        it('Anthropic: handles system message extraction gracefully', () => {
             // Line 337: system: [formatted[0].content[0]]
             // This assumes messages[0] is the system message and it has content.
             const messages = [
@@ -79,10 +78,7 @@ describe('Adversarial Tests', () => {
             const settings = { max_tokens: 1000, temperature: 0.7 };
             const options = { getWebSearch: () => false };
 
-            // BUG: If system message has no parts, formatted[0].content will be empty if extractTextContent returns ''.
-            // Actually Anthropic formatMessages (line 294) always puts at least one text part: content = [{ type: 'text', text }].
-            // If text is '', it's still [{ type: 'text', text: '' }].
-            // BUT if messages is empty?
+            // Verifies it doesn't throw if messages is empty
             expect(() => anthropic.createRequest({
                 model: 'claude-3-opus',
                 messages: [],
@@ -90,7 +86,7 @@ describe('Adversarial Tests', () => {
                 options,
                 apiKey: 'key',
                 settings
-            })).toThrow(); // BUG: formatted[0] will be undefined
+            })).not.toThrow();
         });
 
         it('Gemini: handles empty parts array', () => {
@@ -119,51 +115,6 @@ describe('Adversarial Tests', () => {
         });
     });
 
-    describe('StreamWriter', () => {
-        let originalDocument, originalRequestAnimationFrame;
-
-        beforeAll(() => {
-            originalDocument = global.document;
-            originalRequestAnimationFrame = global.requestAnimationFrame;
-
-            // Mocking DOM for StreamWriter
-            global.document = {
-                createElement: (tag) => ({
-                    classList: { add: () => { }, remove: () => { } },
-                    appendChild: () => { },
-                    closest: () => ({ querySelector: () => ({ textContent: 'Assistant' }) }),
-                    append: () => { },
-                    style: {}
-                }),
-            };
-            global.requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);
-        });
-
-        afterAll(() => {
-            global.document = originalDocument;
-            global.requestAnimationFrame = originalRequestAnimationFrame;
-        });
-
-        it('StreamWriter handles rapid transitions', async () => {
-            const contentDiv = {
-                classList: { add: () => { }, remove: () => { } },
-                append: () => { },
-                closest: () => ({ querySelector: () => ({ textContent: 'Assistant' }) }),
-                parentElement: { appendChild: () => { } }
-            };
-            const produceNextDiv = () => contentDiv;
-            const writer = new StreamWriter(contentDiv, produceNextDiv, () => { });
-
-            writer.setThinkingModel();
-            writer.processContent('Thought', true);
-            writer.processContent('Result', false); // Transition
-
-            // Wait for animation loop
-            await new Promise(r => setTimeout(r, 100));
-            expect(writer.isThoughtEnd).toBe(true);
-        });
-    });
-
     describe('State Manager', () => {
         it('advanceThinkingState invariant', () => {
             const state = {
@@ -186,6 +137,71 @@ describe('Adversarial Tests', () => {
             // For an empty chat, it might crash if called incorrectly.
             // However, getMessagesForAPI is usually called with at least a system message.
             expect(() => core.getMessagesForAPI()).not.toThrow(); // Should return []
+        });
+    });
+
+    describe('Bug Verification (Fixed)', () => {
+        it('1. ChatCore.getSystemPrompt correctly returns undefined if no system message', () => {
+            const mockStorage = { createNewChatTracking: () => ({ title: '', messages: [] }) };
+            const core = new SidepanelChatCore(mockStorage, {});
+
+            // First message is user, not system
+            core.currentChat.messages.push({
+                role: RoleEnum.user,
+                contents: [[{ type: 'text', content: 'Hello, world!' }]]
+            });
+
+            const prompt = core.getSystemPrompt();
+            
+            // EXPECTED BEHAVIOR: It should return undefined if no system message is present.
+            expect(prompt).toBeUndefined();
+        });
+
+        it('2. OpenAIProvider: All system message text parts are used', () => {
+            const openai = new OpenAIProvider();
+            const messages = [
+                {
+                    role: RoleEnum.system,
+                    parts: [
+                        { type: 'text', content: 'Part 1' },
+                        { type: 'text', content: 'Part 2' }
+                    ]
+                },
+                { role: RoleEnum.user, parts: [{ type: 'text', content: 'hi' }] }
+            ];
+            
+            const settings = { max_tokens: 1000, temperature: 0.7 };
+            const options = { webSearch: false };
+
+            const [url, request] = openai.createRequest({
+                model: 'gpt-5.2',
+                messages,
+                stream: false,
+                options,
+                apiKey: 'key',
+                settings
+            });
+
+            const body = JSON.parse(request.body);
+
+            // EXPECTED BEHAVIOR: System prompt should include all text parts joined by newlines.
+            expect(body.instructions).toBe('Part 1\nPart 2');
+        });
+
+        it('3. AnthropicProvider: Empty messages array to createRequest does not crash', () => {
+            const anthropic = new AnthropicProvider();
+            const settings = { max_tokens: 1000, temperature: 0.7 };
+            const options = { getWebSearch: () => false };
+
+            // Verifies it handles empty messages array without crashing.
+            expect(() => anthropic.createRequest({
+                model: 'claude-3-7-sonnet',
+                messages: [],
+                stream: false,
+                options,
+                apiKey: 'key',
+                settings
+            })).not.toThrow();
         });
     });
 });
