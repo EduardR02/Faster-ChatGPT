@@ -58,9 +58,11 @@ describe('Data Integrity', () => {
         // Verify state: because it's a single transaction, nothing should be saved.
         const metaCount = await storage.dbOp(['chatMeta'], 'readonly', tx => storage.req(tx.objectStore('chatMeta').count()));
         const msgCount = await storage.dbOp(['messages'], 'readonly', tx => storage.req(tx.objectStore('messages').count()));
+        const blobCount = await storage.dbOp(['blobs'], 'readonly', tx => storage.req(tx.objectStore('blobs').count()));
 
         expect(metaCount).toBe(0);
         expect(msgCount).toBe(0);
+        expect(blobCount).toBe(0);
     });
 
     /**
@@ -141,6 +143,9 @@ describe('Data Integrity', () => {
         expect(loaded.messages).toHaveLength(4);
         expect(loaded.messages[2].contents[0][0].content).toBe('Updated Msg 2');
         expect(loaded.messages[3].contents[0][0].content).toBe('New Msg 3');
+        // Ensure role integrity
+        expect(loaded.messages[2].role).toBe('user');
+        expect(loaded.messages[3].role).toBe('assistant');
     });
 
     /**

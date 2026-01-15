@@ -48,8 +48,7 @@ describe('ChatStorage.extractTextFromMessage', () => {
       ]]
     };
     const text = ChatStorage.extractTextFromMessage(message);
-    expect(text).toContain('Let me think...');
-    expect(text).toContain('Here is my answer');
+    expect(text).toBe('Let me think... Here is my answer');
   });
   
   test('ignores image type parts', () => {
@@ -74,8 +73,7 @@ describe('ChatStorage.extractTextFromMessage', () => {
       ]
     };
     const text = ChatStorage.extractTextFromMessage(message);
-    expect(text).toContain('First response');
-    expect(text).toContain('Second response');
+    expect(text).toBe('First response Second response');
   });
   
   test('extracts from arena message - text only, no thoughts', () => {
@@ -96,8 +94,7 @@ describe('ChatStorage.extractTextFromMessage', () => {
       }
     };
     const text = ChatStorage.extractTextFromMessage(message);
-    expect(text).toContain('GPT answer');
-    expect(text).toContain('Claude answer');
+    expect(text).toBe('GPT answer Claude answer');
     expect(text).not.toContain('GPT thinking'); // Arena excludes thoughts
   });
   
@@ -132,6 +129,9 @@ describe('ChatStorage.extractTextFromMessage', () => {
     };
     expect(ChatStorage.extractTextFromMessage(nestedArena)).toContain('Model A V1');
     expect(ChatStorage.extractTextFromMessage(nestedArena)).toContain('Model A V2');
+    const text = ChatStorage.extractTextFromMessage(nestedArena);
+    expect(text).not.toContain('undefined');
+    expect(text).not.toContain('null');
   });
 
   test('handles very long text content', () => {
@@ -158,8 +158,7 @@ describe('ChatStorage.extractTextFromMessages', () => {
       { role: 'assistant', contents: [[{ type: 'text', content: 'Answer' }]] }
     ];
     const text = ChatStorage.extractTextFromMessages(messages);
-    expect(text).toContain('Question');
-    expect(text).toContain('Answer');
+    expect(text).toBe('Question Answer');
   });
   
   test('handles empty array', () => {

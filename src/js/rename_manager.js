@@ -65,7 +65,9 @@ class RenameManagerBase {
 
     prepareMessages(systemContext, userMessage) {
         const contextMatch = systemContext.match(/"""\[(.*?)\]"""\s*"""\[(.*?)\]"""/s);
-        const userContent = userMessage.contents[0].at(-1).content;
+        const lastContentVersion = userMessage.contents[0] || [];
+        const textPart = lastContentVersion.find(p => p.type === 'text') || lastContentVersion.at(-1);
+        const userContent = textPart?.content || '';
 
         const body = contextMatch
             ? [
@@ -103,7 +105,7 @@ class StorageRenameManager extends RenameManagerBase {
         const [systemMessage, userMessage] = chat.messages;
         if (systemMessage.role !== 'system' || userMessage.role !== 'user') return null;
 
-        const systemContent = systemMessage.contents[0].at(-1).content;
+        const systemContent = systemMessage.contents?.[0]?.at(-1)?.content || '';
         const messages = this.prepareMessages(systemContent, userMessage);
 
         const result = displayElement

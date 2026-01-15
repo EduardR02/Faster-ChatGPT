@@ -53,14 +53,31 @@ export function createMockWriter() {
         },
         
         processContent(content, isThought = false) {
+            if (isThought && this.isThoughtEnd) {
+                if (this.parts.length === 1 && this.parts[0].content.length === 0) {
+                    this.parts[0].type = 'thought';
+                    this.isThoughtEnd = false;
+                } else {
+                    this.parts.push({ type: 'thought', content: [] });
+                    this.isThoughtEnd = false;
+                }
+            }
+
             if (!isThought && !this.isThoughtEnd) {
                 this.isThoughtEnd = true;
-                // Finalize current thought part
-                this.parts.at(-1).content = this.parts.at(-1).content.join('');
                 this.parts.push({ type: 'text', content: [] });
             }
             this.parts.at(-1).content.push(content);
             this._processedContent.push({ content, isThought });
+        },
+        
+        getFinalContent() {
+            return this.parts
+                .filter(p => p.content.length > 0 || (p.type === 'text' && this.parts.length === 1))
+                .map(p => ({
+                    type: p.type,
+                    content: p.content.join('')
+                }));
         },
         
         addThinkingCounter() {},
@@ -100,20 +117,4 @@ export function assertThrows(fn, expectedError = null, message = '') {
     }
 }
 
-// Snapshot testing helper
-const snapshots = new Map();
 
-export function matchSnapshot(value, name) {
-    const serialized = JSON.stringify(value, null, 2);
-    if (snapshots.has(name)) {
-        const expected = snapshots.get(name);
-        if (serialized !== expected) {
-            throw new Error(`Snapshot "${name}" changed.\n\nExpected:\n${expected}\n\nActual:\n${serialized}`);
-        }
-    } else {
-        snapshots.set(name, serialized);
-        // In a real implementation, this would write to a snapshot file
-        console.log(`[Snapshot recorded: ${name}]`);
-    }
-    return true;
-}

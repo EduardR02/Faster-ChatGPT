@@ -112,6 +112,9 @@ describe('Adversarial Tests', () => {
         it('updateMessage with non-existent ID', async () => {
             const message = { role: 'user', contents: [[{ type: 'text', content: 'hi' }]] };
             await expect(storage.updateMessage(999, 0, message)).rejects.toThrow();
+            // Verify DB is still empty
+            const count = await storage.dbOp(['chatMeta'], 'readonly', tx => storage.req(tx.objectStore('chatMeta').count()));
+            expect(count).toBe(0);
         });
     });
 
@@ -186,6 +189,7 @@ describe('Adversarial Tests', () => {
 
             // EXPECTED BEHAVIOR: System prompt should include all text parts joined by newlines.
             expect(body.instructions).toBe('Part 1\nPart 2');
+            expect(body.model).toBe('gpt-5.2');
         });
 
         it('3. AnthropicProvider: Empty messages array to createRequest does not crash', () => {

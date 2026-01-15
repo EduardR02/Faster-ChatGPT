@@ -23,7 +23,7 @@ describe('Full chat lifecycle', () => {
       { role: 'user', contents: [[{ type: 'text', content: 'Hello' }]] }
     ]);
     
-    expect(result.chatId).toBeDefined();
+    expect(result.chatId).toBeGreaterThan(0);
     expect(result.title).toBe('Test Chat');
     
     // 2. Add more messages

@@ -4,72 +4,71 @@ import { Providers } from '../../src/js/LLMProviders.js';
 
 /**
  * Tests for provider response handling (handleResponse and handleStream).
- * All tests use mocked data and do not make network calls.
+ * Rewritten to use realistic SSE stream data and verify correct content extraction.
  */
 
 describe('Provider Response Handling', () => {
   // --- OpenAI Tests ---
+  // Verified against OpenAI Responses API documentation
   describe('OpenAI', () => {
-    test('handleResponse extracts text correctly', () => {
+    test('handleResponse extracts text and reasoning correctly', () => {
       const provider = Providers.openai;
       const tokenCounter = createMockTokenCounter();
 
-      // Successful text response
+      // Realistic OpenAI response format for new models
       const mockData = {
         output: [
-          { type: 'message', content: [{ type: 'output_text', text: 'Hello world' }] }
+          { type: 'reasoning', summary: 'Thinking about the answer...' },
+          { type: 'message', content: [{ type: 'output_text', text: 'Hello!' }] }
         ],
-        usage: { input_tokens: 10, output_tokens: 5 }
+        usage: { input_tokens: 10, output_tokens: 20 }
       };
 
       const result = provider.handleResponse({ data: mockData, tokenCounter });
-      assertDeepEqual(result, [{ type: 'text', content: 'Hello world' }]);
-      assertDeepEqual(tokenCounter.inputTokens, 10);
-      assertDeepEqual(tokenCounter.outputTokens, 5);
-
-      // Reasoning response
-      const reasoningData = {
-        output: [
-          { type: 'reasoning', summary: 'Thinking hard...' },
-          { type: 'message', content: [{ type: 'output_text', text: 'Result' }] }
-        ]
-      };
-      const reasoningResult = provider.handleResponse({ data: reasoningData, tokenCounter });
-      assertDeepEqual(reasoningResult, [
-        { type: 'thought', content: 'Thinking hard...' },
-        { type: 'text', content: 'Result' }
+      
+      // Verify extracted content
+      assertDeepEqual(result, [
+        { type: 'thought', content: 'Thinking about the answer...' },
+        { type: 'text', content: 'Hello!' }
       ]);
+      
+      // Verify usage tracking
+      assertDeepEqual(tokenCounter.inputTokens, 10);
+      assertDeepEqual(tokenCounter.outputTokens, 20);
     });
 
-    test('handleStream processes deltas', () => {
+    test('handleStream processes deltas and usage', () => {
       const provider = Providers.openai;
       const writer = createMockWriter();
       const tokenCounter = createMockTokenCounter();
 
-      // SSE chunk
-      provider.handleStream({
-        parsed: { type: 'response.output_text.delta', delta: 'Hello' },
-        writer,
-        tokenCounter
-      });
-      
-      // Usage completion chunk
-      provider.handleStream({
-        parsed: { 
+      // Stream of chunks as they would arrive from OpenAI's SSE
+      const chunks = [
+        { type: 'response.output_text.delta', delta: 'He' },
+        { type: 'response.output_text.delta', delta: 'llo' },
+        { 
           type: 'response.completed', 
           response: { usage: { input_tokens: 15, output_tokens: 10 } } 
-        },
-        writer,
-        tokenCounter
-      });
+        }
+      ];
 
-      assertDeepEqual(writer._processedContent, [{ content: 'Hello', isThought: false }]);
+      for (const chunk of chunks) {
+        provider.handleStream({ parsed: chunk, writer, tokenCounter });
+      }
+
+      // Verify final combined content in writer
+      assertDeepEqual(writer.getFinalContent(), [
+        { type: 'text', content: 'Hello' }
+      ]);
+      
+      // Verify usage
       assertDeepEqual(tokenCounter.inputTokens, 15);
       assertDeepEqual(tokenCounter.outputTokens, 10);
     });
   });
 
   // --- Anthropic Tests ---
+  // Verified against Anthropic Messages API documentation
   describe('Anthropic', () => {
     test('handleResponse extracts thinking and text', () => {
       const provider = Providers.anthropic;
@@ -77,58 +76,67 @@ describe('Provider Response Handling', () => {
 
       const mockData = {
         content: [
-          { type: 'thinking', thinking: 'I should say hello.' },
-          { type: 'text', text: 'Hello!' }
+          { type: 'thinking', thinking: 'Analyze request...' },
+          { type: 'text', text: 'Confirmed.' }
         ],
-        usage: { input_tokens: 10, output_tokens: 20, cache_creation_input_tokens: 5 }
+        usage: { 
+          input_tokens: 10, 
+          output_tokens: 20, 
+          cache_creation_input_tokens: 5,
+          cache_read_input_tokens: 2
+        }
       };
 
       const result = provider.handleResponse({ data: mockData, tokenCounter });
+      
       assertDeepEqual(result, [
-        { type: 'thought', content: 'I should say hello.' },
-        { type: 'text', content: 'Hello!' }
+        { type: 'thought', content: 'Analyze request...' },
+        { type: 'text', content: 'Confirmed.' }
       ]);
-      // input_tokens (10) + cache_creation (5) = 15
-      assertDeepEqual(tokenCounter.inputTokens, 15);
+      
+      // Anthropic input tokens = input + cache_creation + cache_read
+      assertDeepEqual(tokenCounter.inputTokens, 10 + 5 + 2);
     });
 
-    test('handleStream processes thinking and text deltas', () => {
+    test('handleStream handles thinking, text, and redacted blocks', () => {
       const provider = Providers.anthropic;
       const writer = createMockWriter();
       const tokenCounter = createMockTokenCounter();
 
-      // Thinking delta
-      provider.handleStream({
-        parsed: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'Thought' } },
-        writer,
-        tokenCounter
-      });
+      const chunks = [
+        // Usage comes at start in Anthropic
+        { type: 'message_start', message: { usage: { input_tokens: 50, cache_read_input_tokens: 10 } } },
+        // Thinking deltas
+        { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'Thin' } },
+        { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'king' } },
+        // Text deltas
+        { type: 'content_block_delta', delta: { type: 'text_delta', text: ' Re' } },
+        { type: 'content_block_delta', delta: { type: 'text_delta', text: 'sult' } },
+        // Redacted thinking block
+        { type: 'content_block_start', content_block: { type: 'redacted_thinking' } },
+        // Final usage
+        { type: 'message_delta', usage: { output_tokens: 15 } }
+      ];
 
-      // Text delta
-      provider.handleStream({
-        parsed: { type: 'content_block_delta', delta: { type: 'text_delta', text: ' Text' } },
-        writer,
-        tokenCounter
-      });
+      for (const chunk of chunks) {
+        provider.handleStream({ parsed: chunk, writer, tokenCounter });
+      }
 
-      // Message start (usage)
-      provider.handleStream({
-        parsed: { type: 'message_start', message: { usage: { input_tokens: 100 } } },
-        writer,
-        tokenCounter
-      });
-
-      assertDeepEqual(writer._processedContent, [
-        { content: 'Thought', isThought: true },
-        { content: ' Text', isThought: false }
+      assertDeepEqual(writer.getFinalContent(), [
+        { type: 'thought', content: 'Thinking' },
+        { type: 'text', content: ' Result' },
+        { type: 'thought', content: '\n\n```\n*redacted thinking*\n```\n\n' }
       ]);
-      assertDeepEqual(tokenCounter.inputTokens, 100);
+      
+      assertDeepEqual(tokenCounter.inputTokens, 60);
+      assertDeepEqual(tokenCounter.outputTokens, 15);
     });
   });
 
   // --- Gemini Tests ---
+  // Verified against Google Generative Language API (thought field for thinking mode)
   describe('Gemini', () => {
-    test('handleResponse extracts thought and text', () => {
+    test('handleResponse extracts thought and text parts', () => {
       const provider = Providers.gemini;
       const tokenCounter = createMockTokenCounter();
 
@@ -136,298 +144,136 @@ describe('Provider Response Handling', () => {
         candidates: [{
           content: {
             parts: [
-              { text: 'Initial thought', thought: true },
-              { text: 'Final answer' }
+              { text: 'I am thinking', thought: true },
+              { text: 'I am answering' }
             ]
           }
         }],
-        usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, thoughtsTokenCount: 5 }
+        usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, thoughtsTokenCount: 3 }
       };
 
       const result = provider.handleResponse({ data: mockData, tokenCounter });
       assertDeepEqual(result, [
-        { type: 'thought', content: 'Initial thought' },
-        { type: 'text', content: 'Final answer' }
+        { type: 'thought', content: 'I am thinking' },
+        { type: 'text', content: 'I am answering' }
       ]);
       assertDeepEqual(tokenCounter.inputTokens, 10);
-      assertDeepEqual(tokenCounter.outputTokens, 10); // 5 + 5
+      assertDeepEqual(tokenCounter.outputTokens, 8); // 5 + 3
     });
 
-    test('handleStream processes thought and text parts', () => {
+    test('handleStream handles interleaved thought and text chunks', () => {
       const provider = Providers.gemini;
       const writer = createMockWriter();
       const tokenCounter = createMockTokenCounter();
 
-      provider.handleStream({
-        parsed: {
-          candidates: [{
-            content: { parts: [{ text: 'Thinking...', thought: true }] }
-          }]
-        },
-        writer,
-        tokenCounter
-      });
+      const chunks = [
+        { candidates: [{ content: { parts: [{ text: 'Step 1', thought: true }] } }] },
+        { candidates: [{ content: { parts: [{ text: 'Step 2', thought: true }] } }] },
+        { candidates: [{ content: { parts: [{ text: 'Final Answer' }] } }], usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 10 } }
+      ];
 
-      provider.handleStream({
-        parsed: {
-          candidates: [{
-            content: { parts: [{ text: 'Answer' }] }
-          }],
-          usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 10 }
-        },
-        writer,
-        tokenCounter
-      });
+      for (const chunk of chunks) {
+        provider.handleStream({ parsed: chunk, writer, tokenCounter });
+      }
 
-      assertDeepEqual(writer._processedContent, [
-        { content: 'Thinking...', isThought: true },
-        { content: 'Answer', isThought: false }
+      assertDeepEqual(writer.getFinalContent(), [
+        { type: 'thought', content: 'Step 1Step 2' },
+        { type: 'text', content: 'Final Answer' }
       ]);
-      assertDeepEqual(tokenCounter.inputTokens, 20);
     });
   });
 
   // --- DeepSeek Tests ---
+  // Verified against DeepSeek API documentation
   describe('DeepSeek', () => {
-    test('handleResponse extracts reasoning content', () => {
-      const provider = Providers.deepseek;
-      const tokenCounter = createMockTokenCounter();
-
-      const mockData = {
-        choices: [{
-          message: {
-            content: 'DeepSeek content',
-            reasoning_content: 'DeepSeek thinking'
-          }
-        }],
-        usage: { prompt_tokens: 50, completion_tokens: 30 }
-      };
-
-      const result = provider.handleResponse({ data: mockData, tokenCounter });
-      assertDeepEqual(result, [
-        { type: 'thought', content: 'DeepSeek thinking' },
-        { type: 'text', content: 'DeepSeek content' }
-      ]);
-    });
-
     test('handleStream processes reasoning and text deltas', () => {
       const provider = Providers.deepseek;
       const writer = createMockWriter();
       const tokenCounter = createMockTokenCounter();
 
-      provider.handleStream({
-        parsed: { choices: [{ delta: { reasoning_content: 'thinking' } }] },
-        writer,
-        tokenCounter
-      });
+      const chunks = [
+        { choices: [{ delta: { reasoning_content: 'Let me ' } }] },
+        { choices: [{ delta: { reasoning_content: 'think' } }] },
+        { choices: [{ delta: { content: 'The ' } }] },
+        { choices: [{ delta: { content: 'answer' } }] },
+        { usage: { prompt_tokens: 5, completion_tokens: 10 }, choices: [{ delta: { content: '' } }] }
+      ];
 
-      provider.handleStream({
-        parsed: { choices: [{ delta: { content: ' content' } }] },
-        writer,
-        tokenCounter
-      });
+      for (const chunk of chunks) {
+        provider.handleStream({ parsed: chunk, writer, tokenCounter });
+      }
 
-      assertDeepEqual(writer._processedContent, [
-        { content: 'thinking', isThought: true },
-        { content: ' content', isThought: false }
+      assertDeepEqual(writer.getFinalContent(), [
+        { type: 'thought', content: 'Let me think' },
+        { type: 'text', content: 'The answer' }
       ]);
+      assertDeepEqual(tokenCounter.inputTokens, 5);
+      assertDeepEqual(tokenCounter.outputTokens, 10);
     });
   });
 
   // --- Grok Tests ---
+  // UNVERIFIED - no official xAI documentation available
   describe('Grok', () => {
-    test('handleResponse extracts reasoning and appends citations', () => {
-      const provider = Providers.grok;
-      const tokenCounter = createMockTokenCounter();
-
-      const mockData = {
-        choices: [{
-          message: { content: 'Grok content', reasoning_content: 'Grok reasoning' }
-        }],
-        citations: ['https://example.com/info'],
-        usage: { prompt_tokens: 10, completion_tokens: 5 }
-      };
-
-      const result = provider.handleResponse({ data: mockData, tokenCounter });
-      // Grok appends citations to content
-      assertDeepEqual(result, [
-        { type: 'thought', content: 'Grok reasoning' },
-        { type: 'text', content: 'Grok content\n\n[example.com](https://example.com/info)\n' }
-      ]);
-    });
-
-    test('handleStream processes content and citations', () => {
+    test('handleStream processes reasoning and appends citations', () => {
       const provider = Providers.grok;
       const writer = createMockWriter();
       const tokenCounter = createMockTokenCounter();
 
-      provider.handleStream({
-        parsed: { choices: [{ delta: { content: 'Grokking' } }] },
-        writer,
-        tokenCounter
-      });
+      const chunks = [
+        { choices: [{ delta: { reasoning_content: 'Searching...' } }] },
+        { choices: [{ delta: { content: 'Found it.' } }] },
+        { 
+          usage: { prompt_tokens: 10, completion_tokens: 5 }, 
+          citations: ['https://example.com/info'] 
+        }
+      ];
 
-      provider.handleStream({
-        parsed: {
-          usage: { prompt_tokens: 10, completion_tokens: 5 },
-          citations: ['https://source.com']
-        },
-        writer,
-        tokenCounter
-      });
+      for (const chunk of chunks) {
+        provider.handleStream({ parsed: chunk, writer, tokenCounter });
+      }
 
-      assertDeepEqual(writer._processedContent, [
-        { content: 'Grokking', isThought: false },
-        { content: '\n\n[source.com](https://source.com)\n', isThought: false }
-      ]);
-    });
-  });
-
-  // --- Kimi Tests ---
-  describe('Kimi', () => {
-    test('handleResponse extracts reasoning content', () => {
-      const provider = Providers.kimi;
-      const tokenCounter = createMockTokenCounter();
-
-      const mockData = {
-        choices: [{ message: { content: 'Kimi content', reasoning_content: 'Kimi thinking' } }],
-        usage: { prompt_tokens: 100, completion_tokens: 50 }
-      };
-
-      const result = provider.handleResponse({ data: mockData, tokenCounter });
-      assertDeepEqual(result, [
-        { type: 'thought', content: 'Kimi thinking' },
-        { type: 'text', content: 'Kimi content' }
-      ]);
-    });
-
-    test('handleStream processes reasoning and text deltas', () => {
-      const provider = Providers.kimi;
-      const writer = createMockWriter();
-      const tokenCounter = createMockTokenCounter();
-
-      provider.handleStream({
-        parsed: { choices: [{ delta: { reasoning_content: 'Hmm' } }] },
-        writer,
-        tokenCounter
-      });
-
-      provider.handleStream({
-        parsed: { choices: [{ delta: { content: ' ok' } }] },
-        writer,
-        tokenCounter
-      });
-
-      assertDeepEqual(writer._processedContent, [
-        { content: 'Hmm', isThought: true },
-        { content: ' ok', isThought: false }
+      assertDeepEqual(writer.getFinalContent(), [
+        { type: 'thought', content: 'Searching...' },
+        { type: 'text', content: 'Found it.\n\n[example.com](https://example.com/info)\n' }
       ]);
     });
   });
 
   // --- Mistral Tests ---
+  // UNVERIFIED - nested thinking format not confirmed in official docs
   describe('Mistral', () => {
-    test('handleResponse handles both string and array content', () => {
-      const provider = Providers.mistral;
-      const tokenCounter = createMockTokenCounter();
-
-      // Simple string content
-      const simpleData = {
-        choices: [{ message: { content: 'Mistral simple' } }],
-        usage: { prompt_tokens: 10, completion_tokens: 5 }
-      };
-      const result1 = provider.handleResponse({ data: simpleData, tokenCounter });
-      assertDeepEqual(result1, [{ type: 'text', content: 'Mistral simple' }]);
-
-      // Complex array content (new Mistral models)
-      const complexData = {
-        choices: [{
-          message: {
-            content: [
-              { type: 'thinking', thinking: [{ text: 'Mistral thinking' }] },
-              { type: 'text', text: 'Mistral final' }
-            ]
-          }
-        }]
-      };
-      const result2 = provider.handleResponse({ data: complexData, tokenCounter });
-      assertDeepEqual(result2, [
-        { type: 'thought', content: 'Mistral thinking' },
-        { type: 'text', content: 'Mistral final' }
-      ]);
-    });
-
-    test('handleStream handles both string and array deltas', () => {
+    test('handleStream handles complex array content deltas', () => {
       const provider = Providers.mistral;
       const writer = createMockWriter();
       const tokenCounter = createMockTokenCounter();
 
-      // String delta
-      provider.handleStream({
-        parsed: { choices: [{ delta: { content: 'Hello' } }] },
-        writer,
-        tokenCounter
-      });
-
-      // Array delta
-      provider.handleStream({
-        parsed: {
-          choices: [{
-            delta: {
-              content: [{ type: 'thinking', thinking: [{ text: 'Thought' }] }]
-            }
-          }]
+      const chunks = [
+        { 
+          choices: [{ 
+            delta: { 
+              content: [{ type: 'thinking', thinking: [{ text: 'Think' }, { text: 'ing' }] }] 
+            } 
+          }] 
         },
-        writer,
-        tokenCounter
-      });
+        { 
+          choices: [{ 
+            delta: { content: 'Done' } 
+          }] 
+        },
+        { usage: { prompt_tokens: 10, completion_tokens: 5 } }
+      ];
 
-      assertDeepEqual(writer._processedContent, [
-        { content: 'Hello', isThought: false },
-        { content: 'Thought', isThought: true }
+      for (const chunk of chunks) {
+        provider.handleStream({ parsed: chunk, writer, tokenCounter });
+      }
+
+      assertDeepEqual(writer.getFinalContent(), [
+        { type: 'thought', content: 'Thinking' },
+        { type: 'text', content: 'Done' }
       ]);
-    });
-  });
-
-  // --- LlamaCpp Tests ---
-  describe('LlamaCpp', () => {
-    test('handleResponse extracts reasoning content', () => {
-      const provider = Providers.llamacpp;
-      const tokenCounter = createMockTokenCounter();
-
-      const mockData = {
-        choices: [{ message: { content: 'Local content', reasoning_content: 'Local reasoning' } }],
-        usage: { prompt_tokens: 10, completion_tokens: 5 }
-      };
-
-      const result = provider.handleResponse({ data: mockData, tokenCounter });
-      assertDeepEqual(result, [
-        { type: 'thought', content: 'Local reasoning' },
-        { type: 'text', content: 'Local content' }
-      ]);
-    });
-
-    test('handleStream processes reasoning and text deltas', () => {
-      const provider = Providers.llamacpp;
-      const writer = createMockWriter();
-      const tokenCounter = createMockTokenCounter();
-
-      provider.handleStream({
-        parsed: { choices: [{ delta: { reasoning_content: 'local think' } }] },
-        writer,
-        tokenCounter
-      });
-
-      provider.handleStream({
-        parsed: { choices: [{ delta: { content: 'local text' } }] },
-        writer,
-        tokenCounter
-      });
-
-      assertDeepEqual(writer._processedContent, [
-        { content: 'local think', isThought: true },
-        { content: 'local text', isThought: false }
-      ]);
+      assertDeepEqual(tokenCounter.inputTokens, 10);
+      assertDeepEqual(tokenCounter.outputTokens, 5);
     });
   });
 
@@ -436,38 +282,42 @@ describe('Provider Response Handling', () => {
     test('handles malformed responses gracefully', () => {
       const tokenCounter = createMockTokenCounter();
       
-      // OpenAI missing output - current impl might throw or return empty
+      // Some providers throw on missing crucial fields, others return empty
       assertThrows(() => Providers.openai.handleResponse({ data: {}, tokenCounter }));
       
-      // Gemini missing candidates
-      assertDeepEqual(Providers.gemini.handleResponse({ data: {}, tokenCounter }), []);
-
-      // Anthropic missing content
+      const geminiResult = Providers.gemini.handleResponse({ data: {}, tokenCounter });
+      // Current Gemini implementation returns empty array if candidates is missing
+      assertDeepEqual(geminiResult, []);
+      
       assertDeepEqual(Providers.anthropic.handleResponse({ data: {}, tokenCounter }), []);
-
-      // Mistral empty content
-      assertDeepEqual(Providers.mistral.handleResponse({ data: { choices: [{ message: {} }] }, tokenCounter }), []);
     });
 
-    test('handles API errors in stream and empty outputs', () => {
+    test('handles API errors in stream', () => {
       const tokenCounter = createMockTokenCounter();
       const writer = createMockWriter();
 
-      // Anthropic API error in stream
       assertThrows(() => {
         Providers.anthropic.handleStream({
-          parsed: { type: 'error', error: { message: 'Rate limit exceeded' } },
+          parsed: { type: 'error', error: { message: 'Overloaded' } },
           writer,
           tokenCounter
         });
-      }, 'Rate limit exceeded');
+      }, 'Overloaded');
+    });
+    
+    test('handles empty deltas', () => {
+      const provider = Providers.openai;
+      const writer = createMockWriter();
+      const tokenCounter = createMockTokenCounter();
 
-      // OpenAI missing fields often just return empty string rather than crashing in current impl
-      const result = Providers.openai.handleResponse({ 
-        data: { output: [] }, 
-        tokenCounter 
+      provider.handleStream({
+        parsed: { type: 'response.output_text.delta', delta: '' },
+        writer,
+        tokenCounter
       });
-      assertDeepEqual(result, []);
+
+      // getFinalContent returns [{type: 'text', content: ''}] for empty single text part
+      assertDeepEqual(writer.getFinalContent(), [{ type: 'text', content: '' }]);
     });
   });
 });

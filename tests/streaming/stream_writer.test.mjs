@@ -136,7 +136,7 @@ describe('StreamWriter (Smooth)', () => {
         // Wait for animation frame
         await new Promise(r => setTimeout(r, 50));
         
-        expect(appendSpy).toHaveBeenCalled();
+        expect(appendSpy).toHaveBeenCalledWith(expect.stringContaining('Fast'));
         expect(writer.isProcessing).toBe(false);
     });
 

@@ -94,10 +94,6 @@ describe('ApiManager', () => {
         };
     });
 
-    test('can instantiate ApiManager', async () => {
-        expect(apiManager).toBeDefined();
-    });
-
     describe('Request Orchestration', () => {
         it('calls the correct provider and passes right parameters', async () => {
             mockResponse = createJsonResponse({
@@ -168,8 +164,19 @@ describe('ApiManager', () => {
                 await realFetchWithTimeout.call(apiManager, 'http://test', {}, 5000, { prefix: 'Fail' });
 
                 expect(capturedTimeout).toBe(5000);
-                expect(capturedSignal).toBeDefined();
-                expect(capturedSignal instanceof AbortSignal).toBe(true);
+                expect(capturedSignal).toBeInstanceOf(AbortSignal);
+                expect(capturedSignal.aborted).toBe(false);
+                
+                // Trigger timeout and check if signal is aborted
+                const originalClearTimeout = globalThis.clearTimeout;
+                let cleared = false;
+                globalThis.clearTimeout = (id) => {
+                    if (id === 123) cleared = true;
+                };
+                
+                // Simulate timeout manually since we mocked setTimeout
+                // This is a bit tricky, but we want to see if abort() is called.
+                // In the real code: const timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
             } finally {
                 globalThis.fetch = originalFetch;
                 globalThis.setTimeout = originalSetTimeout;
@@ -182,7 +189,11 @@ describe('ApiManager', () => {
             mockResponse = createJsonResponse({});
             const streamWriter = createMockWriter();
             
-            try { await apiManager.callApi('gpt-5.2', [], createMockTokenCounter(), streamWriter); } catch(e){}
+            try {
+                await apiManager.callApi('gpt-5.2', [], createMockTokenCounter(), streamWriter);
+            } catch (e) {
+                // Expected to fail if mock response is empty/invalid but we just want to check fetch calls
+            }
 
             const body = JSON.parse(fetchCalls[0].options.body);
             expect(body.stream).toBe(true);
@@ -201,7 +212,7 @@ describe('ApiManager', () => {
 
             await apiManager.callApi('gpt-5.2', [], tokenCounter, streamWriter);
 
-            expect(streamWriter._processedContent.length).toBeGreaterThan(0);
+            expect(streamWriter._processedContent.length).toBe(2);
             expect(streamWriter._processedContent[0].content).toBe('Hel');
             expect(streamWriter._processedContent[1].content).toBe('lo');
         });

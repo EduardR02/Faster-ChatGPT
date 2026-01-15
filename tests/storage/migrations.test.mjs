@@ -11,6 +11,8 @@ describe('Migrations.transformMessages', () => {
     const transformed = Migrations.transformMessages(v1Messages);
     
     expect(transformed[0].contents).toEqual([[{ type: 'text', content: 'Hello' }]]);
+    expect(transformed[0].role).toBe('user');
+    expect(transformed[1].role).toBe('assistant');
     expect(transformed[1].contents[0][0].content).toBe('Hi there');
     expect(transformed[1].contents[0][0].model).toBe('gpt-4');
   });
@@ -51,7 +53,12 @@ describe('Migrations.transformMessages', () => {
       [{ type: 'text', content: 'Response A1' }],
       [{ type: 'text', content: 'Response A2' }]
     ]);
+    expect(transformed.responses.model_b.messages).toEqual([
+      [{ type: 'text', content: 'Response B' }]
+    ]);
     expect(transformed.choice).toBe('model_a');
+    expect(transformed.continued_with).toBe('model_a');
+    expect(transformed.timestamp).toBe(12345);
   });
   
   test('preserves images and files', () => {

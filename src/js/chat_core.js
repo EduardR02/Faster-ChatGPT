@@ -353,9 +353,11 @@ export class SidepanelChatCore extends ChatCore {
     getMessagesForAPI(modelId = null) {
         const messages = this.currentChat.messages.map(message => {
             if (message.role === 'user' || message.role === 'system') {
+                const lastContentVersion = message.contents.at(-1) || [];
+                const textPart = lastContentVersion.find(p => p.type === 'text') || lastContentVersion.at(-1);
                 const normalized = { 
                     role: message.role, 
-                    parts: [{ type: 'text', content: message.contents.at(-1).at(-1).content }] 
+                    parts: [{ type: 'text', content: textPart?.content || '' }] 
                 };
                 if (message.images) {
                     normalized.images = message.images;

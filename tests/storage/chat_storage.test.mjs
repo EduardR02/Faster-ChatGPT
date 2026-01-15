@@ -31,6 +31,9 @@ describe('ChatStorage', () => {
     
     expect(loaded.title).toBe('Test Chat');
     expect(loaded.messages).toHaveLength(3);
+    expect(loaded.messages[0].role).toBe('system');
+    expect(loaded.messages[1].role).toBe('user');
+    expect(loaded.messages[2].role).toBe('assistant');
     expect(loaded.messages[0].contents).toEqual(originalMessages[0].contents);
     expect(loaded.messages[1].contents).toEqual(originalMessages[1].contents);
     expect(loaded.messages[2].contents).toEqual(originalMessages[2].contents);
@@ -106,8 +109,11 @@ describe('ChatStorage', () => {
     
     const loaded = await storage.loadChat(result.chatId);
     expect(loaded.messages[1].responses.model_a.name).toBe('gpt-4');
+    expect(loaded.messages[1].responses.model_b.name).toBe('claude');
     expect(loaded.messages[1].responses.model_a.messages[0][0].content).toBe('Response A');
+    expect(loaded.messages[1].responses.model_b.messages[0][0].content).toBe('Response B');
     expect(loaded.messages[1].choice).toBe('model_a');
+    expect(loaded.messages[1].continued_with).toBe('model_a');
   });
 
   test('updateMessage preserves other messages', async () => {

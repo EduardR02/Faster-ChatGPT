@@ -9,7 +9,8 @@ import {
   initializeThinkingStates,
   REASONING_EFFORT_OPTIONS,
   IMAGE_ASPECT_OPTIONS,
-  SidepanelStateManager
+  SidepanelStateManager,
+  SettingsStateManager
 } from '../../src/js/state_manager.js';
 
 // Mock chrome API
@@ -176,7 +177,7 @@ describe('SidepanelStateManager - State Machine Transitions', () => {
       
       expect(manager.isChatIncognito()).toBe(true);
       expect(manager.shouldSave).toBe(false);
-      expect(resetSpy).toHaveBeenCalled();
+      expect(resetSpy).toHaveBeenCalledWith();
     });
   });
 
@@ -224,6 +225,50 @@ describe('SidepanelStateManager - State Machine Transitions', () => {
       expect(manager.shouldSave).toBe(true);
       expect(manager.isArenaModeActive).toBe(false);
       expect(manager.getThinkingState()).toBe(THINKING_STATE.INACTIVE);
+    });
+  });
+
+  describe('Model Deletion Fallback', () => {
+    let settingsManager;
+
+    beforeEach(() => {
+      settingsManager = new SettingsStateManager();
+    });
+
+    test('falls back to another model if current is deleted', () => {
+      settingsManager.state.settings.models = {
+        openai: { 'gpt-4o': {} },
+        anthropic: { 'claude-3-opus': {} }
+      };
+      settingsManager.state.settings.current_model = 'gpt-4o';
+      
+      settingsManager.removeModel('gpt-4o');
+      
+      expect(settingsManager.state.settings.current_model).toBe('claude-3-opus');
+      expect(settingsManager.state.settings.models.openai['gpt-4o']).toBeUndefined();
+    });
+
+    test('clears auto_rename settings if its model is deleted', () => {
+      settingsManager.state.settings.models = { openai: { 'gpt-4o': {} } };
+      settingsManager.state.settings.auto_rename_model = 'gpt-4o';
+      settingsManager.state.settings.auto_rename = true;
+      
+      settingsManager.removeModel('gpt-4o');
+      
+      expect(settingsManager.state.settings.auto_rename_model).toBeNull();
+      expect(settingsManager.state.settings.auto_rename).toBe(false);
+    });
+
+    test('updates arena_models if one is deleted', () => {
+      settingsManager.state.settings.models = { 
+        openai: { 'gpt-4o': {} },
+        anthropic: { 'claude-3-opus': {} }
+      };
+      settingsManager.state.settings.arena_models = ['gpt-4o', 'claude-3-opus', 'other'];
+      
+      settingsManager.removeModel('gpt-4o');
+      
+      expect(settingsManager.state.settings.arena_models).toEqual(['claude-3-opus', 'other']);
     });
   });
 });
