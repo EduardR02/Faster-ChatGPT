@@ -141,45 +141,82 @@ describe('ApiManager', () => {
     });
 
     describe('Timeout handling', () => {
-        it('uses AbortController with correct timeout', async () => {
+        it('uses AbortController with correct timeout and aborts on timeout', async () => {
             const originalFetch = globalThis.fetch;
             const originalSetTimeout = globalThis.setTimeout;
+            const originalClearTimeout = globalThis.clearTimeout;
             
-            let capturedTimeout = null;
+            let capturedTimeoutMs = null;
             let capturedSignal = null;
+            let abortCalled = false;
+            let clearTimeoutCalledWith = null;
+            let timeoutFn = null;
 
-            globalThis.setTimeout = (fn, ms) => {
-                capturedTimeout = ms;
-                return 123;
+            // Mock AbortController to track abort call
+            const originalAbortController = globalThis.AbortController;
+            globalThis.AbortController = class extends originalAbortController {
+                constructor() {
+                    super();
+                    const originalAbort = this.abort.bind(this);
+                    this.abort = (reason) => {
+                        abortCalled = true;
+                        originalAbort(reason);
+                    };
+                }
             };
 
-            globalThis.fetch = async (url, options) => {
-                capturedSignal = options.signal;
-                return createJsonResponse({});
+            globalThis.setTimeout = (fn, ms) => {
+                capturedTimeoutMs = ms;
+                timeoutFn = fn;
+                return 999;
+            };
+
+            globalThis.clearTimeout = (id) => {
+                clearTimeoutCalledWith = id;
             };
 
             try {
-                // Restore real _fetchWithTimeout for this test
                 const realFetchWithTimeout = ApiManager.prototype._fetchWithTimeout;
-                await realFetchWithTimeout.call(apiManager, 'http://test', {}, 5000, { prefix: 'Fail' });
-
-                expect(capturedTimeout).toBe(5000);
-                expect(capturedSignal).toBeInstanceOf(AbortSignal);
-                expect(capturedSignal.aborted).toBe(false);
                 
-                // Trigger timeout and check if signal is aborted
-                const originalClearTimeout = globalThis.clearTimeout;
-                let cleared = false;
-                globalThis.clearTimeout = (id) => {
-                    if (id === 123) cleared = true;
+                // 1. Test actual timeout
+                globalThis.fetch = async (url, options) => {
+                    capturedSignal = options.signal;
+                    return new Promise((resolve, reject) => {
+                        if (options.signal.aborted) {
+                            const err = new Error('AbortError');
+                            err.name = 'AbortError';
+                            reject(err);
+                        }
+                        options.signal.addEventListener('abort', () => {
+                            const err = new Error('AbortError');
+                            err.name = 'AbortError';
+                            reject(err);
+                        });
+                    });
                 };
+
+                const timeoutPromise = realFetchWithTimeout.call(apiManager, 'http://test', {}, 5000, { prefix: 'Fail' });
+                if (timeoutFn) timeoutFn(); // Trigger timeout
+
+                await expect(timeoutPromise).rejects.toThrow(/Fail/);
+                expect(capturedTimeoutMs).toBe(5000);
+                expect(abortCalled).toBe(true);
+                expect(capturedSignal.aborted).toBe(true);
+
+                // 2. Test success clears timeout
+                abortCalled = false;
+                clearTimeoutCalledWith = null;
+                globalThis.fetch = async () => createJsonResponse({ ok: true });
                 
-                // Simulate timeout manually since we mocked setTimeout
-                // This is a bit tricky, but we want to see if abort() is called.
-                // In the real code: const timeoutId = setTimeout(() => abortController.abort(), timeoutMs);
+                await realFetchWithTimeout.call(apiManager, 'http://test', {}, 5000, { prefix: 'Fail' });
+                expect(clearTimeoutCalledWith).toBe(999);
+                expect(abortCalled).toBe(false);
+
             } finally {
                 globalThis.fetch = originalFetch;
                 globalThis.setTimeout = originalSetTimeout;
+                globalThis.clearTimeout = originalClearTimeout;
+                globalThis.AbortController = originalAbortController;
             }
         });
     });

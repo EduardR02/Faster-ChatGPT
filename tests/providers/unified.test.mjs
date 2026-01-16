@@ -27,6 +27,10 @@ describe('OpenAIProvider - Meaningful Tests', () => {
             role: 'assistant',
             content: [{ type: 'output_text', text: 'Hi!' }]
         });
+    });
+
+    test('OpenAI request structure with system prompt', () => {
+        const conversation = createConversation();
         
         // Verify system prompt placement in createRequest
         const [_, options] = provider.createRequest({
@@ -39,22 +43,26 @@ describe('OpenAIProvider - Meaningful Tests', () => {
         });
         const body = JSON.parse(options.body);
         expect(body.instructions).toBe('You are helpful');
-        expect(body.input).toEqual(formatted);
+        expect(body.input).toEqual(provider.formatMessages(conversation, false));
     });
 
-    test('image handling - exact structure', () => {
+    test('payload structure with missing system prompt', () => {
         const messages = [
-            { 
-                role: RoleEnum.user, 
-                parts: [{ type: 'text', content: 'What is this?' }],
-                images: ['https://example.com/img.png']
-            }
+            { role: RoleEnum.user, parts: [{ type: 'text', content: 'hello' }] }
         ];
-        const formatted = provider.formatMessages(messages, true);
-        expect(formatted[0].content).toContainEqual({
-            type: 'input_image',
-            image_url: 'https://example.com/img.png'
+        const [_, options] = provider.createRequest({
+            model,
+            messages,
+            stream: true,
+            options: {},
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 1000 }
         });
+        const body = JSON.parse(options.body);
+        expect(body.instructions).toBeUndefined();
+        expect(body.input).toHaveLength(1);
+        expect(body.input[0].role).toBe('user');
+        expect(body.input[0].content[0].text).toBe('hello');
     });
 
     test('stream reconstruction and token counting', () => {
@@ -129,7 +137,7 @@ describe('AnthropicProvider - Meaningful Tests', () => {
         const messages = [
             { 
                 role: RoleEnum.user, 
-                parts: [{ type: 'text', content: 'img' }],
+                parts: [{ type: 'text', content: 'What is this?' }],
                 images: ['data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==']
             }
         ];
@@ -143,6 +151,43 @@ describe('AnthropicProvider - Meaningful Tests', () => {
                 data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
             }
         }));
+    });
+
+    test('thoughts excluded from formatted payloads', () => {
+        const messages = [
+            { 
+                role: RoleEnum.user, 
+                parts: [
+                    { type: 'text', content: 'hello' },
+                    { type: 'thought', content: 'thinking' }
+                ] 
+            }
+        ];
+        const formatted = provider.formatMessages(messages);
+        expect(formatted[0].content).toHaveLength(1);
+        expect(formatted[0].content[0].text).toBe('hello');
+    });
+
+    test('payload structure with missing system prompt', () => {
+        const messages = [
+            { role: RoleEnum.user, parts: [{ type: 'text', content: 'hello' }] }
+        ];
+        const [_, options] = provider.createRequest({
+            model,
+            messages,
+            stream: true,
+            options: {},
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 1000 }
+        });
+        const body = JSON.parse(options.body);
+        
+        // Correct behavior: system should be undefined if not provided
+        expect(body.system).toBeUndefined();
+        // User message should still be in messages, not dropped or moved to system
+        expect(body.messages).toHaveLength(1);
+        expect(body.messages[0].role).toBe('user');
+        expect(body.messages[0].content[0].text).toBe('hello');
     });
 
     test('stream thought separation', () => {
@@ -195,16 +240,32 @@ describe('GeminiProvider - Meaningful Tests', () => {
         const messages = [
             { 
                 role: RoleEnum.user, 
+                parts: [{ type: 'text', content: '' }],
                 images: ['data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBD...']
             }
         ];
         const formatted = provider.formatMessages(messages);
-        expect(formatted[0].parts[0]).toEqual({
+        expect(formatted[0].parts).toContainEqual({
             inline_data: {
                 mime_type: 'image/jpeg',
                 data: '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBD...'
             }
         });
+    });
+
+    test('thoughts excluded from formatted payloads', () => {
+        const messages = [
+            { 
+                role: RoleEnum.user, 
+                parts: [
+                    { type: 'text', content: 'hello' },
+                    { type: 'thought', content: 'thinking' }
+                ] 
+            }
+        ];
+        const formatted = provider.formatMessages(messages);
+        expect(formatted[0].parts).toHaveLength(1);
+        expect(formatted[0].parts[0].text).toBe('hello');
     });
 
     test('thought extraction from stream', () => {

@@ -331,16 +331,17 @@ export class AnthropicProvider extends BaseProvider {
         }
         
         const maxTokens = Math.min(settings.max_tokens, maxLimit);
-        const formatted = this.formatMessages(messages);
+        const hasSystem = messages.some(m => m.role === RoleEnum.system);
+        const formatted = this.formatMessages(hasSystem ? messages : messages.filter(m => m.role !== RoleEnum.system));
         
         const body = { 
             model, 
-            messages: formatted.length > 0 ? formatted.slice(1) : [], 
+            messages: hasSystem ? (formatted.length > 0 ? formatted.slice(1) : []) : formatted, 
             max_tokens: maxTokens, 
             stream 
         };
 
-        if (formatted.length > 0 && formatted[0].content?.[0]) {
+        if (hasSystem && formatted.length > 0 && formatted[0].content?.[0]) {
             body.system = [formatted[0].content[0]];
         }
 

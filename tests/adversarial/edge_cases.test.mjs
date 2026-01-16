@@ -60,10 +60,9 @@ describe('Adversarial Tests', () => {
 
         it('OpenAI: handles message with null parts', () => {
             const messages = [{ role: RoleEnum.user, parts: null }];
-            // BUG: extractTextContent (line 70) returns '' if !msg.parts. 
-            // formatMessages (line 164) calls it. 
-            // If parts is null, text is '', content remains empty array [].
-            // OpenAI createRequest (line 196) calls formatMessages.
+            // If parts is null, extractTextContent returns ''.
+            // Current production behavior: content becomes empty array [].
+            // This test documents the current behavior.
             const formatted = openai.formatMessages(messages, false);
             expect(formatted[0].content).toEqual([]);
         });

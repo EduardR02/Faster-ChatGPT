@@ -4,20 +4,39 @@ import { StreamWriterSimple, StreamWriter } from '../../src/js/StreamWriter.js';
 // Mock DOM environment minimally
 if (typeof document === 'undefined') {
     global.document = {
-        createElement: (tag) => ({
-            tagName: tag.toUpperCase(),
-            classList: {
-                add: () => {},
-                remove: () => {},
+            createElement: (tag) => {
+                const el = {
+                    tagName: tag.toUpperCase(),
+                    classList: {
+                        add: () => {},
+                        remove: () => {},
+                    },
+                    append: (content) => {
+                        el.textContent += content;
+                        el.innerHTML += content;
+                    },
+                    appendChild: () => {},
+                    querySelector: () => null,
+                    closest: () => null,
+                    _innerHTML: '',
+                    _textContent: '',
+                    style: {},
+                };
+                Object.defineProperty(el, 'innerHTML', {
+                    get() { return this._innerHTML; },
+                    set(val) {
+                        this._innerHTML = val;
+                        this._textContent = val;
+                    },
+                    configurable: true
+                });
+                Object.defineProperty(el, 'textContent', {
+                    get() { return this._textContent; },
+                    set(val) { this._textContent = val; },
+                    configurable: true
+                });
+                return el;
             },
-            append: () => {},
-            appendChild: () => {},
-            querySelector: () => null,
-            closest: () => null,
-            innerHTML: '',
-            textContent: '',
-            style: {},
-        }),
     };
 }
 
@@ -61,21 +80,51 @@ class TestStreamWriter extends StreamWriter {
 }
 
 function createMockDiv() {
-    return {
+    const div = {
         classList: {
             add: () => {},
             remove: () => {},
         },
-        append: () => {},
+        append: (content) => {
+            div.textContent += content;
+            div.innerHTML += content;
+        },
         appendChild: () => {},
         closest: () => null,
-        innerHTML: '',
-        textContent: '',
+        _innerHTML: '',
+        _textContent: '',
         parentElement: {
             appendChild: () => {}
         }
     };
+    Object.defineProperty(div, 'innerHTML', {
+        get() { return this._innerHTML; },
+        set(val) {
+            this._innerHTML = val;
+            this._textContent = val; // Simple assignment for tests
+        },
+        configurable: true
+    });
+    Object.defineProperty(div, 'textContent', {
+        get() { return this._textContent; },
+        set(val) { this._textContent = val; },
+        configurable: true
+    });
+    return div;
 }
+
+// Helper to wait for a condition with a timeout
+const waitUntil = async (condition, timeout = 1000) => {
+    const start = Date.now();
+    while (!condition() && Date.now() - start < timeout) {
+        await new Promise(r => setTimeout(r, 10));
+    }
+};
+
+// Helper to wait for StreamWriter animation loop to finish
+const waitForProcessing = async (writer, timeout = 1000) => {
+    await waitUntil(() => !writer.isProcessing, timeout);
+};
 
 describe('StreamWriterSimple', () => {
     test('basic text streaming and finalization', () => {
@@ -133,8 +182,8 @@ describe('StreamWriter (Smooth)', () => {
         
         writer.processContent('Fast');
         
-        // Wait for animation frame
-        await new Promise(r => setTimeout(r, 50));
+        // Wait for animation loop to process queues with safety timeout
+        await waitForProcessing(writer);
         
         expect(appendSpy).toHaveBeenCalledWith(expect.stringContaining('Fast'));
         expect(writer.isProcessing).toBe(false);
@@ -153,18 +202,49 @@ describe('StreamWriter (Smooth)', () => {
         
         writer.setThinkingModel();
         writer.processContent('thought', true);
+        // We need to wait a bit so 'thought' starts animating and occupies contentQueue
+        await new Promise(r => setTimeout(r, 10));
+        
         writer.processContent('result', false);
         
-        expect(writer.pendingSwitch).toBe(true);
-        expect(writer.pendingQueue).toContain('r');
-        
-        // Wait for animation loop to process queues
-        while(writer.isProcessing) {
-            await new Promise(r => setTimeout(r, 10));
-        }
+        // At this point, if 'thought' is still in contentQueue, animation is still running for thought
+        writer.charDelay = 100; // slow it down
+        writer.processContent('more', false);
+
+        writer.charDelay = 0.01; // speed up
+        await waitForProcessing(writer);
+        expect(writer.isProcessing).toBe(false);
         
         expect(producedNext).toBe(true);
         expect(writer.parts).toHaveLength(2);
-        expect(writer.parts[0].content).toBe('thought');
+        // Confirm thought content stays in original container
+        expect(div.textContent).toContain('thought');
+        // Answer goes to the new container
+        expect(nextDiv.textContent).toContain('result');
+        expect(nextDiv.textContent).toContain('more');
+    });
+
+    test('thought to text switch arriving before animation completes', async () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const writer = new TestStreamWriter(div, () => nextDiv, () => {}, 1); // 1 WPM = very slow
+        
+        writer.setThinkingModel();
+        writer.processContent('Long thought content', true);
+        
+        // Switch to text while still "animating" thought
+        writer.processContent('Immediate answer', false);
+        
+        // Fast forward
+        writer.charDelay = 0.01;
+        await waitForProcessing(writer);
+        expect(writer.isProcessing).toBe(false);
+        
+        expect(writer.parts).toHaveLength(2);
+        expect(writer.parts[0].type).toBe('thought');
+        expect(writer.parts[1].type).toBe('text');
+        // Confirm thought content stays in original container
+        expect(div.textContent).toContain('Long thought content');
+        expect(nextDiv.textContent).toContain('Immediate answer');
     });
 });

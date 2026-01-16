@@ -285,8 +285,9 @@ describe('SidepanelChatCore Integration', () => {
             role: 'user',
             contents: [[
                 { type: 'text', content: 'Expected text' },
-                { type: 'image', content: 'base64-data' }
-            ]]
+                { type: 'image', content: 'data:image/png;base64,abc' }
+            ]],
+            images: ['data:image/png;base64,abc']
         };
         
         core.currentChat = {
@@ -294,7 +295,10 @@ describe('SidepanelChatCore Integration', () => {
         };
 
         const messages = core.getMessagesForAPI();
+        // getMessagesForAPI uses first text part and message.images
         expect(messages[0].parts[0].content).toBe('Expected text');
+        expect(messages[0].parts).toHaveLength(1);
+        expect(messages[0].images).toEqual(['data:image/png;base64,abc']);
     });
 
     test('getMessagesForAPI should handle empty contents gracefully', async () => {
@@ -308,7 +312,9 @@ describe('SidepanelChatCore Integration', () => {
         };
 
         const messages = core.getMessagesForAPI();
-        expect(messages[0].parts[0].content).toBe('');
+        // Empty contents should yield parts array length 1 with empty text content
+        expect(messages[0].parts).toHaveLength(1);
+        expect(messages[0].parts[0]).toEqual({ type: 'text', content: '' });
     });
 
     test('getMessagesForAPI should return the LATEST version when multiple versions exist', async () => {
