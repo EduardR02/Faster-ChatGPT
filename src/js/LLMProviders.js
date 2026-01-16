@@ -331,17 +331,17 @@ export class AnthropicProvider extends BaseProvider {
         }
         
         const maxTokens = Math.min(settings.max_tokens, maxLimit);
-        const hasSystem = messages.some(m => m.role === RoleEnum.system);
-        const formatted = this.formatMessages(hasSystem ? messages : messages.filter(m => m.role !== RoleEnum.system));
+        const systemMessage = messages.find(m => m.role === RoleEnum.system);
+        const formatted = this.formatMessages(systemMessage ? messages : messages.filter(m => m.role !== RoleEnum.system));
         
         const body = { 
             model, 
-            messages: hasSystem ? (formatted.length > 0 ? formatted.slice(1) : []) : formatted, 
+            messages: systemMessage ? (formatted.length > 0 ? formatted.slice(1) : []) : formatted, 
             max_tokens: maxTokens, 
             stream 
         };
 
-        if (hasSystem && formatted.length > 0 && formatted[0].content?.[0]) {
+        if (systemMessage) {
             body.system = [formatted[0].content[0]];
         }
 
@@ -530,10 +530,10 @@ export class GeminiProvider extends BaseProvider {
         const baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models/';
         const endpoint = stream ? "streamGenerateContent?alt=sse&" : "generateContent?";
         const url = `${baseUrl}${model}:${endpoint}key=${apiKey}`;
+        const hasSystem = messages[0]?.role === RoleEnum.system;
 
         const body = { 
-            contents: formatted.slice(1), 
-            systemInstruction: formatted[0], 
+            contents: hasSystem ? formatted.slice(1) : formatted, 
             safetySettings: [
                 { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" }, 
                 { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" }, 
@@ -542,6 +542,10 @@ export class GeminiProvider extends BaseProvider {
             ], 
             generationConfig: generationConfig 
         };
+
+        if (hasSystem) {
+            body.systemInstruction = { parts: formatted[0].parts };
+        }
 
         return this.buildApiRequest(url, body);
     }
@@ -557,9 +561,10 @@ export class GeminiProvider extends BaseProvider {
             ...(isGemini3 && imageResolution && { imageSize: imageResolution }) 
         };
 
+        const hasSystem = messages[0]?.role === RoleEnum.system;
+
         const body = { 
-            contents: formatted.slice(1), 
-            systemInstruction: formatted[0], 
+            contents: hasSystem ? formatted.slice(1) : formatted, 
             safetySettings: [
                 { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" }, 
                 { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" }, 
@@ -572,6 +577,10 @@ export class GeminiProvider extends BaseProvider {
                 ...(Object.keys(imageConfig).length && { imageConfig }) 
             } 
         };
+
+        if (hasSystem) {
+            body.systemInstruction = { parts: formatted[0].parts };
+        }
 
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
         return this.buildApiRequest(url, body);

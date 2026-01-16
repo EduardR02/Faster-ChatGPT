@@ -130,13 +130,18 @@ export class ApiManager {
             options.localModelOverride = await this.getLocalModelConfig();
         }
 
+        const filteredMessages = messages.filter(msg => {
+            if (msg.role !== 'system') return true;
+            return msg.parts?.some(part => part.type === 'text' && part.content?.trim());
+        });
+
         // Delegate to image generation if applicable
         if (this.isImageModel(modelId)) {
-            return this.callImageGenerationApi(modelId, messages, tokenCounter, streamWriter, abortController, options);
+            return this.callImageGenerationApi(modelId, filteredMessages, tokenCounter, streamWriter, abortController, options);
         }
 
         const isStreaming = (streamWriter !== null);
-        const processedMessages = this.processFiles(messages);
+        const processedMessages = this.processFiles(filteredMessages);
         
         const settings = {
             max_tokens: this.settingsManager.getSetting('max_tokens'),
