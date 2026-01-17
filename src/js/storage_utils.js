@@ -128,7 +128,10 @@ export const removeModelFromStorage = async (apiName) => {
  */
 export const loadTextFromFile = (filePath) => {
     const url = chrome.runtime.getURL(filePath);
-    return fetch(url).then(response => response.text());
+    return fetch(url).then(response => {
+        if (!response.ok) throw new Error(`Failed to load ${filePath}: ${response.statusText}`);
+        return response.text();
+    });
 };
 
 /**
@@ -178,7 +181,7 @@ export const setDefaults = async () => {
     await Promise.all([
         loadPrompt("src/prompts/prompt.txt", "selection_prompt"),
         loadPrompt("src/prompts/chat_prompt.txt", "chat_prompt"),
-        loadPrompt("src/prompts/council_collector_prompt.txt", "council_collector_prompt", "Synthesize the council responses into a single, concise, high-quality answer. If there are disagreements, note them briefly and explain your choice."),
+        loadPrompt("src/prompts/council_collector_prompt.txt", "council_collector_prompt", "You are the Council Chair. Synthesize the council responses into a single, high-quality, and authoritative response. Identify the strongest points, reconcile disagreements, and provide a unified, superior answer."),
         chrome.storage.local.set({
             thinking_prompt: thinkingPrompt.trim(),
             solver_prompt: solverPrompt.trim()

@@ -186,11 +186,12 @@ class ChatUI {
         
         const columnDivs = modelKeys.map((modelKey, modelIndex) => {
             const arenaWrapper = createElementWithClass('div', 'arena-wrapper');
-            arenaWrapper.dataset.modelId = this.stateManager.getArenaModel(modelIndex);
+            const modelId = messageData.responses ? messageData.responses[modelKey].name : this.stateManager.getArenaModel(modelIndex);
+            arenaWrapper.dataset.modelId = modelId;
             arenaWrapper.dataset.modelKey = modelKey;
             
             const baseOptions = { 
-                model: arenaWrapper.dataset.modelId, 
+                model: modelId, 
                 hideModels: true, 
                 allowContinue: options.allowContinue 
             };
@@ -201,13 +202,15 @@ class ChatUI {
                     if (options.continueFunc) {
                         runOptions.continueFunc = () => options.continueFunc(options.messageIndex, partIndex, modelKey);
                     }
-                    arenaWrapper.appendChild(this.createMessage(messageData.role, parts, runOptions));
+                    const modelDisplayName = messageData.responses[modelKey].name || (modelKey === 'model_a' ? 'Model A' : 'Model B');
+                    arenaWrapper.appendChild(this.createMessage(messageData.role || 'assistant', parts, { ...runOptions, model: modelDisplayName }));
                 });
             } else {
                 if (options.continueFunc) {
                     baseOptions.continueFunc = () => options.continueFunc(options.messageIndex, 0, modelKey);
                 }
-                arenaWrapper.appendChild(this.createMessage('assistant', [], baseOptions));
+                const modelDisplayName = (modelKey === 'model_a' ? 'Model A' : 'Model B');
+                arenaWrapper.appendChild(this.createMessage('assistant', [], { ...baseOptions, model: modelDisplayName }));
             }
             
             arenaFullContainer.appendChild(arenaWrapper);
@@ -216,6 +219,11 @@ class ChatUI {
 
         arenaMessageBlock.appendChild(arenaFullContainer);
         this.conversationDiv.appendChild(arenaMessageBlock);
+
+        if (messageData.responses) {
+            this.resolveArena(messageData.choice, messageData.continued_with, columnDivs);
+        }
+
         return columnDivs;
     }
 
@@ -231,34 +239,10 @@ class ChatUI {
         const meta = createElementWithClass('span', 'council-meta');
         header.append(title, meta);
 
-        const collectorModel = messageData.council?.collector_model || this.stateManager.getCouncilCollectorModel();
-        const collectorResponse = messageData.contents?.at(-1) || [];
-        const collectorWrapper = createElementWithClass('div', 'council-collector');
-        const collectorOptions = {
-            role: 'assistant',
-            model: collectorModel,
-            hideModels: false,
-            allowContinue: options.allowContinue
-        };
-
-        if (options.continueFunc) {
-            collectorOptions.continueFunc = () => options.continueFunc(options.messageIndex, (messageData.contents?.length || 1) - 1);
-        }
-
-        const collectorMessage = this.createMessage('assistant', collectorResponse, collectorOptions);
-        if (collectorStatus) {
-            collectorMessage.dataset.councilCollectorStatus = collectorStatus;
-        }
-        collectorWrapper.appendChild(collectorMessage);
-
-        const listWrapper = createElementWithClass('div', 'council-list');
         const responses = messageData.council?.responses || {};
         const statuses = messageData.council?.status || {};
         const responseKeys = Object.keys(responses);
-        const collectorStatus = messageData.council?.collector_status;
-        if (collectorStatus) {
-            councilBlock.dataset.collectorStatus = collectorStatus;
-        }
+        const listWrapper = createElementWithClass('div', 'council-list');
 
         if (!responseKeys.length) {
             const empty = createElementWithClass('div', 'council-empty', 'Awaiting council responses…');
@@ -272,7 +256,8 @@ class ChatUI {
                 row.dataset.status = status;
 
                 const rowHeader = createElementWithClass('div', 'council-row-header');
-                const modelLabel = createElementWithClass('span', 'council-model', responseEntry?.name || modelId);
+                const displayName = responseEntry?.name || this.resolveDisplayNameFromHistory(modelId);
+                const modelLabel = createElementWithClass('span', 'council-model', displayName);
                 const statusLabel = createElementWithClass('span', 'council-status', status);
                 rowHeader.append(modelLabel, statusLabel);
 
@@ -292,6 +277,31 @@ class ChatUI {
             });
         }
 
+        const collectorModel = messageData.council?.collector_model || this.stateManager.getCouncilCollectorModel();
+        const collectorResponse = messageData.contents?.at(-1) || [];
+        const collectorWrapper = createElementWithClass('div', 'council-collector');
+        
+        const showModelName = this.stateManager.getSetting('show_model_name');
+        const collectorDisplayName = this.resolveDisplayNameFromHistory(collectorModel);
+        
+        const collectorOptions = {
+            role: 'assistant',
+            model: collectorDisplayName,
+            hideModels: !showModelName,
+            allowContinue: options.allowContinue
+        };
+
+        if (options.continueFunc) {
+            collectorOptions.continueFunc = () => options.continueFunc(options.messageIndex, (messageData.contents?.length || 1) - 1);
+        }
+
+        const collectorStatus = messageData.council?.collector_status;
+        const collectorMessage = this.createMessage('assistant', collectorResponse, collectorOptions);
+        if (collectorStatus) {
+            collectorMessage.dataset.councilCollectorStatus = collectorStatus;
+        }
+        collectorWrapper.appendChild(collectorMessage);
+
         const toggle = createElementWithClass('button', 'council-toggle', 'Show council');
         toggle.onclick = () => {
             const expanded = councilBlock.classList.toggle('council-expanded');
@@ -307,20 +317,58 @@ class ChatUI {
             : 'No responses yet';
         meta.textContent = metaText;
 
-        councilBlock.append(header, collectorWrapper, toggle, listWrapper);
+        councilBlock.append(header, toggle, listWrapper, collectorWrapper);
         this.conversationDiv.appendChild(councilBlock);
         return councilBlock;
     }
 
     updateCouncil(message, index) {
         const oldBlock = this.conversationDiv.children[index];
-        if (oldBlock) {
-            const newBlock = this.createCouncilWrapper(message, {
+        if (!oldBlock) return;
+
+        // If in sidepanel and we're currently streaming this council block
+        const isCurrentlyStreaming = this.activeDivs === oldBlock || 
+                                   (this.activeDivs?.dataset?.messageIndex === String(index));
+
+        if (isCurrentlyStreaming && !document.hidden) {
+            const statuses = message.council?.status || {};
+            const collectorStatus = message.council?.collector_status;
+            const meta = oldBlock.querySelector('.council-meta');
+            const responseKeys = Object.keys(message.council?.responses || {});
+
+            // Update row statuses
+            responseKeys.forEach(modelId => {
+                const row = oldBlock.querySelector(`.council-row[data-model-id="${modelId}"]`);
+                if (row) {
+                    const status = statuses[modelId] || 'pending';
+                    row.dataset.status = status;
+                    const statusLabel = row.querySelector('.council-status');
+                    if (statusLabel) statusLabel.textContent = status;
+                }
+            });
+
+            // Update collector status
+            const collector = oldBlock.querySelector('.council-collector .assistant-message');
+            if (collector && collectorStatus) {
+                collector.dataset.councilCollectorStatus = collectorStatus;
+            }
+
+            // Update meta counter
+            if (meta) {
+                const completedCount = responseKeys.filter(modelId => statuses[modelId] === 'complete').length;
+                meta.textContent = responseKeys.length
+                    ? `${completedCount}/${responseKeys.length} complete`
+                    : 'No responses yet';
+            }
+        } else {
+            const newBlock = this.createCouncilMessage(message, {
                 continueFunc: this.continueFunc,
                 messageIndex: index
             });
-            newBlock.remove();
             this.conversationDiv.replaceChild(newBlock, oldBlock);
+            if (this.activeDivs === oldBlock) {
+                this.activeDivs = newBlock;
+            }
         }
     }
 
@@ -339,7 +387,8 @@ class ChatUI {
 
                 // Update the model label with rating and icons
                 const prefixSpan = messageBlock.querySelector('.message-prefix');
-                const displayName = arenaDiv.dataset.displayName || this.stateManager.getArenaModel(index);
+                const modelId = arenaDiv.dataset.modelId;
+                const displayName = arenaDiv.dataset.displayName || (modelId ? this.resolveDisplayNameFromHistory(modelId) : this.stateManager.getArenaModel(index));
                 const elo = eloRatings ? eloRatings[index] : null;
                 
                 prefixSpan.textContent = this.formatArenaPrefix(
@@ -363,12 +412,23 @@ class ChatUI {
                 case 'draw': suffix = ' 🤝'; break;
                 case 'reveal': suffix = ' 👁️'; break;
                 case 'ignored': suffix = ' n/a'; break;
+                case 'no_choice(bothbad)': suffix = ' ❌'; break;
                 default: suffix = ' ❌';
             }
         }
         
         const ratingText = elo ? ` (${Math.round(elo * 10) / 10})` : '';
-        return originalText.replace(this.roleLabels.assistant, modelName + ratingText) + suffix;
+        const resolvedName = this.resolveDisplayNameFromHistory(modelName);
+        return originalText.replace(this.roleLabels.assistant, resolvedName + ratingText) + suffix;
+    }
+
+    resolveDisplayNameFromHistory(modelId) {
+        if (!modelId || modelId === 'Model A' || modelId === 'Model B') return modelId;
+        const models = this.stateManager.getSetting('models') || {};
+        for (const provider in models) {
+            if (modelId in models[provider]) return models[provider][modelId];
+        }
+        return modelId;
     }
 
     updateTokenLabel(footerDiv) {
@@ -539,21 +599,11 @@ class ChatUI {
     }
 
     createArenaWrapper(message, options = {}) {
-        this.stateManager.initArenaResponse(message.responses.model_a.name, message.responses.model_b.name);
-        const columnDivs = this.createArenaMessage(message, options);
-        this.resolveArena(message.choice, message.continued_with, columnDivs);
-        this.stateManager.clearArenaState();
-        return columnDivs;
+        return this.createArenaMessage(message, options);
     }
 
     createCouncilWrapper(message, options = {}) {
-        this.stateManager.initCouncilResponse(
-            Object.keys(message.council.responses || {}),
-            message.council.collector_model
-        );
-        const wrapper = this.createCouncilMessage(message, options);
-        this.stateManager.clearCouncilState();
-        return wrapper;
+        return this.createCouncilMessage(message, options);
     }
 
     createMessageFromParts(parts, options = {}) {
@@ -1124,8 +1174,19 @@ export class SidepanelChatUI extends ChatUI {
 
     getActiveMessageElement(modelId) {
         if (this.stateManager.isCouncilModeActive && this.activeDivs) {
+            // If modelId is the collector model, we stream to the collector area
+            if (modelId === this.stateManager.getCouncilCollectorModel()) {
+                const collector = this.activeDivs.querySelector('.council-collector .assistant-message');
+                if (collector) return collector;
+                
+                const contents = this.activeDivs.querySelectorAll('.council-collector .message-content');
+                return contents.length ? contents[contents.length - 1] : this.activeDivs;
+            }
             const row = this.activeDivs.querySelector(`.council-row[data-model-id="${modelId}"] .council-row-content`);
-            return row || this.activeDivs;
+            if (row) return row;
+            
+            const contents = this.activeDivs.querySelectorAll('.council-row-content .message-content');
+            return contents.length ? contents[contents.length - 1] : this.activeDivs;
         }
         if (!this.stateManager.isArenaModeActive) return this.activeDivs;
         const index = this.stateManager.getModelIndex(modelId);

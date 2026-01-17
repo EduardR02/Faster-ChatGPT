@@ -58,7 +58,9 @@ export class StreamWriterSimple {
         this.isThinkingModel = true;
     }
 
-    onComplete() {}
+    onComplete() {
+        this.contentDiv.classList.remove('thoughts');
+    }
 
     addThinkingCounter() {
         const prefixSpan = this.contentDiv.closest('.assistant-message')?.querySelector('.message-prefix');
@@ -133,6 +135,12 @@ export class StreamWriterSimple {
     switchDiv(isThought = false) {
         const nextDiv = this.produceNextDiv('assistant', isThought);
         const wrapper = this.contentDiv.closest('.message-wrapper') || this.contentDiv.parentElement;
+        
+        // Ensure no leftover thought styling on the new div unless it IS a thought div
+        if (!isThought) {
+            nextDiv.classList.remove('thoughts');
+        }
+        
         wrapper.appendChild(nextDiv);
         this.contentDiv = nextDiv;
     }
@@ -244,6 +252,11 @@ export class StreamWriter extends StreamWriterSimple {
                     const { footer, resolve } = this.pendingFooter;
                     this.pendingFooter = null;
                     super.addFooter(footer).then(resolve);
+                }
+                
+                // Cleanup styling when done
+                if (this.isThoughtEnd) {
+                    this.contentDiv.classList.remove('thoughts');
                 }
                 return;
             }

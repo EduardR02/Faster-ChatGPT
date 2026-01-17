@@ -540,13 +540,14 @@ class SettingsUI {
         const extraInfo = {
             thinking_prompt: " (This prompt will be appended to the system prompt)",
             solver_prompt: " (You should make it clear that the model should use the previously generated thinking to now solve the problem. This prompt will be appended to the system prompt)",
-            council_collector_prompt: " (Appended to system prompt for council synthesis)"
+            council_collector_prompt: " (Appended to system prompt for the Council Chair)"
         };
         
         area.placeholder = basePlaceholder + (extraInfo[type] || '');
         
         const promptValue = await this.stateManager.getPrompt(type);
-        area.value = promptValue || '';
+        const fallbackValue = type === 'council_collector_prompt' ? "You are the Council Chair. Synthesize the council responses into a single, high-quality, and authoritative response. Identify the strongest points, reconcile disagreements, and provide a unified, superior answer." : '';
+        area.value = promptValue || fallbackValue;
         
         updateTextfieldHeight(area);
         

@@ -135,13 +135,20 @@ export class SidepanelController {
         const isCouncilMode = mode === 'council' || mode === 'collector';
         const isArenaMode = mode === 'arena';
 
-        if (this.api.getProviderName(modelId) === 'llamacpp') {
-            this.chatUI.updateLastMessageModelName(displayName);
-            if (isArenaMode) {
-                const key = this.state.getArenaModelKey(modelId);
-                await this.chatCore.setArenaModelName(key, displayName);
-                this.chatUI.setArenaModelDisplayName(modelId, displayName);
+        if (isArenaMode) {
+            const key = this.state.getArenaModelKey(modelId);
+            await this.chatCore.setArenaModelName(key, displayName);
+            this.chatUI.setArenaModelDisplayName(modelId, displayName);
+        } else if (mode === 'council') {
+            const showModelName = this.state.getSetting('show_model_name');
+            if (showModelName) {
+                const councilRowLabel = this.chatUI.activeDivs?.querySelector(`.council-row[data-model-id="${modelId}"] .council-model`);
+                if (councilRowLabel) {
+                    councilRowLabel.textContent = displayName;
+                }
             }
+        } else {
+            this.chatUI.updateLastMessageModelName(displayName);
         }
 
         const modelNameForStorage = isArenaMode ? modelId : displayName;
@@ -230,11 +237,11 @@ export class SidepanelController {
         }
     }
 
-    createStreamWriter(contentDiv, isArenaMode) {
+    createStreamWriter(contentDiv, isMultiMode) {
         const produceNextDiv = (role, isThought) => this.chatUI.produceNextContentDiv(role, isThought);
         const scrollCallback = () => this.chatUI.scrollIntoView();
         
-        const useSmoothStreaming = this.state.getSetting('stream_response') && isArenaMode;
+        const useSmoothStreaming = this.state.getSetting('stream_response') && isMultiMode;
         return useSmoothStreaming 
             ? new StreamWriter(contentDiv, produceNextDiv, scrollCallback, 5000) 
             : new StreamWriterSimple(contentDiv, produceNextDiv, scrollCallback);
@@ -357,46 +364,6 @@ export class SidepanelController {
         }
     }
 
-
-            const [modelAId, modelBId] = this.getRandomArenaModels(enabledArenaModels);
-            const currentMessageIndex = this.chatCore.getLength();
-
-            this.state.initArenaResponse(modelAId, modelBId); 
-            this.state.initThinkingState(); 
-            this.chatCore.initThinkingChat();
-
-            this.chatUI.createArenaMessage(null, {
-                continueFunc: this.getContinueFunc(currentMessageIndex),
-                messageIndex: currentMessageIndex,
-                allowContinue: false
-            });
-            
-            this.chatCore.initArena(modelAId, modelBId);
-            
-            await Promise.all([
-                this.makeApiCall(modelAId), 
-                this.makeApiCall(modelBId)
-            ]);
-            
-            this.chatUI.addArenaFooter(this.handleArenaChoice.bind(this));
-
-        } else {
-            this.state.initThinkingState();
-            const currentSelectedModel = this.state.getSetting('current_model');
-            const nextMessageIndex = this.chatCore.getLength();
-            
-            const uiMessageOptions = { 
-                model: currentSelectedModel, 
-                hideModels: !this.state.getSetting('show_model_name'), 
-                continueFunc: this.getContinueFunc(nextMessageIndex, 0), 
-                allowContinue: false 
-            };
-            
-            this.chatUI.addMessage('assistant', [], uiMessageOptions);
-            await this.makeApiCall(currentSelectedModel);
-        }
-    }
-
     async initPrompt(context) {
         try {
             const promptKey = context.mode + "_prompt";
@@ -415,7 +382,8 @@ export class SidepanelController {
     }
 
     buildCollectorPrompt(councilModels) {
-        const systemPrompt = this.chatCore.getSystemPrompt() || '';
+        let systemPrompt = this.chatCore.getSystemPrompt() || this.state.getPrompt('active_prompt') || '';
+
         const userMessages = this.chatCore.getChat().messages.filter(msg => msg.role === 'user');
         const latestUser = userMessages.at(-1);
         const latestUserText = latestUser?.contents?.at(-1)?.find(part => part.type === 'text')?.content || '';
