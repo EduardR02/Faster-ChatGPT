@@ -1,12 +1,13 @@
 import { createElementWithClass } from './ui_utils.js';
 
 export class Footer {
-    constructor(inputTokens, outputTokens, isArena, isThinkingCallback, regenCallback) {
+    constructor(inputTokens, outputTokens, isArena, isThinkingCallback, regenCallback, options = {}) {
         this.inputTokens = inputTokens;
         this.outputTokens = outputTokens;
         this.isArena = isArena;
         this.isThinking = isThinkingCallback;
         this.regen = regenCallback;
+        this.hideRegenerate = options.hideRegenerate || false;
     }
 
     create(containerDiv) {
@@ -19,7 +20,7 @@ export class Footer {
         footerDiv.setAttribute('input-tokens', this.inputTokens);
         footerDiv.appendChild(infoSpan);
         
-        if (!this.isThinking()) {
+        if (!this.isThinking() && !this.hideRegenerate) {
             const regenerateButton = createElementWithClass('button', 'button regenerate-button', '\u{21BB}'); // Refresh icon
             
             regenerateButton.onclick = () => {

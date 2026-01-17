@@ -42,7 +42,13 @@ export class SidepanelController {
         this.chatCore.reset(chatTitle);
     }
 
-    async makeApiCall(modelId, isRegeneration = false) {
+    async makeApiCall(modelId, isRegeneration = false, options = {}) {
+        const mode = options.mode ?? (this.state.isCouncilModeActive ? 'council' : (this.state.isArenaModeActive ? 'arena' : 'normal'));
+        const isCouncilMode = mode === 'council' || mode === 'collector';
+        const isArenaMode = mode === 'arena';
+        const isMultiMode = isArenaMode || isCouncilMode;
+        const disableRegenerate = options.disableRegenerate ?? isCouncilMode;
+
         const providerName = this.api.getProviderName(modelId);
         const tokenCounter = new TokenCounter(providerName);
         const abortController = new AbortController();
@@ -66,14 +72,14 @@ export class SidepanelController {
             displayModelName = localConfig.display;
         }
 
-        const streamWriter = this.createStreamWriter(this.chatUI.getContentDiv(modelId), this.state.isArenaModeActive);
+        const streamWriter = this.createStreamWriter(this.chatUI.getContentDiv(modelId), isMultiMode);
         const shouldStreamResponse = !this.api.isImageModel(modelId) && this.state.getSetting('stream_response');
         let isCallSuccessful = false;
 
         try {
             const apiResponse = await this.api.callApi(
                 apiModelId, 
-                this.chatCore.getMessagesForAPI(modelId), 
+                options.messages ?? this.chatCore.getMessagesForAPI(modelId), 
                 tokenCounter, 
                 shouldStreamResponse ? streamWriter : null, 
                 abortController, 
@@ -93,13 +99,13 @@ export class SidepanelController {
             tokenCounter.updateLifetimeTokens();
             this.chatUI.removeManualAbortButton(modelId);
             
-            const isThinkingStatusCallback = isCallSuccessful ? null : () => false;
-            const messageFooter = this.createFooter(tokenCounter, modelId, isThinkingStatusCallback);
+            const isThinkingStatusCallback = disableRegenerate ? () => true : (isCallSuccessful ? null : () => false);
+            const messageFooter = this.createFooter(tokenCounter, modelId, isThinkingStatusCallback, isArenaMode);
             await streamWriter.addFooter(messageFooter);
         }
 
         if (isCallSuccessful) {
-            await this.handleSuccessfulCall(modelId, displayModelName, streamWriter.parts, isRegeneration);
+            await this.handleSuccessfulCall(modelId, displayModelName, streamWriter.parts, isRegeneration, mode);
         }
     }
 
@@ -125,29 +131,34 @@ export class SidepanelController {
         });
     }
 
-    async handleSuccessfulCall(modelId, displayName, responseParts, isRegeneration) {
+    async handleSuccessfulCall(modelId, displayName, responseParts, isRegeneration, mode = 'normal') {
+        const isCouncilMode = mode === 'council' || mode === 'collector';
+        const isArenaMode = mode === 'arena';
+
         if (this.api.getProviderName(modelId) === 'llamacpp') {
             this.chatUI.updateLastMessageModelName(displayName);
-            if (this.state.isArenaModeActive) {
+            if (isArenaMode) {
                 const key = this.state.getArenaModelKey(modelId);
                 await this.chatCore.setArenaModelName(key, displayName);
                 this.chatUI.setArenaModelDisplayName(modelId, displayName);
             }
         }
 
-        const modelNameForStorage = this.state.isArenaModeActive ? modelId : displayName;
-        await this.saveResponse(responseParts, modelNameForStorage, isRegeneration);
+        const modelNameForStorage = isArenaMode ? modelId : displayName;
+        await this.saveResponse(responseParts, modelNameForStorage, isRegeneration, mode);
 
         const lastMessage = this.chatCore.getLatestMessage();
-        if (!this.state.isArenaModeActive && this.chatUI.continueFunc && lastMessage?.role === 'assistant') {
+        if (!isArenaMode && !isCouncilMode && this.chatUI.continueFunc && lastMessage?.role === 'assistant') {
             const messageIndex = this.chatCore.getLength() - 1;
             const contentIndex = (lastMessage.contents?.length || 1) - 1;
             this.chatUI.renderContinueForAssistant(messageIndex, contentIndex);
         }
 
-        this.handleThinkingFollowup(modelId, isRegeneration);
+        if (!isCouncilMode) {
+            this.handleThinkingFollowup(modelId, isRegeneration);
+        }
 
-        const needsSearchRefresh = this.state.isArenaModeActive || isRegeneration || this.state.thinkingMode;
+        const needsSearchRefresh = isArenaMode || isCouncilMode || isRegeneration || this.state.thinkingMode;
         if (this.state.isInactive(modelId) && needsSearchRefresh) {
             await this.chatCore.refreshSearchDoc();
         }
@@ -164,9 +175,17 @@ export class SidepanelController {
         };
     }
 
-    async saveResponse(responseParts, modelId, isRegeneration) {
-        if (this.state.isArenaModeActive) {
+    async saveResponse(responseParts, modelId, isRegeneration, mode = 'normal') {
+        if (mode === 'arena' || this.state.isArenaModeActive) {
             return this.chatCore.updateArena(responseParts, modelId, this.state.getArenaModelKey(modelId));
+        }
+
+        if (mode === 'council') {
+            return this.chatCore.updateCouncil(responseParts, modelId);
+        }
+
+        if (mode === 'collector') {
+            return this.chatCore.updateCouncilCollector(responseParts, modelId);
         }
         
         if (isRegeneration && !this.state.thinkingMode) {
@@ -221,16 +240,18 @@ export class SidepanelController {
             : new StreamWriterSimple(contentDiv, produceNextDiv, scrollCallback);
     }
 
-    createFooter(tokenCounter, modelId, isThinkingCheck = null) {
+    createFooter(tokenCounter, modelId, isThinkingCheck = null, forceArena = null) {
         const checkThinking = isThinkingCheck || (() => this.state.isThinking(modelId));
         const regenerateCallback = () => this.regenerateResponse(modelId);
+        const isArena = forceArena ?? this.state.isArenaModeActive;
         
         return new Footer(
             tokenCounter.inputTokens, 
             tokenCounter.outputTokens, 
-            this.state.isArenaModeActive, 
+            isArena, 
             checkThinking, 
-            regenerateCallback
+            regenerateCallback,
+            { hideRegenerate: isThinkingCheck && isThinkingCheck() }
         );
     }
 
@@ -256,11 +277,86 @@ export class SidepanelController {
         this.chatUI.initScrollListener(); 
         this.state.updateThinkingMode();
 
-        if (this.state.isArenaModeActive) {
+        if (this.state.isCouncilModeActive) {
+            const councilModels = this.state.getSetting('council_models') || [];
+            const collectorModel = this.state.getSetting('council_collector_model') || this.state.getSetting('current_model');
+            
+            if (councilModels.length < 2) {
+                return this.chatUI.addErrorMessage("Enable at least 2 models for Council.");
+            }
+
+            const currentMessageIndex = this.chatCore.getLength();
+            this.state.initCouncilResponse(councilModels, collectorModel);
+            this.state.initThinkingState();
+            this.chatCore.initThinkingChat();
+
+            this.chatCore.initCouncil(councilModels, collectorModel);
+
+            this.chatUI.createCouncilMessage(this.chatCore.getLatestMessage(), {
+                messageIndex: currentMessageIndex,
+                allowContinue: false
+            });
+
+            const councilCalls = councilModels.map(modelId => this.makeApiCall(modelId, false, { mode: 'council' }));
+            const councilResults = await Promise.allSettled(councilCalls);
+            const hasCouncilSuccess = councilResults.some(result => result.status === 'fulfilled');
+
+            if (hasCouncilSuccess) {
+                await this.makeApiCall(collectorModel, false, {
+                    mode: 'collector',
+                    messages: this.buildCollectorPrompt(councilModels)
+                });
+            } else {
+                await this.chatCore.updateCouncilStatus(collectorModel, 'error');
+                this.chatUI.addErrorMessage('Council responses failed. Collector skipped.');
+            }
+
+        } else if (this.state.isArenaModeActive) {
             const enabledArenaModels = this.state.getSetting('arena_models');
+            
             if (enabledArenaModels.length < 2) {
                 return this.chatUI.addErrorMessage("Enable at least 2 models for Arena.");
             }
+            
+            const [modelAId, modelBId] = this.getRandomArenaModels(enabledArenaModels);
+            const currentMessageIndex = this.chatCore.getLength();
+            
+            this.state.initArenaResponse(modelAId, modelBId); 
+            this.state.initThinkingState(); 
+            this.chatCore.initThinkingChat();
+            
+            this.chatUI.createArenaMessage(null, {
+                continueFunc: this.getContinueFunc(currentMessageIndex),
+                messageIndex: currentMessageIndex,
+                allowContinue: false
+            });
+            
+            this.chatCore.initArena(modelAId, modelBId);
+            
+            await Promise.all([
+                this.makeApiCall(modelAId, false, { mode: 'arena' }), 
+                this.makeApiCall(modelBId, false, { mode: 'arena' })
+            ]);
+            
+            this.chatUI.addArenaFooter(this.handleArenaChoice.bind(this));
+
+        } else {
+            this.state.initThinkingState();
+            const currentSelectedModel = this.state.getSetting('current_model');
+            const nextMessageIndex = this.chatCore.getLength();
+            
+            const uiMessageOptions = { 
+                model: currentSelectedModel, 
+                hideModels: !this.state.getSetting('show_model_name'), 
+                continueFunc: this.getContinueFunc(nextMessageIndex, 0), 
+                allowContinue: false 
+            };
+            
+            this.chatUI.addMessage('assistant', [], uiMessageOptions);
+            await this.makeApiCall(currentSelectedModel, false, { mode: 'normal' });
+        }
+    }
+
 
             const [modelAId, modelBId] = this.getRandomArenaModels(enabledArenaModels);
             const currentMessageIndex = this.chatCore.getLength();
@@ -316,6 +412,32 @@ export class SidepanelController {
             this.chatUI.addErrorMessage(`Error loading prompt: ${error.message}`); 
             throw error; 
         } 
+    }
+
+    buildCollectorPrompt(councilModels) {
+        const systemPrompt = this.chatCore.getSystemPrompt() || '';
+        const userMessages = this.chatCore.getChat().messages.filter(msg => msg.role === 'user');
+        const latestUser = userMessages.at(-1);
+        const latestUserText = latestUser?.contents?.at(-1)?.find(part => part.type === 'text')?.content || '';
+        const councilMessage = this.chatCore.getLatestMessage()?.council;
+        const responses = councilMessage?.responses || {};
+
+        const responseBlocks = councilModels.map(modelId => {
+            const modelResponse = responses[modelId]?.messages?.at(-1) || [];
+            const text = modelResponse
+                .filter(part => part?.type === 'text')
+                .map(part => part.content)
+                .join('\n');
+            return `Model (${modelId}) response:\n${text || '[no response]'}\n`;
+        }).join('\n');
+
+        const collectorPrompt = this.state.getPrompt('council_collector') || '';
+
+        return [
+            { role: 'system', parts: [{ type: 'text', content: systemPrompt + (collectorPrompt ? `\n\n${collectorPrompt}` : '') }] },
+            { role: 'user', parts: [{ type: 'text', content: `User request:\n${latestUserText}` }] },
+            { role: 'user', parts: [{ type: 'text', content: `Council responses:\n${responseBlocks}` }] }
+        ];
     }
 
     sendUserMessage() {

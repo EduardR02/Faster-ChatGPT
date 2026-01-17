@@ -1016,6 +1016,135 @@ p {
   gap: 1em;
 }
 
+.council-message {
+  gap: 0.75em;
+  padding: 0.75em 0.5em 0.5em;
+  border-radius: 1em;
+  background: rgba(23, 20, 29, 0.65);
+  border: 1px solid rgba(253, 170, 170, 0.25);
+}
+
+.council-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5em;
+  padding: 0 0.75em;
+}
+
+.council-title {
+  font-weight: bold;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #fdaaaa;
+}
+
+.council-meta {
+  font-size: 0.85em;
+  color: #abb2bf;
+}
+
+.council-collector {
+  padding: 0 0.5em;
+}
+
+.council-collector [data-council-collector-status="pending"] .message-content {
+  opacity: 0.6;
+}
+
+.council-collector [data-council-collector-status="error"] .message-content {
+  color: #ef596f;
+}
+
+.council-collector [data-council-collector-status="pending"] .message-content::after {
+  content: " (collecting…)";
+  color: #abb2bf;
+  font-size: 0.85em;
+}
+
+.council-collector [data-council-collector-status="error"] .message-content::after {
+  content: " (collector failed)";
+  color: #ef596f;
+  font-size: 0.85em;
+}
+
+.council-toggle {
+  align-self: flex-start;
+  margin: 0 0.75em;
+  background: rgba(97, 175, 239, 0.18);
+  color: #cdd3dd;
+  border: 1px solid rgba(97, 175, 239, 0.35);
+  padding: 0.2em 0.7em;
+  border-radius: 0.6em;
+  font-size: 0.85em;
+}
+
+.council-list {
+  display: none;
+  flex-direction: column;
+  gap: 0.75em;
+  padding: 0 0.75em 0.75em;
+}
+
+.council-expanded .council-list {
+  display: flex;
+}
+
+.council-row {
+  border-radius: 0.75em;
+  border: 1px solid rgba(171, 178, 191, 0.2);
+  background: rgba(33, 37, 43, 0.6);
+  padding: 0.5em 0.75em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+}
+
+.council-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.85em;
+  color: #abb2bf;
+}
+
+.council-model {
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.council-status {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.75em;
+  padding: 0.1em 0.45em;
+  border-radius: 999px;
+  border: 1px solid rgba(253, 170, 170, 0.35);
+  color: #fdaaaa;
+}
+
+.council-row[data-status="complete"] .council-status {
+  color: #98c379;
+  border-color: rgba(152, 195, 121, 0.4);
+}
+
+.council-row[data-status="error"] .council-status {
+  color: #ef596f;
+  border-color: rgba(239, 89, 111, 0.4);
+}
+
+.council-row-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+}
+
+.council-empty {
+  font-size: 0.85em;
+  color: #abb2bf;
+  padding: 0.25em 0.75em;
+}
+
 .arena-footer {
   display: flex;
   margin-top: 0.5em;

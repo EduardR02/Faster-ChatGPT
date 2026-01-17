@@ -136,28 +136,37 @@ export const loadTextFromFile = (filePath) => {
  */
 export const setDefaults = async () => {
     const models = DEFAULT_MODELS;
-    const settings = {
-        mode: ModeEnum.PromptMode,
-        lifetime_input_tokens: 0,
-        lifetime_output_tokens: 0,
-        max_tokens: 16000,
-        temperature: 1.0,
-        loop_threshold: 2,
-        reasoning_effort: 'medium',
-        show_model_name: true,
-        current_model: Object.keys(models.anthropic).at(-1),
-        transcription_model: null,
-        models,
-        api_keys: {},
-        close_on_deselect: false,
-        stream_response: true,
-        arena_mode: false
-    };
+        const defaultModel = Object.keys(models.anthropic).at(-1);
+        const settings = {
+            mode: ModeEnum.PromptMode,
+            lifetime_input_tokens: 0,
+            lifetime_output_tokens: 0,
+            max_tokens: 16000,
+            temperature: 1.0,
+            loop_threshold: 2,
+            reasoning_effort: 'medium',
+            show_model_name: true,
+            current_model: defaultModel,
+            transcription_model: null,
+            models,
+            api_keys: {},
+            close_on_deselect: false,
+            stream_response: true,
+            arena_mode: false,
+            council_mode: false,
+            council_models: [],
+            council_collector_model: defaultModel
+        };
 
-    const loadPrompt = async (path, storageKey) => {
-        const text = await loadTextFromFile(path);
-        await chrome.storage.local.set({ [storageKey]: text.trim() });
-    };
+        const loadPrompt = async (path, storageKey, fallback = '') => {
+            try {
+                const text = await loadTextFromFile(path);
+                await chrome.storage.local.set({ [storageKey]: text.trim() });
+            } catch (_) {
+                await chrome.storage.local.set({ [storageKey]: fallback });
+            }
+        };
+
 
     await chrome.storage.local.set(settings);
     
@@ -169,6 +178,7 @@ export const setDefaults = async () => {
     await Promise.all([
         loadPrompt("src/prompts/prompt.txt", "selection_prompt"),
         loadPrompt("src/prompts/chat_prompt.txt", "chat_prompt"),
+        loadPrompt("src/prompts/council_collector_prompt.txt", "council_collector_prompt", "Synthesize the council responses into a single, concise, high-quality answer. If there are disagreements, note them briefly and explain your choice."),
         chrome.storage.local.set({
             thinking_prompt: thinkingPrompt.trim(),
             solver_prompt: solverPrompt.trim()

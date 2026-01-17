@@ -170,6 +170,55 @@ export class SidepanelChatCore extends ChatCore {
         }
     }
 
+    initCouncil(models, collectorModel) {
+        const councilMessage = this.chatStorage.initCouncilMessage(models, collectorModel);
+        if (this.thinkingChat) {
+            this.thinkingChat.message = councilMessage;
+        } else {
+            this.currentChat.messages.push(councilMessage);
+        }
+    }
+
+    async updateCouncil(parts, modelId) {
+        const latestMessage = this.getLatestMessage();
+        if (!latestMessage?.council?.responses?.[modelId]) return;
+        if (this.thinkingChat) {
+            this.thinkingChat.addCouncilMessage(parts, modelId);
+            if (this.thinkingChat.isDone) {
+                this.commitThinkingChat();
+            }
+        } else {
+            latestMessage.council.responses[modelId].messages.push(parts);
+            latestMessage.council.status[modelId] = 'complete';
+            await this.updateSaved();
+        }
+    }
+
+    async updateCouncilCollector(parts, collectorModel) {
+        parts.forEach(part => {
+            part.model = collectorModel;
+        });
+
+        const latestMessage = this.getLatestMessage();
+        if (!latestMessage?.council) return;
+        latestMessage.council.collector_model = collectorModel;
+        latestMessage.council.collector_status = 'complete';
+
+        if (latestMessage.contents) {
+            latestMessage.contents.push(parts);
+        } else {
+            latestMessage.contents = [parts];
+        }
+        await this.updateSaved();
+    }
+
+    async updateCouncilStatus(modelId, status) {
+        const latestMessage = this.getLatestMessage();
+        if (!latestMessage?.council?.status) return;
+        latestMessage.council.status[modelId] = status;
+        await this.updateSaved();
+    }
+
     async updateArena(parts, modelId, modelKey) {
         if (this.thinkingChat) {
             this.thinkingChat.addMessage(parts, modelId, modelKey);
@@ -309,21 +358,35 @@ export class SidepanelChatCore extends ChatCore {
             };
         }
 
-        // Handle arena messages with responses
-        if (message.responses) {
-            const strippedResponses = {};
-            for (const modelKey of ['model_a', 'model_b']) {
-                const modelResp = message.responses[modelKey];
+        const stripResponses = (responses) => {
+            const stripped = {};
+            for (const [modelKey, modelResp] of Object.entries(responses || {})) {
                 if (modelResp?.messages) {
-                    strippedResponses[modelKey] = {
+                    stripped[modelKey] = {
                         ...modelResp,
                         messages: modelResp.messages.map(stripGroup)
                     };
                 } else {
-                    strippedResponses[modelKey] = modelResp;
+                    stripped[modelKey] = modelResp;
                 }
             }
-            return { ...message, responses: strippedResponses };
+            return stripped;
+        };
+
+        // Handle arena messages with responses
+        if (message.responses) {
+            return { ...message, responses: stripResponses(message.responses) };
+        }
+
+        // Handle council messages
+        if (message.council?.responses) {
+            return {
+                ...message,
+                council: {
+                    ...message.council,
+                    responses: stripResponses(message.council.responses)
+                }
+            };
         }
 
         return message;
@@ -376,6 +439,10 @@ export class SidepanelChatCore extends ChatCore {
                 return null;
             }
             
+            if (message.council) {
+                return { role: message.role, parts: message.contents?.at(-1) || [] };
+            }
+            
             return { role: message.role, parts: message.contents.at(-1) };
         }).filter(Boolean);
         
@@ -399,15 +466,29 @@ export class SidepanelChatCore extends ChatCore {
 
         if (latestMessage?.role === 'assistant') {
             if (latestMessage.responses) {
-                for (const modelKey of ['model_a', 'model_b']) {
+                for (const modelKey of Object.keys(latestMessage.responses)) {
                     const newMessages = thinkingMessage.responses[modelKey].messages;
                     if (newMessages.length > 0) {
                         latestMessage.responses[modelKey].messages.push(newMessages.at(-1));
                     }
                 }
-            } else {
-                latestMessage.contents.push(thinkingMessage.contents.at(-1));
+        } else if (latestMessage.council?.responses) {
+            for (const modelKey of Object.keys(latestMessage.council.responses)) {
+                const newMessages = thinkingMessage.council.responses[modelKey].messages;
+                if (newMessages.length > 0) {
+                    latestMessage.council.responses[modelKey].messages.push(newMessages.at(-1));
+                    latestMessage.council.status[modelKey] = 'complete';
+                }
             }
+            if (thinkingMessage.contents?.length) {
+                latestMessage.contents = latestMessage.contents || [];
+                latestMessage.contents.push(thinkingMessage.contents.at(-1));
+                latestMessage.council.collector_status = 'complete';
+            }
+        } else {
+            latestMessage.contents.push(thinkingMessage.contents.at(-1));
+        }
+
             this.updateSaved();
         } else {
             this.currentChat.messages.push(thinkingMessage);
@@ -428,6 +509,9 @@ export class SidepanelChatCore extends ChatCore {
         if (lastMessage.role === 'assistant') {
             if (lastMessage.responses) {
                 return (modelChoice && modelChoice !== 'none' && lastMessage.continued_with === modelChoice && lastMessage.responses[modelChoice].messages.length === secondaryIndex + 1);
+            }
+            if (lastMessage.council) {
+                return lastMessage.contents?.length === secondaryIndex + 1;
             }
             return lastMessage.contents.length === secondaryIndex + 1;
         }
@@ -520,7 +604,7 @@ class ThinkingChat {
         
         const partsList = this.message.responses 
             ? this.message.responses[this.stateManager.getArenaModelKey(modelId)]?.messages 
-            : this.message.contents;
+            : (this.message.council?.responses?.[modelId]?.messages || this.message.contents);
             
         return partsList?.length ? { role: 'assistant', parts: partsList.at(-1) } : null;
     }
@@ -579,6 +663,16 @@ class ThinkingChat {
             }
             this.updateLoopState(0, modelId);
         }
+    }
+
+    addCouncilMessage(parts, modelId) {
+        if (this.isDone || !this.message?.council?.responses?.[modelId]) return;
+        const modelMsgs = this.message.council.responses[modelId].messages;
+        if (!modelMsgs.length) {
+            modelMsgs.push([]);
+        }
+        modelMsgs.at(-1).push(...parts);
+        this.updateLoopState(0, modelId);
     }
 
     updateLoopState(index, modelId, modelKey = null) {

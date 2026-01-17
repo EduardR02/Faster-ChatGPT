@@ -14,6 +14,7 @@ const NEW_TAB_URL = 'chrome://newtab';
 // Arena mode toggle icons
 const ICON = {
     ARENA: '\u{2694}',   // ⚔️ Crossed swords - arena mode enabled
+    COUNCIL: '\u{1F9E0}', // 🧠 council mode enabled
     CHAT: '\u{1F916}'    // 🤖 Robot - normal chat mode
 };
 
@@ -314,10 +315,12 @@ class SidepanelApp {
         }
         
         const arenaToggleButton = document.querySelector('.arena-toggle-button');
-        const isArenaModeActive = tabState?.isArenaModeActive ?? this.stateManager.getSetting('arena_mode');
         if (arenaToggleButton) {
-            arenaToggleButton.textContent = isArenaModeActive ? ICON.ARENA : ICON.CHAT;
-            arenaToggleButton.classList.toggle('arena-mode-on', isArenaModeActive);
+            const isCouncilModeActive = tabState?.isCouncilModeActive ?? this.stateManager.getSetting('council_mode');
+            const isArenaModeActive = tabState?.isArenaModeActive ?? this.stateManager.getSetting('arena_mode');
+            const icon = isCouncilModeActive ? ICON.COUNCIL : (isArenaModeActive ? ICON.ARENA : ICON.CHAT);
+            arenaToggleButton.textContent = icon;
+            arenaToggleButton.classList.toggle('arena-mode-on', isArenaModeActive || isCouncilModeActive);
         }
 
         const reasoningToggleButton = document.getElementById('sonnet-thinking-toggle');
@@ -358,17 +361,30 @@ class SidepanelApp {
         const arenaToggleButton = document.querySelector('.arena-toggle-button');
 
         const updateButtonState = () => {
-            const isArenaModeActive = this.getActiveTabState()?.isArenaModeActive ??
-                this.stateManager.getSetting('arena_mode');
-            arenaToggleButton.textContent = isArenaModeActive ? ICON.ARENA : ICON.CHAT;
-            arenaToggleButton.classList.toggle('arena-mode-on', isArenaModeActive);
+            const tabState = this.getActiveTabState();
+            const isCouncilModeActive = tabState?.isCouncilModeActive ?? this.stateManager.getSetting('council_mode');
+            const isArenaModeActive = tabState?.isArenaModeActive ?? this.stateManager.getSetting('arena_mode');
+            const icon = isCouncilModeActive ? ICON.COUNCIL : (isArenaModeActive ? ICON.ARENA : ICON.CHAT);
+            arenaToggleButton.textContent = icon;
+            arenaToggleButton.classList.toggle('arena-mode-on', isArenaModeActive || isCouncilModeActive);
         };
         
         this.stateManager.runOnReady(updateButtonState);
         this.stateManager.subscribeToSetting('arena_mode', updateButtonState);
+        this.stateManager.subscribeToSetting('council_mode', updateButtonState);
         
         arenaToggleButton.onclick = () => { 
-            this.getActiveTabState()?.toggleArenaMode?.(); 
+            const tabState = this.getActiveTabState();
+            if (!tabState) return;
+            if (tabState.isCouncilModeActive) {
+                tabState.toggleCouncilMode?.();
+            } else if (tabState.isArenaModeActive) {
+                tabState.toggleArenaMode?.();
+            } else if (this.stateManager.getSetting('council_mode')) {
+                tabState.toggleCouncilMode?.();
+            } else {
+                tabState.toggleArenaMode?.();
+            }
             updateButtonState(); 
         };
     }

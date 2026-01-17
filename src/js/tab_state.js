@@ -25,7 +25,10 @@ export class TabState {
             activeThinkingMode: false,
             thinkingStates: { default: THINKING_STATE.INACTIVE },
             _isArenaModeActive: !!globalState.getSetting('arena_mode'), // Initialize from global default
+            _isCouncilModeActive: !!globalState.getSetting('council_mode'),
             activeArenaModels: null,
+            activeCouncilModels: null,
+            councilCollectorModel: null,
             shouldThink: false,
             shouldWebSearch: undefined,
             reasoningEffort: undefined,
@@ -59,7 +62,10 @@ export class TabState {
             chatState: CHAT_STATE.NORMAL,
             shouldSave: true,
             _isArenaModeActive: !!this.globalState.getSetting('arena_mode'), // Reset to default
-            activeArenaModels: null
+            _isCouncilModeActive: !!this.globalState.getSetting('council_mode'),
+            activeArenaModels: null,
+            activeCouncilModels: null,
+            councilCollectorModel: null
         });
         this.initThinkingState();
     }
@@ -68,9 +74,28 @@ export class TabState {
     get isArenaModeActive() { return this._isArenaModeActive; }
     set isArenaModeActive(value) { this._isArenaModeActive = !!value; }
 
+    get isCouncilModeActive() { return this._isCouncilModeActive; }
+    set isCouncilModeActive(value) { this._isCouncilModeActive = !!value; }
+
     toggleArenaMode() {
-        this._isArenaModeActive = !this._isArenaModeActive;
+        const next = !this._isArenaModeActive;
+        this._isArenaModeActive = next;
+        if (next) {
+            this._isCouncilModeActive = false;
+            this.activeCouncilModels = null;
+            this.councilCollectorModel = null;
+        }
         return this._isArenaModeActive;
+    }
+
+    toggleCouncilMode() {
+        const next = !this._isCouncilModeActive;
+        this._isCouncilModeActive = next;
+        if (next) {
+            this._isArenaModeActive = false;
+            this.activeArenaModels = null;
+        }
+        return this._isCouncilModeActive;
     }
 
     isChatNormal() { return this.chatState === CHAT_STATE.NORMAL; }
@@ -115,6 +140,22 @@ export class TabState {
         });
     }
 
+    initCouncilResponse(models, collectorModel) {
+        Object.assign(this, {
+            activeCouncilModels: models,
+            councilCollectorModel: collectorModel,
+            _isCouncilModeActive: true
+        });
+    }
+
+    clearCouncilState() {
+        Object.assign(this, {
+            activeCouncilModels: null,
+            councilCollectorModel: null,
+            _isCouncilModeActive: false
+        });
+    }
+
     getArenaModel(index) { 
         return this.activeArenaModels ? this.activeArenaModels[index] : null; 
     }
@@ -130,6 +171,14 @@ export class TabState {
 
     getArenaModels() { 
         return this.activeArenaModels || []; 
+    }
+
+    getCouncilModels() {
+        return this.activeCouncilModels || [];
+    }
+
+    getCouncilCollectorModel() {
+        return this.councilCollectorModel || this.globalState.getSetting('council_collector_model');
     }
 
     getShouldThink() { 

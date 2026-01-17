@@ -315,6 +315,8 @@ async function handleUpdate(chatId, messageId) {
     await handleHistoryRefresh(chatId, { timestamp: message.timestamp || Date.now() });
     if (message.responses) {
         chatUI.updateArena(message, messageId);
+    } else if (message.council) {
+        chatUI.updateCouncil(message, messageId);
     } else {
         chatUI.appendSingleRegen(message, messageId);
     }

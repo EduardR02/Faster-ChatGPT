@@ -96,15 +96,25 @@ export class ChatStorage {
             message.contents = await Promise.all(message.contents.map(processGroup));
         }
 
-        // 3. Arena responses
-        if (message.responses) {
-            for (const key of ['model_a', 'model_b']) {
-                if (message.responses[key]?.messages) {
-                    message.responses[key].messages = await Promise.all(
-                        message.responses[key].messages.map(processGroup)
+        const mapResponses = async (responses) => {
+            if (!responses) return;
+            for (const key of Object.keys(responses)) {
+                if (responses[key]?.messages) {
+                    responses[key].messages = await Promise.all(
+                        responses[key].messages.map(processGroup)
                     );
                 }
             }
+        };
+
+        // 3. Arena responses
+        if (message.responses) {
+            await mapResponses(message.responses);
+        }
+
+        // 4. Council responses
+        if (message.council?.responses) {
+            await mapResponses(message.council.responses);
         }
 
         return message;
@@ -208,8 +218,17 @@ export class ChatStorage {
             Array.isArray(group) && group.some(part => part?.type === 'image' && ChatStorage.isDataUrl(part.content))
         )) return true;
         if (message.responses) {
-            for (const key of ['model_a', 'model_b']) {
+            for (const key of Object.keys(message.responses)) {
                 if (message.responses[key]?.messages?.some(group =>
+                    Array.isArray(group) && group.some(part => part?.type === 'image' && ChatStorage.isDataUrl(part.content))
+                )) {
+                    return true;
+                }
+            }
+        }
+        if (message.council?.responses) {
+            for (const key of Object.keys(message.council.responses)) {
+                if (message.council.responses[key]?.messages?.some(group =>
                     Array.isArray(group) && group.some(part => part?.type === 'image' && ChatStorage.isDataUrl(part.content))
                 )) {
                     return true;
@@ -657,15 +676,30 @@ export class ChatStorage {
                 .join(' ');
         }
 
-        // Arena responses: only index 'text' type, not 'thought' (matches old behavior)
-        if (message.responses) {
-            return ['model_a', 'model_b']
-                .map(modelKey => message.responses[modelKey]?.messages || [])
+        const collectResponseText = (responses) => {
+            return Object.values(responses || {})
+                .map(entry => entry?.messages || [])
                 .flat()
                 .flat()
                 .filter(part => part && part.type === 'text')
                 .map(part => part.content || '')
                 .join(' ');
+        };
+
+        // Arena responses: only index 'text' type, not 'thought' (matches old behavior)
+        if (message.responses) {
+            return collectResponseText(message.responses);
+        }
+
+        // Council responses: index all response text for search
+        if (message.council?.responses) {
+            const collectorText = (message.contents || [])
+                .flat()
+                .filter(part => part && part.type === 'text')
+                .map(part => part.content || '')
+                .join(' ');
+            const councilText = collectResponseText(message.council.responses);
+            return [collectorText, councilText].filter(Boolean).join(' ');
         }
 
         return '';
@@ -783,19 +817,28 @@ export class ChatStorage {
             });
         }
 
-        if (message.responses) {
-            for (const modelKey of ['model_a', 'model_b']) {
-                const modelMessages = message.responses[modelKey]?.messages;
+        const indexResponseImages = (responses, sourceTag) => {
+            if (!responses) return;
+            for (const modelKey of Object.keys(responses)) {
+                const modelMessages = responses[modelKey]?.messages;
                 if (!Array.isArray(modelMessages)) continue;
                 modelMessages.forEach((msgGroup, messageIndex) => {
                     if (!Array.isArray(msgGroup)) return;
                     msgGroup.forEach((part, partIndex) => {
                         if (part?.type === 'image') {
-                            mediaRecords.push({ chatId, messageId, source: 'assistant', modelKey, messageIndex, partIndex, timestamp, content: part.content });
+                            mediaRecords.push({ chatId, messageId, source: sourceTag, modelKey, messageIndex, partIndex, timestamp, content: part.content });
                         }
                     });
                 });
             }
+        };
+
+        if (message.responses) {
+            indexResponseImages(message.responses, 'assistant');
+        }
+
+        if (message.council?.responses) {
+            indexResponseImages(message.council.responses, 'assistant');
         }
 
         await Promise.all(mediaRecords.map(record => {
@@ -941,7 +984,8 @@ export class ChatStorage {
                     if (entry.source === 'user') {
                         imageHashOrUrl = message.images?.[entry.imageIndex];
                     } else if (entry.modelKey) {
-                        const modelMessages = message.responses?.[entry.modelKey]?.messages;
+                        const modelMessages = message.responses?.[entry.modelKey]?.messages
+                            || message.council?.responses?.[entry.modelKey]?.messages;
                         if (entry.messageIndex != null) {
                             imageHashOrUrl = modelMessages?.[entry.messageIndex]?.[entry.partIndex]?.content;
                         } else {
@@ -1244,6 +1288,11 @@ export class ChatStorage {
                 message.responses[key].messages?.flat().forEach(collectHash);
             }
         }
+        if (message.council?.responses) {
+            for (const key in message.council.responses) {
+                message.council.responses[key].messages?.flat().forEach(collectHash);
+            }
+        }
         return hashes;
     }
 
@@ -1267,6 +1316,26 @@ export class ChatStorage {
             responses: {
                 model_a: { name: modelA, messages: [] },
                 model_b: { name: modelB, messages: [] }
+            }
+        };
+    }
+
+    initCouncilMessage(models, collectorModel) {
+        const responses = {};
+        const status = {};
+        models.forEach(modelId => {
+            responses[modelId] = { name: modelId, messages: [] };
+            status[modelId] = 'pending';
+        });
+
+        return {
+            role: 'assistant',
+            contents: [],
+            council: {
+                collector_model: collectorModel,
+                collector_status: 'pending',
+                responses,
+                status
             }
         };
     }

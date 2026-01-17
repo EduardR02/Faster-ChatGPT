@@ -31,14 +31,14 @@ export const cycleOption = (currentValue, options) => {
 };
 
 export const readThinkingState = (state, modelId = null) => {
-    if (state.isArenaModeActive && modelId) {
+    if ((state.isArenaModeActive || state.isCouncilModeActive) && modelId) {
         return state.thinkingStates[modelId] ?? THINKING_STATE.INACTIVE;
     }
     return state.thinkingStates.default;
 };
 
 export const writeThinkingState = (state, value, modelId = null) => {
-    if (state.isArenaModeActive && modelId) {
+    if ((state.isArenaModeActive || state.isCouncilModeActive) && modelId) {
         state.thinkingStates[modelId] = value;
     } else {
         state.thinkingStates.default = value;
@@ -61,6 +61,19 @@ export const initializeThinkingStates = (state, modelId = null) => {
         }
         const [modelA, modelB] = state.activeArenaModels;
         state.thinkingStates = { [modelA]: initialState, [modelB]: initialState };
+        return;
+    }
+
+    if (state.isCouncilModeActive) {
+        if (modelId) {
+            writeThinkingState(state, initialState, modelId);
+            return;
+        }
+        const models = state.activeCouncilModels || [];
+        state.thinkingStates = models.reduce((acc, model) => {
+            acc[model] = initialState;
+            return acc;
+        }, {});
         return;
     }
 
@@ -182,7 +195,8 @@ export class SettingsStateManager extends SettingsManager {
             'api_keys', 'max_tokens', 'temperature', 'loop_threshold', 'current_model',
             'close_on_deselect', 'show_model_name', 'stream_response', 'arena_mode',
             'arena_models', 'auto_rename', 'auto_rename_model', 'models',
-            'reasoning_effort', 'web_search', 'persist_tabs', 'transcription_model'
+            'reasoning_effort', 'web_search', 'persist_tabs', 'transcription_model',
+            'council_mode', 'council_models', 'council_collector_model'
         ]);
         this.temp = { api_keys: {}, prompts: {} };
         this.pendingChanges = {};
@@ -277,6 +291,13 @@ export class SettingsStateManager extends SettingsManager {
             delete this.pendingChanges.transcription_model;
         }
 
+        if (this.state.settings.council_collector_model === apiName) {
+            settingUpdates.council_collector_model = this.getFirstAvailableModel();
+        }
+        if (this.pendingChanges.council_collector_model === apiName) {
+            delete this.pendingChanges.council_collector_model;
+        }
+
         const arenaModels = this.state.settings.arena_models;
         if (arenaModels?.includes(apiName)) {
             settingUpdates.arena_models = arenaModels.filter(modelId => modelId !== apiName);
@@ -286,6 +307,18 @@ export class SettingsStateManager extends SettingsManager {
             if (this.pendingChanges.arena_models.length < 2) {
                 delete this.pendingChanges.arena_models;
                 delete this.pendingChanges.arena_mode;
+            }
+        }
+
+        const councilModels = this.state.settings.council_models;
+        if (councilModels?.includes(apiName)) {
+            settingUpdates.council_models = councilModels.filter(modelId => modelId !== apiName);
+        }
+        if (this.pendingChanges.council_models?.includes(apiName)) {
+            this.pendingChanges.council_models = this.pendingChanges.council_models.filter(m => m !== apiName);
+            if (this.pendingChanges.council_models.length < 2) {
+                delete this.pendingChanges.council_models;
+                delete this.pendingChanges.council_mode;
             }
         }
 
@@ -323,6 +356,9 @@ export class ArenaStateManager extends SettingsManager {
         super(requestedSettings);
         this.state.isArenaModeActive = false;
         this.state.activeArenaModels = null;
+        this.state.isCouncilModeActive = false;
+        this.state.activeCouncilModels = null;
+        this.state.councilCollectorModel = null;
     }
 
     initArenaResponse(modelA, modelB) {
@@ -337,6 +373,34 @@ export class ArenaStateManager extends SettingsManager {
             activeArenaModels: null,
             isArenaModeActive: false
         });
+    }
+
+    initCouncilResponse(models, collectorModel) {
+        Object.assign(this.state, {
+            activeCouncilModels: models,
+            councilCollectorModel: collectorModel,
+            isCouncilModeActive: true
+        });
+    }
+
+    clearCouncilState() {
+        Object.assign(this.state, {
+            activeCouncilModels: null,
+            councilCollectorModel: null,
+            isCouncilModeActive: false
+        });
+    }
+
+    getCouncilModels() {
+        return this.state.activeCouncilModels || [];
+    }
+
+    getCouncilCollectorModel() {
+        return this.state.councilCollectorModel || this.getSetting('council_collector_model');
+    }
+
+    get isCouncilModeActive() {
+        return this.state.isCouncilModeActive;
     }
 
     getArenaModel(index) {
@@ -409,7 +473,8 @@ export class SidepanelStateManager extends ArenaStateManager {
         super([
             'loop_threshold', 'current_model', 'arena_models', 'stream_response', 
             'arena_mode', 'show_model_name', 'models', 'web_search', 
-            'reasoning_effort', 'persist_tabs', 'transcription_model'
+            'reasoning_effort', 'persist_tabs', 'transcription_model',
+            'council_mode', 'council_models', 'council_collector_model'
         ]);
         
         Object.assign(this, {
@@ -426,7 +491,7 @@ export class SidepanelStateManager extends ArenaStateManager {
             chatState: CHAT_STATE.NORMAL
         });
 
-        this.state.prompts = { active_prompt: {}, thinking: '', solver: '' };
+        this.state.prompts = { active_prompt: {}, thinking: '', solver: '', council_collector: '' };
         this.initThinkingStateDefault();
         this.loadPrompts(activePromptKey);
 
@@ -452,6 +517,8 @@ export class SidepanelStateManager extends ArenaStateManager {
                 this.state.prompts.thinking = value;
             } else if (key === 'solver_prompt') {
                 this.state.prompts.solver = value;
+            } else if (key === 'council_collector_prompt') {
+                this.state.prompts.council_collector = value;
             } else {
                 this.state.prompts.active_prompt = { [key]: value };
             }
@@ -460,7 +527,7 @@ export class SidepanelStateManager extends ArenaStateManager {
 
     async loadPrompts(promptKey) {
         const result = await new Promise(resolve => 
-            chrome.storage.local.get(['thinking_prompt', 'solver_prompt', promptKey], resolve)
+            chrome.storage.local.get(['thinking_prompt', 'solver_prompt', 'council_collector_prompt', promptKey], resolve)
         );
         this.updatePromptsLocal(result);
     }
@@ -473,6 +540,9 @@ export class SidepanelStateManager extends ArenaStateManager {
     getPrompt(type) {
         if (type === 'active_prompt') {
             return Object.values(this.state.prompts.active_prompt)[0];
+        }
+        if (type === 'council_collector') {
+            return this.state.prompts.council_collector;
         }
         return this.state.prompts[type];
     }
@@ -540,11 +610,16 @@ export class SidepanelStateManager extends ArenaStateManager {
         this.state.chatState = CHAT_STATE.NORMAL;
         this.shouldSave = true;
         this.clearArenaState();
+        this.clearCouncilState();
         this.initThinkingStateDefault();
     }
 
     toggleArenaMode() {
-        this.updateSettingsLocal({ arena_mode: !this.getSetting('arena_mode') });
+        this.updateSettingsLocal({ arena_mode: !this.getSetting('arena_mode'), council_mode: false });
+    }
+
+    toggleCouncilMode() {
+        this.updateSettingsLocal({ council_mode: !this.getSetting('council_mode'), arena_mode: false });
     }
 
     toggleChatState(hasChatStarted) {

@@ -20,7 +20,7 @@ class SettingsUI {
         this.apiProviders = Object.keys(apiDisplayNames);
         this.currentAPIProvider = this.apiProviders[0];
         this.dummyRowsOnInit = 0;
-        this.selectModes = ['arena', 'rename', 'transcription'];
+        this.selectModes = ['arena', 'council', 'collector', 'rename', 'transcription'];
 
         this.config = {
             inputs: { 
@@ -35,7 +35,8 @@ class SettingsUI {
                 'arena_mode', 
                 'auto_rename', 
                 'web_search', 
-                'persist_tabs'
+                'persist_tabs',
+                'council_mode'
             ]
         };
 
@@ -65,9 +66,12 @@ class SettingsUI {
         addListener('button-remove-models', 'click', () => this.removeModel());
         
         addListener('arena_mode', 'change', () => this.handleMode('arena'));
+        addListener('council_mode', 'change', () => this.handleMode('council'));
         addListener('auto_rename', 'change', () => this.handleMode('rename'));
         
         addListener('arena_select', 'change', () => this.handleSelect('arena'));
+        addListener('council_select', 'change', () => this.handleSelect('council'));
+        addListener('collector_select', 'change', () => this.handleSelect('collector'));
         addListener('rename_select', 'change', () => this.handleSelect('rename'));
         addListener('transcription_select', 'change', () => this.handleSelect('transcription'));
         
@@ -124,6 +128,7 @@ class SettingsUI {
         // Initialize checkboxes
         this.config.checkboxes.forEach(id => {
             const checkbox = document.getElementById(id);
+            if (!checkbox) return;
             const value = this.stateManager.getSetting(id);
             
             if (id === 'persist_tabs') {
@@ -138,6 +143,11 @@ class SettingsUI {
             const el = document.getElementById(`${mode}_select`);
             if (el) el.checked = false;
         });
+
+        if (this.stateManager.getSetting('council_mode')) {
+            const councilToggle = document.getElementById('council_mode');
+            if (councilToggle) councilToggle.checked = true;
+        }
 
         // Initialize models from state
         const storedModels = this.stateManager.state.settings.models || {};
@@ -195,7 +205,7 @@ class SettingsUI {
     handleModel(input) {
         const currentMode = this.getCurrentMode();
         
-        if (currentMode === 'arena') {
+        if (currentMode === 'arena' || currentMode === 'council') {
             const checkedModels = document.querySelectorAll('input[name="model_select"]:checked');
             const modelsLabel = document.getElementById('models-label');
             
@@ -204,12 +214,14 @@ class SettingsUI {
             
             if (hasEnoughModels) {
                 const modelIds = Array.from(checkedModels).map(el => el.id);
-                this.stateManager.queueSettingChange('arena_models', modelIds);
+                const targetKey = currentMode === 'arena' ? 'arena_models' : 'council_models';
+                this.stateManager.queueSettingChange(targetKey, modelIds);
             }
         } else {
             const settingKeys = { 
-                rename: 'auto_rename_model', 
-                transcription: 'transcription_model', 
+                rename: 'auto_rename_model',
+                transcription: 'transcription_model',
+                collector: 'council_collector_model',
                 normal: 'current_model' 
             };
             
@@ -219,7 +231,12 @@ class SettingsUI {
     }
 
     handleMode(mode) {
-        const checkboxId = (mode === 'arena') ? 'arena_mode' : 'auto_rename';
+        const checkboxMap = {
+            arena: 'arena_mode',
+            council: 'council_mode',
+            rename: 'auto_rename'
+        };
+        const checkboxId = checkboxMap[mode];
         const isEnabled = document.getElementById(checkboxId).checked;
         
         if (isEnabled) this.setSelectMode(mode);
@@ -302,23 +319,29 @@ class SettingsUI {
         
         const modelInputs = document.getElementsByName('model_select');
         modelInputs.forEach(input => {
-            input.type = (currentMode === 'arena') ? 'checkbox' : 'radio';
+            input.type = (currentMode === 'arena' || currentMode === 'council') ? 'checkbox' : 'radio';
             
             if (currentMode === 'arena') {
                 const arenaModels = this.stateManager.getSetting('arena_models') || [];
                 input.checked = arenaModels.includes(input.id);
+            } else if (currentMode === 'council') {
+                const councilModels = this.stateManager.getSetting('council_models') || [];
+                input.checked = councilModels.includes(input.id);
             } else {
                 input.checked = false;
             }
         });
 
-        if (currentMode !== 'arena') {
+        if (currentMode !== 'arena' && currentMode !== 'council') {
             let selectedId = null;
             if (currentMode === 'rename') {
                 selectedId = this.stateManager.getSetting('auto_rename_model') || 
                              this.stateManager.getSetting('current_model');
             } else if (currentMode === 'transcription') {
                 selectedId = this.stateManager.getSetting('transcription_model');
+            } else if (currentMode === 'collector') {
+                selectedId = this.stateManager.getSetting('council_collector_model') ||
+                             this.stateManager.getSetting('current_model');
             } else {
                 selectedId = this.stateManager.getSetting('current_model');
             }
@@ -334,6 +357,8 @@ class SettingsUI {
 
     getCurrentMode() {
         if (document.getElementById('arena_select').checked) return 'arena';
+        if (document.getElementById('council_select').checked) return 'council';
+        if (document.getElementById('collector_select').checked) return 'collector';
         if (document.getElementById('rename_select').checked) return 'rename';
         if (document.getElementById('transcription_select').checked) return 'transcription';
         return 'normal';
@@ -448,7 +473,7 @@ class SettingsUI {
 
     save() {
         const currentMode = this.getCurrentMode();
-        if (currentMode === 'arena') {
+        if (currentMode === 'arena' || currentMode === 'council') {
             const checkedCount = document.querySelectorAll('input[name="model_select"]:checked').length;
             if (checkedCount < 2) {
                 document.getElementById('models-label').classList.add('settings-error');
@@ -514,7 +539,8 @@ class SettingsUI {
         
         const extraInfo = {
             thinking_prompt: " (This prompt will be appended to the system prompt)",
-            solver_prompt: " (You should make it clear that the model should use the previously generated thinking to now solve the problem. This prompt will be appended to the system prompt)"
+            solver_prompt: " (You should make it clear that the model should use the previously generated thinking to now solve the problem. This prompt will be appended to the system prompt)",
+            council_collector_prompt: " (Appended to system prompt for council synthesis)"
         };
         
         area.placeholder = basePlaceholder + (extraInfo[type] || '');
