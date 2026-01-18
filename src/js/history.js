@@ -303,32 +303,24 @@ async function handleAppended(chatId, addedCount, startIndex, message = null, se
 }
 
 async function handleUpdate(chatId, messageId, timestamp = null, messageData = null) {
-    if (chatCore.getChatId() === chatId) {
-        const message = messageData || await chatStorage.getMessage(chatId, messageId);
-        if (!message) return;
-        
-        if (messageId >= chatCore.getLength()) {
-            return handleAppended(chatId, 1, chatCore.getLength(), message, ChatStorage.extractTextFromMessages([message]), message.timestamp || timestamp);
-        }
-        
-        if (message.responses) {
-            chatUI.updateArena(message, messageId);
-        } else if (message.council) {
-            chatUI.updateCouncil(message, messageId);
-        } else {
-            chatUI.appendSingleRegen(message, messageId);
-        }
-        
-        chatCore.currentChat.messages[messageId] = message;
+    if (chatCore.getChatId() !== chatId) return;
+    const message = messageData || await chatStorage.getMessage(chatId, messageId);
+    if (!message) return;
+    if (messageId >= chatCore.getLength()) {
+        return handleAppended(chatId, 1, chatCore.getLength(), message, ChatStorage.extractTextFromMessages([message]), message.timestamp || timestamp);
     }
-    
-    if (timestamp || messageData?.timestamp) {
-        await handleHistoryRefresh(chatId, { timestamp: timestamp || messageData.timestamp });
-    }
-    
     if (mediaTab) {
         mediaTab.deferredForceRefresh = true;
     }
+    await handleHistoryRefresh(chatId, { timestamp: timestamp || message.timestamp || Date.now() });
+    if (message.responses) {
+        chatUI.updateArena(message, messageId);
+    } else if (message.council) {
+        chatUI.updateCouncil(message, messageId);
+    } else {
+        chatUI.appendSingleRegen(message, messageId);
+    }
+    chatCore.miscUpdate({ messages: chatCore.currentChat.messages.map((msg, index) => index === messageId ? message : msg) });
 }
 
 function handleRenamed(chatId, title) {

@@ -139,42 +139,41 @@ export const loadTextFromFile = (filePath) => {
  */
 export const setDefaults = async () => {
     const models = DEFAULT_MODELS;
-        const defaultModel = Object.keys(models.anthropic).at(-1);
-        const settings = {
-            mode: ModeEnum.PromptMode,
-            lifetime_input_tokens: 0,
-            lifetime_output_tokens: 0,
-            max_tokens: 16000,
-            temperature: 1.0,
-            loop_threshold: 2,
-            reasoning_effort: 'medium',
-            show_model_name: true,
-            current_model: defaultModel,
-            transcription_model: null,
-            models,
-            api_keys: {},
-            close_on_deselect: false,
-            stream_response: true,
-            arena_mode: false,
-            council_mode: false,
-            council_models: [],
-            council_collector_model: defaultModel
-        };
+    const defaultModel = Object.keys(models.anthropic).at(-1);
+    const settings = {
+        mode: ModeEnum.PromptMode,
+        lifetime_input_tokens: 0,
+        lifetime_output_tokens: 0,
+        max_tokens: 16000,
+        temperature: 1.0,
+        loop_threshold: 2,
+        reasoning_effort: 'medium',
+        show_model_name: true,
+        current_model: defaultModel,
+        transcription_model: null,
+        models,
+        api_keys: {},
+        close_on_deselect: false,
+        stream_response: true,
+        arena_mode: false,
+        council_mode: false,
+        council_models: [],
+        council_collector_model: defaultModel
+    };
 
-        const loadPrompt = async (path, storageKey, fallback = '') => {
-            try {
-                const text = await loadTextFromFile(path);
-                await chrome.storage.local.set({ [storageKey]: text.trim() });
-            } catch (_) {
-                await chrome.storage.local.set({ [storageKey]: fallback });
-            }
-        };
-
+    const loadPrompt = async (path, storageKey, fallback = '') => {
+        try {
+            const text = await loadTextFromFile(path);
+            await chrome.storage.local.set({ [storageKey]: text.trim() });
+        } catch (_) {
+            await chrome.storage.local.set({ [storageKey]: fallback });
+        }
+    };
 
     await chrome.storage.local.set(settings);
     
     // Default appended prompts for multi-turn thinking/solving
-    const thinkingPrompt = `[APPENDED INSTRUCTION: This modifies response behavior for this turn only, layering on the core system prompt.]\n\nIn this response, skip any direct answer, solution, or conclusion to the user's query. Instead, devote your entire output to building a robust thought process that will enable an optimal, accurate, and comprehensive response in the next turn—whether that's answering, advising, creating, or acting on the user's request.\n\nTo maximize value for the future:\n- Start by rephrasing the query to ensure full grasp, then dissect it into key elements (assumptions, goals, nuances).\n- Freely explore relevant ideas: Draw on knowledge, first principles, potential angles, risks, or alternatives. Think aloud step-by-step, noting connections, gaps, or insights that could shape the final output.\n- Wrap up by highlighting the strongest threads or \"building blocks\" you've assembled, explicitly linking how they'll power a superior next response.\n\nStay focused, insightful, and unfiltered—aim to arm yourself (and the conversation) with everything needed to nail it later. No finals here; this is all setup.`;
+    const thinkingPrompt = `[APPENDED INSTRUCTION: This modifies response behavior for this turn only, layering on the core system prompt.]\n\nIn this response, skip any direct answer, solution, or conclusion to the user's query. Instead, devote your entire output to building a robust thought process that will enable an optimal, accurate, and comprehensive response in the next turn—whether that's answering, advising, creating, or acting on the user's request.\n\nTo maximize value for the future:\n- Start by rephrasing the query to ensure full grasp, then dissect it into key elements (assumptions, goals, nuances).\n- Freely explore relevant ideas: Draw on knowledge, first principles, potential angles, risks, or alternatives. Think aloud step-by-step, noting connections, gaps, or insights that could shape the final output.\n- Wrap up by highlighting the strongest threads or "building blocks" you've assembled, explicitly linking how they'll power a superior next response.\n\nStay focused, insightful, and unfiltered—aim to arm yourself (and the conversation) with everything needed to nail it later. No finals here; this is all setup.`;
     
     const solverPrompt = `[APPENDED INSTRUCTION: This shifts response mode for this turn only, building directly on the core system prompt and your prior thoughts.]\n\nYou've now received the detailed thought process from the previous turn—use it to its full extent as the foundation for your response. Synthesize those insights, breakdowns, and building blocks to craft a complete, direct, and high-quality reply to the original user query or statement, whatever it may be (question, observation, casual remark, or anything else).\n\nRespond appropriately and engagingly: Draw deeply from the prep to ensure accuracy, depth, creativity, or humor as fits the context. Cover all key angles without deferring or recapping the thoughts themselves—deliver the polished, final output that resolves or advances the conversation.\n\nKeep it natural, insightful, and on-point; this is where it all comes together.`;
 
@@ -188,3 +187,4 @@ export const setDefaults = async () => {
         })
     ]);
 };
+

@@ -240,7 +240,7 @@ body {
   justify-content: space-between;
   flex-direction: row;
   align-items: center;
-  margin-bottom: 0.5em;
+  margin-bottom: 0.2em;
 }
 
 .history-prefix-wrapper .message-prefix {
@@ -1337,7 +1337,7 @@ p {
 .textarea-wrapper .std-input {
   border-radius: 0.75rem;
   padding-bottom: 2.25rem; /* Space for bottom-left controls */
-  min-height: 125px; /* Space for 3x 28px buttons + gap + padding */
+  min-height: 5.5rem; /* Space for right + bottom buttons */
   max-height: 50vh;
   overflow-y: hidden; /* JS switches to auto when at max-height */
 }
@@ -1459,6 +1459,7 @@ p {
   width: 28px;
   height: 28px;
   padding: 1px 6px;
+  font-size: 1.4em;
   border-radius: 0.5rem;
   background: #abb2bf;
   /* this is so the icons / text are centered inside the button, as we want to keep it fixed size, but need to adjust content size*/

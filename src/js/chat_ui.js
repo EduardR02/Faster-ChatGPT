@@ -44,25 +44,12 @@ class ChatUI {
     }
 
     createMessage(role, parts = [], options = {}) {
-        const { files, images, messageId, allowContinue = true, status, isCouncilRow = false, showStatus = true, displayName, ...prefixOptions } = options;
+        const { files, images, messageId, allowContinue = true, ...prefixOptions } = options;
         
         // Attach model info from the last part if available
-        const lastPartModel = parts.length > 0 ? parts.at(-1).model : null;
-        if (lastPartModel && !prefixOptions.model) {
-            prefixOptions.model = lastPartModel;
+        if (parts.length > 0 && parts.at(-1).model) {
+            prefixOptions.model = parts.at(-1).model;
         }
-        if (displayName) {
-            prefixOptions.displayName = displayName;
-        } else if (lastPartModel) {
-            prefixOptions.displayName = lastPartModel;
-        }
-
-        if (status) {
-            prefixOptions.status = status;
-        }
-
-        prefixOptions.isCouncilRow = isCouncilRow;
-        prefixOptions.showStatus = showStatus;
 
         const messageBlock = createElementWithClass('div', `${role}-message`);
         if (messageId != null) {
@@ -70,13 +57,8 @@ class ChatUI {
         }
 
         const prefixWrapper = createElementWithClass('div', 'history-prefix-wrapper');
-        const prefixContent = this.generatePrefix(role, prefixOptions);
-        const prefixSpan = createElementWithClass('span', `message-prefix ${role}-prefix`);
-        if (prefixOptions.isCouncilRow) {
-            prefixSpan.innerHTML = prefixContent;
-        } else {
-            prefixSpan.textContent = prefixContent;
-        }
+        const prefixText = this.generatePrefix(role, prefixOptions);
+        const prefixSpan = createElementWithClass('span', `message-prefix ${role}-prefix`, prefixText);
         prefixWrapper.appendChild(prefixSpan);
 
         if (options.continueFunc && allowContinue) {
@@ -115,47 +97,18 @@ class ChatUI {
     }
 
     generatePrefix(role, options = {}) {
-        const { model, displayName, isRegeneration = false, hideModels = true, status, isCouncilRow = false, showStatus = true } = options;
-        const showModelNameSetting = this.stateManager.getSetting('show_model_name');
-        const labelModel = displayName || model;
-        const stateModelId = model || displayName;
-        
-        let label;
-        if (role !== 'assistant') {
-            label = this.roleLabels[role];
-        } else if (isCouncilRow) {
-            label = showModelNameSetting ? labelModel : this.roleLabels.assistant;
-        } else {
-            label = hideModels ? this.roleLabels.assistant : labelModel;
-        }
+        const { model, isRegeneration = false, hideModels = true } = options;
+        let label = (hideModels || role !== 'assistant') ? this.roleLabels[role] : model;
         
         if (role === 'assistant') {
             if (isRegeneration) label += ` ${UNICODE.REGEN_ARROW}`;
             
-            if (this.stateManager.isThinking(stateModelId)) {
+            if (this.stateManager.isThinking(model)) {
                 label += ' 🧠';
-            } else if (this.stateManager.isSolving(stateModelId)) {
+            } else if (this.stateManager.isSolving(model)) {
                 label += ' 💡';
             }
         }
-
-        if (isCouncilRow) {
-            if (!showStatus) {
-                return `<span class="council-model">${label}</span>`;
-            }
-            let statusText = (status || 'pending').toUpperCase();
-            if (statusText === 'STREAMING') statusText = '';
-            const statusLabel = statusText === 'PENDING' ? 'PENDING' : (statusText === 'ERROR' ? 'ERROR' : statusText);
-            
-            const statusSpan = statusLabel ? `<span class="council-status">${statusLabel}</span>` : '';
-            return `<span class="council-model">${label}</span>${statusSpan}`;
-        }
-
-        if (status && status !== 'complete' && status !== 'streaming') {
-            const statusIcon = status === 'error' ? ' ❌' : ' ⏳';
-            label += statusIcon;
-        }
-
         return label;
     }
 
@@ -282,7 +235,6 @@ class ChatUI {
         }
 
         const hideModels = options.hideModels ?? !this.stateManager.getSetting('show_model_name');
-        const showModelName = !hideModels;
 
         const header = createElementWithClass('div', 'council-header');
         const title = createElementWithClass('span', 'council-title', 'Council');
@@ -310,30 +262,30 @@ class ChatUI {
                 const messages = responseEntry?.messages || [];
                 if (messages.length === 0) {
                     const msg = this.createMessage('assistant', [], { 
-                        model: modelId,
-                        displayName,
+                        model: displayName,
                         hideModels: options.hideModels,
-                        status: status === 'pending' ? 'pending' : status, 
                         allowContinue: false,
-                        isCouncilRow: true,
-                        showStatus: status === 'pending' || status === 'error'
+                        isCouncilRow: true
                     });
                     msg.dataset.model = displayName;
+                    if (status === 'pending' || status === 'error') {
+                        this.appendCouncilStatusPill(msg, status);
+                    }
                     rowContent.appendChild(msg);
                 } else {
                     messages.forEach((parts, partIndex) => {
                         const runOptions = { 
-                            model: modelId,
-                            displayName,
+                            model: displayName,
                             hideModels: options.hideModels,
-                            status, 
                             isRegeneration: partIndex !== 0, 
                             allowContinue: false,
-                            isCouncilRow: true,
-                            showStatus: status === 'pending' || status === 'error'
+                            isCouncilRow: true
                         };
                         const msg = this.createMessage('assistant', parts, runOptions);
                         msg.dataset.model = displayName;
+                        if (status === 'pending' || status === 'error') {
+                            this.appendCouncilStatusPill(msg, status);
+                        }
                         rowContent.appendChild(msg);
                     });
                 }
@@ -352,13 +304,10 @@ class ChatUI {
         
         const collectorOptions = {
             role: 'assistant',
-            model: collectorModel,
-            displayName: collectorDisplayName,
-            hideModels: !showModelName,
-            status: collectorStatus === 'pending' ? 'synthesizing...' : collectorStatus,
+            model: collectorDisplayName,
+            hideModels,
             allowContinue: options.allowContinue,
-            isCouncilRow: true,
-            showStatus: collectorStatus === 'pending' || collectorStatus === 'error'
+            isCouncilRow: true
         };
 
         if (options.continueFunc) {
@@ -368,6 +317,9 @@ class ChatUI {
         const collectorMessage = this.createMessage('assistant', collectorResponse, collectorOptions);
         collectorMessage.dataset.model = collectorDisplayName;
         collectorMessage.dataset.councilCollectorStatus = collectorStatus;
+        if (collectorStatus === 'pending' || collectorStatus === 'error') {
+            this.appendCouncilStatusPill(collectorMessage, collectorStatus === 'pending' ? 'synthesizing...' : collectorStatus);
+        }
         collectorWrapper.appendChild(collectorMessage);
 
 
@@ -398,6 +350,18 @@ class ChatUI {
         return councilBlock;
     }
 
+    appendCouncilStatusPill(messageElement, status) {
+        if (!messageElement || !status || status === 'complete' || status === 'streaming') {
+            return;
+        }
+        const prefixSpan = messageElement.querySelector('.message-prefix');
+        if (!prefixSpan) return;
+        prefixSpan.querySelectorAll('.council-status').forEach(el => el.remove());
+        const displayStatus = status === 'pending' ? 'pending' : status === 'error' ? 'error' : status;
+        const statusPill = createElementWithClass('span', 'council-status', displayStatus.toUpperCase());
+        prefixSpan.appendChild(statusPill);
+    }
+
     updateCouncil(message, index) {
         const oldBlock = this.conversationDiv.children[index];
         if (!oldBlock) return;
@@ -424,14 +388,15 @@ class ChatUI {
                         const prefixSpan = assistantMessage.querySelector('.message-prefix');
                         if (prefixSpan) {
                             const displayName = assistantMessage.dataset.model || this.resolveDisplayNameFromHistory(modelId);
-                            prefixSpan.innerHTML = this.generatePrefix('assistant', { 
-                                model: modelId,
-                                displayName,
-                                status, 
-                                hideModels: !this.stateManager.getSetting('show_model_name'),
-                                isCouncilRow: true,
-                                showStatus: status === 'pending' || status === 'error'
+                            prefixSpan.textContent = this.generatePrefix('assistant', {
+                                model: displayName,
+                                hideModels: !this.stateManager.getSetting('show_model_name')
                             });
+                            if (status === 'complete' || status === 'streaming') {
+                                prefixSpan.querySelectorAll('.council-status').forEach(el => el.remove());
+                            } else {
+                                this.appendCouncilStatusPill(assistantMessage, status);
+                            }
                         }
                     }
                 }
@@ -446,14 +411,15 @@ class ChatUI {
                 if (prefixSpan) {
                     const collectorModel = message.council?.collector_model || this.stateManager.getCouncilCollectorModel();
                     const displayName = collector.dataset.model || this.resolveDisplayNameFromHistory(collectorModel);
-                    prefixSpan.innerHTML = this.generatePrefix('assistant', {
-                        model: collectorModel,
-                        displayName,
-                        hideModels: !this.stateManager.getSetting('show_model_name'),
-                        status: collectorStatus === 'pending' ? 'synthesizing...' : collectorStatus,
-                        isCouncilRow: true,
-                        showStatus: collectorStatus === 'pending' || collectorStatus === 'error'
+                    prefixSpan.textContent = this.generatePrefix('assistant', {
+                        model: displayName,
+                        hideModels: !this.stateManager.getSetting('show_model_name')
                     });
+                    if (collectorStatus === 'complete' || collectorStatus === 'streaming') {
+                        prefixSpan.querySelectorAll('.council-status').forEach(el => el.remove());
+                    } else {
+                        this.appendCouncilStatusPill(collector, collectorStatus === 'pending' ? 'synthesizing...' : collectorStatus);
+                    }
                 }
             }
 
@@ -1000,14 +966,15 @@ export class SidepanelChatUI extends ChatUI {
         if (prefixSpan) {
             const assistantMessage = row.querySelector('.assistant-message');
             const displayName = assistantMessage?.dataset?.model || this.resolveDisplayNameFromHistory(modelId);
-            prefixSpan.innerHTML = this.generatePrefix('assistant', {
-                model: modelId,
-                displayName,
-                hideModels: !this.stateManager.getSetting('show_model_name'),
-                status,
-                isCouncilRow: true,
-                showStatus: status === 'pending' || status === 'error'
+            prefixSpan.textContent = this.generatePrefix('assistant', {
+                model: displayName,
+                hideModels: !this.stateManager.getSetting('show_model_name')
             });
+            if (status === 'complete' || status === 'streaming') {
+                prefixSpan.querySelectorAll('.council-status').forEach(el => el.remove());
+            } else {
+                this.appendCouncilStatusPill(assistantMessage, status);
+            }
         }
 
         const meta = this.activeDivs.querySelector('.council-meta');
@@ -1030,14 +997,16 @@ export class SidepanelChatUI extends ChatUI {
         const prefixSpan = collector.querySelector('.message-prefix');
         if (prefixSpan) {
             const displayName = collector.dataset.model || this.resolveDisplayNameFromHistory(collectorModel);
-            prefixSpan.innerHTML = this.generatePrefix('assistant', {
-                model: collectorModel,
-                displayName,
-                hideModels: !this.stateManager.getSetting('show_model_name'),
-                status: (status === 'pending' || status === 'pending...') ? 'synthesizing...' : status,
-                isCouncilRow: true,
-                showStatus: status === 'pending' || status === 'error'
+            prefixSpan.textContent = this.generatePrefix('assistant', {
+                model: displayName,
+                hideModels: !this.stateManager.getSetting('show_model_name')
             });
+            const displayStatus = (status === 'pending' || status === 'pending...') ? 'synthesizing...' : status;
+            if (displayStatus === 'complete' || displayStatus === 'streaming') {
+                prefixSpan.querySelectorAll('.council-status').forEach(el => el.remove());
+            } else {
+                this.appendCouncilStatusPill(collector, displayStatus);
+            }
         }
     }
 
@@ -1052,14 +1021,15 @@ export class SidepanelChatUI extends ChatUI {
         const prefixSpan = row.querySelector('.message-prefix');
         if (prefixSpan) {
             const status = row.dataset.status || 'pending';
-            prefixSpan.innerHTML = this.generatePrefix('assistant', {
-                model: modelId,
-                displayName,
-                hideModels: !this.stateManager.getSetting('show_model_name'),
-                status,
-                isCouncilRow: true,
-                showStatus: status === 'pending' || status === 'error'
+            prefixSpan.textContent = this.generatePrefix('assistant', {
+                model: displayName,
+                hideModels: !this.stateManager.getSetting('show_model_name')
             });
+            if (status === 'complete' || status === 'streaming') {
+                prefixSpan.querySelectorAll('.council-status').forEach(el => el.remove());
+            } else {
+                this.appendCouncilStatusPill(assistantMessage, status);
+            }
         }
     }
 
