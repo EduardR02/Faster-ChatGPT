@@ -132,6 +132,32 @@ describe('ChatStorage', () => {
     expect(loaded.messages[1].contents[0][0].content).toBe('Updated response');
   });
 
+  test('council message round-trip', async () => {
+    const councilMessage = {
+      role: 'assistant',
+      council: {
+        collector_model: 'gpt-4o',
+        collector_status: 'complete',
+        responses: {
+          'gpt-4o': { name: 'gpt-4o', messages: [[{ type: 'text', content: 'Council A' }]] },
+          'claude-3-5-sonnet': { name: 'claude-3-5-sonnet', messages: [[{ type: 'text', content: 'Council B' }]] }
+        },
+        status: { 'gpt-4o': 'complete', 'claude-3-5-sonnet': 'complete' }
+      },
+      contents: [[{ type: 'text', content: 'Final Summary' }]]
+    };
+    
+    const result = await storage.createChatWithMessages('Council Test', [
+      { role: 'user', contents: [[{ type: 'text', content: 'Question' }]] },
+      councilMessage
+    ]);
+    
+    const loaded = await storage.loadChat(result.chatId);
+    expect(loaded.messages[1].council.collector_model).toBe('gpt-4o');
+    expect(loaded.messages[1].council.responses['gpt-4o'].messages[0][0].content).toBe('Council A');
+    expect(loaded.messages[1].contents[0][0].content).toBe('Final Summary');
+  });
+
   describe('ChatStorage static methods', () => {
     test('isDataUrl identifies data URLs', () => {
       expect(ChatStorage.isDataUrl('data:image/png;base64,abc')).toBe(true);

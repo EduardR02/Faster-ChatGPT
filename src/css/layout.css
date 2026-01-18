@@ -240,7 +240,7 @@ body {
   justify-content: space-between;
   flex-direction: row;
   align-items: center;
-  margin-bottom: 0.2em; /* decreased by 0.1 to account for button */
+  margin-bottom: 0.5em;
 }
 
 .history-prefix-wrapper .message-prefix {
@@ -947,6 +947,8 @@ a:visited {
   width: fit-content;
   align-items: center;
   column-gap: 0.5em;
+  flex-wrap: wrap;
+  row-gap: 0.5em;
 }
 
 .row-align,
@@ -1017,11 +1019,33 @@ p {
 }
 
 .council-message {
+  display: flex;
+  flex-direction: column;
   gap: 0.75em;
-  padding: 0.75em 0.5em 0.5em;
+  padding: 0.75em 0.5em;
   border-radius: 1em;
   background: rgba(23, 20, 29, 0.65);
   border: 1px solid rgba(253, 170, 170, 0.25);
+}
+
+.council-status {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.75em;
+  padding: 0.1em 0.45em;
+  border-radius: 999px;
+  border: 1px solid rgba(253, 170, 170, 0.35);
+  color: #fdaaaa;
+}
+
+.council-row[data-status="complete"] .council-status {
+  color: #98c379;
+  border-color: rgba(152, 195, 121, 0.4);
+}
+
+.council-row[data-status="error"] .council-status {
+  color: #ef596f;
+  border-color: rgba(239, 89, 111, 0.4);
 }
 
 .council-header {
@@ -1046,6 +1070,8 @@ p {
 
 .council-collector {
   padding: 0 0.5em;
+  border-top: 1px solid rgba(253, 170, 170, 0.15);
+  padding-top: 0.75em;
 }
 
 .council-collector [data-council-collector-status="pending"] .message-content {
@@ -1057,7 +1083,7 @@ p {
 }
 
 .council-collector [data-council-collector-status="pending"] .message-content::after {
-  content: " (collecting…)";
+  content: " (synthesizing...)";
   color: #abb2bf;
   font-size: 0.85em;
 }
@@ -1093,50 +1119,29 @@ p {
 .council-row {
   border-radius: 0.75em;
   border: 1px solid rgba(171, 178, 191, 0.2);
-  background: rgba(33, 37, 43, 0.6);
+  background: transparent;
   padding: 0.5em 0.75em;
   display: flex;
   flex-direction: column;
   gap: 0.5em;
 }
 
-.council-row-header {
+.council-row .history-prefix-wrapper {
+  margin-bottom: 0.3em;
+}
+
+.council-row .message-prefix {
+  width: 100%;
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  font-size: 0.85em;
-  color: #abb2bf;
-}
-
-.council-model {
-  font-weight: 600;
-  color: #ffffff;
-}
-
-.council-status {
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 0.75em;
-  padding: 0.1em 0.45em;
-  border-radius: 999px;
-  border: 1px solid rgba(253, 170, 170, 0.35);
-  color: #fdaaaa;
-}
-
-.council-row[data-status="complete"] .council-status {
-  color: #98c379;
-  border-color: rgba(152, 195, 121, 0.4);
-}
-
-.council-row[data-status="error"] .council-status {
-  color: #ef596f;
-  border-color: rgba(239, 89, 111, 0.4);
+  align-items: center;
+  box-sizing: border-box;
 }
 
 .council-row-content {
   display: flex;
   flex-direction: column;
-  gap: 0.5em;
+  gap: 0.75em;
 }
 
 .council-empty {
@@ -1332,7 +1337,7 @@ p {
 .textarea-wrapper .std-input {
   border-radius: 0.75rem;
   padding-bottom: 2.25rem; /* Space for bottom-left controls */
-  min-height: 5.5rem; /* Space for right + bottom buttons */
+  min-height: 125px; /* Space for 3x 28px buttons + gap + padding */
   max-height: 50vh;
   overflow-y: hidden; /* JS switches to auto when at max-height */
 }
@@ -1446,6 +1451,7 @@ p {
 
   display: flex;
   flex-direction: column;
+  gap: 10px;
 }
 
 .arena-toggle-button {
@@ -1453,7 +1459,6 @@ p {
   width: 28px;
   height: 28px;
   padding: 1px 6px;
-  font-size: 1.4em;
   border-radius: 0.5rem;
   background: #abb2bf;
   /* this is so the icons / text are centered inside the button, as we want to keep it fixed size, but need to adjust content size*/
@@ -1463,14 +1468,14 @@ p {
   min-width: unset;
 }
 
-.arena-toggle-button.arena-mode-on {
-  font-size: 1.8em;
+.arena-toggle-button.arena-mode-on,
+.council-toggle-button.council-mode-on {
   background: #ef596f;
   color: #ffffff;
+  box-shadow: 0 0 8px rgba(239, 89, 111, 0.4);
 }
 
 .thinking-mode {
-  margin-top: 10px;
 }
 
 .arena-toggle-button.thinking-mode-on {

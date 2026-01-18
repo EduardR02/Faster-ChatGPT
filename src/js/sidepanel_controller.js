@@ -46,7 +46,6 @@ export class SidepanelController {
         const mode = options.mode ?? (this.state.isCouncilModeActive ? 'council' : (this.state.isArenaModeActive ? 'arena' : 'normal'));
         const isCouncilMode = mode === 'council' || mode === 'collector';
         const isArenaMode = mode === 'arena';
-        const isMultiMode = isArenaMode || isCouncilMode;
         const disableRegenerate = options.disableRegenerate ?? isCouncilMode;
 
         const providerName = this.api.getProviderName(modelId);
@@ -72,7 +71,8 @@ export class SidepanelController {
             displayModelName = localConfig.display;
         }
 
-        const streamWriter = this.createStreamWriter(this.chatUI.getContentDiv(modelId), isMultiMode);
+        const contentDiv = options.contentDiv ?? this.chatUI.getContentDiv(modelId);
+        const streamWriter = this.createStreamWriter(contentDiv, isArenaMode && !isCouncilMode);
         const shouldStreamResponse = !this.api.isImageModel(modelId) && this.state.getSetting('stream_response');
         let isCallSuccessful = false;
 
@@ -94,6 +94,13 @@ export class SidepanelController {
         } catch (error) {
             if (!wasManuallyAborted) {
                 this.chatUI.addErrorMessage(this.api.getUiErrorMessage(error));
+            }
+            if (mode === 'council') {
+                this.chatUI.updateCouncilStatus(modelId, 'error');
+                await this.chatCore.updateCouncilStatus(modelId, 'error');
+            } else if (mode === 'collector') {
+                this.chatUI.updateCouncilCollectorStatus('error');
+                await this.chatCore.updateCouncilCollectorStatus('error');
             }
         } finally {
             tokenCounter.updateLifetimeTokens();
@@ -139,19 +146,23 @@ export class SidepanelController {
             const key = this.state.getArenaModelKey(modelId);
             await this.chatCore.setArenaModelName(key, displayName);
             this.chatUI.setArenaModelDisplayName(modelId, displayName);
-        } else if (mode === 'council') {
+        } else if (mode === 'council' || mode === 'collector') {
             const showModelName = this.state.getSetting('show_model_name');
-            if (showModelName) {
-                const councilRowLabel = this.chatUI.activeDivs?.querySelector(`.council-row[data-model-id="${modelId}"] .council-model`);
-                if (councilRowLabel) {
-                    councilRowLabel.textContent = displayName;
-                }
+            if (mode === 'collector') {
+                this.chatUI.updateCouncilCollectorStatus('complete');
+                await this.chatCore.updateCouncilCollectorStatus('complete');
+            } else {
+                this.chatUI.updateCouncilStatus(modelId, 'complete');
+                await this.chatCore.updateCouncilStatus(modelId, 'complete');
+            }
+            if (showModelName && mode === 'council') {
+                this.chatUI.updateCouncilModelName(modelId, displayName);
             }
         } else {
             this.chatUI.updateLastMessageModelName(displayName);
         }
 
-        const modelNameForStorage = isArenaMode ? modelId : displayName;
+        const modelNameForStorage = (isArenaMode || isCouncilMode) ? modelId : displayName;
         await this.saveResponse(responseParts, modelNameForStorage, isRegeneration, mode);
 
         const lastMessage = this.chatCore.getLatestMessage();
@@ -237,12 +248,13 @@ export class SidepanelController {
         }
     }
 
-    createStreamWriter(contentDiv, isMultiMode) {
+    createStreamWriter(contentDiv, isArenaMode) {
         const produceNextDiv = (role, isThought) => this.chatUI.produceNextContentDiv(role, isThought);
         const scrollCallback = () => this.chatUI.scrollIntoView();
         
-        const useSmoothStreaming = this.state.getSetting('stream_response') && isMultiMode;
-        return useSmoothStreaming 
+        const useSmoothStreaming = this.state.getSetting('stream_response') && isArenaMode;
+        
+        return useSmoothStreaming
             ? new StreamWriter(contentDiv, produceNextDiv, scrollCallback, 5000) 
             : new StreamWriterSimple(contentDiv, produceNextDiv, scrollCallback);
     }
@@ -299,24 +311,53 @@ export class SidepanelController {
 
             this.chatCore.initCouncil(councilModels, collectorModel);
 
-            this.chatUI.createCouncilMessage(this.chatCore.getLatestMessage(), {
+            const councilContainer = this.chatUI.createCouncilMessage(this.chatCore.getLatestMessage(), {
                 messageIndex: currentMessageIndex,
-                allowContinue: false
+                allowContinue: false,
+                hideModels: !this.state.getSetting('show_model_name')
             });
 
-            const councilCalls = councilModels.map(modelId => this.makeApiCall(modelId, false, { mode: 'council' }));
+            const councilCalls = councilModels.map(modelId => {
+                const rowContent = councilContainer.querySelector(`.council-row[data-model-id="${modelId}"] .council-row-content`);
+                const rowMessage = rowContent?.querySelector('.assistant-message');
+                const messageContent = rowMessage?.querySelector('.message-content');
+                const messageWrapper = rowMessage?.querySelector('.message-wrapper') || rowContent;
+                
+                if (!rowContent || !rowMessage) {
+                    console.error(`Council row content not found for model: ${modelId}`);
+                    this.chatUI.updateCouncilStatus(modelId, 'error');
+                    this.chatCore.updateCouncilStatus(modelId, 'error');
+                    return Promise.reject(new Error(`Row content missing for ${modelId}`));
+                }
+
+                return this.makeApiCall(modelId, false, { 
+                    mode: 'council',
+                    contentDiv: messageContent || messageWrapper
+                });
+            });
+
             const councilResults = await Promise.allSettled(councilCalls);
             const hasCouncilSuccess = councilResults.some(result => result.status === 'fulfilled');
 
             if (hasCouncilSuccess) {
+                const collectorMessage = councilContainer.querySelector('.council-collector .assistant-message');
+                const collectorContent = collectorMessage?.querySelector('.message-content');
+                const collectorWrapper = collectorMessage?.querySelector('.message-wrapper');
+                // Set collector to streaming - tag disappears once collector starts
+                this.chatUI.updateCouncilCollectorStatus('streaming');
+                await this.chatCore.updateCouncilCollectorStatus('streaming');
+                
                 await this.makeApiCall(collectorModel, false, {
                     mode: 'collector',
-                    messages: this.buildCollectorPrompt(councilModels)
+                    messages: this.buildCollectorPrompt(councilModels),
+                    contentDiv: collectorContent || collectorWrapper || collectorMessage
                 });
             } else {
-                await this.chatCore.updateCouncilStatus(collectorModel, 'error');
+                this.chatUI.updateCouncilCollectorStatus('error');
+                await this.chatCore.updateCouncilCollectorStatus('error');
                 this.chatUI.addErrorMessage('Council responses failed. Collector skipped.');
             }
+
 
         } else if (this.state.isArenaModeActive) {
             const enabledArenaModels = this.state.getSetting('arena_models');
@@ -399,7 +440,7 @@ export class SidepanelController {
             return `Model (${modelId}) response:\n${text || '[no response]'}\n`;
         }).join('\n');
 
-        const collectorPrompt = this.state.getPrompt('council_collector') || '';
+        const collectorPrompt = this.state.getPrompt('council_collector_prompt') || '';
 
         return [
             { role: 'system', parts: [{ type: 'text', content: systemPrompt + (collectorPrompt ? `\n\n${collectorPrompt}` : '') }] },

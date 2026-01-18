@@ -11,13 +11,11 @@ import { VoiceManager } from './voice_manager.js';
 const STARTUP_WINDOW_MS = 2000;  // Time window to consider closing empty startup tabs
 const NEW_TAB_URL = 'chrome://newtab';
 
-// Arena mode toggle icons
+// Arena and Council mode toggle icons
 const ICON = {
-    ARENA_OFF: '\u{2694}',   // ⚔️ Crossed swords
-    ARENA_ON: '\u{1F3DF}',   // 🏟️ Stadium
-    COUNCIL_OFF: '\u{1F3DB}', // 🏛️ Classical building
-    COUNCIL_ON: '\u{1F465}',  // 👥 People
-    CHAT: '\u{1F916}'         // 🤖 Robot
+    ARENA: '\u{2694}',       // ⚔️ Crossed swords - arena mode enabled
+    CHAT: '\u{1F916}',       // 🤖 Robot - normal chat mode
+    COUNCIL: '\u{2042}'      // ⁂ Asterism - council mode
 };
 
 class SidepanelApp {
@@ -320,14 +318,14 @@ class SidepanelApp {
         if (arenaToggleButton) {
             const isArenaModeActive = tabState?.isArenaModeActive ?? this.stateManager.getSetting('arena_mode');
             arenaToggleButton.classList.toggle('arena-mode-on', isArenaModeActive);
-            arenaToggleButton.textContent = isArenaModeActive ? ICON.ARENA_ON : ICON.ARENA_OFF;
+            arenaToggleButton.textContent = isArenaModeActive ? ICON.ARENA : ICON.CHAT;
         }
 
         const councilToggleButton = document.querySelector('.council-toggle-button');
         if (councilToggleButton) {
             const isCouncilModeActive = tabState?.isCouncilModeActive ?? this.stateManager.getSetting('council_mode');
-            councilToggleButton.classList.toggle('arena-mode-on', isCouncilModeActive);
-            councilToggleButton.textContent = isCouncilModeActive ? ICON.COUNCIL_ON : ICON.COUNCIL_OFF;
+            councilToggleButton.classList.toggle('council-mode-on', isCouncilModeActive);
+            councilToggleButton.textContent = ICON.COUNCIL;
         }
 
         const reasoningToggleButton = document.getElementById('sonnet-thinking-toggle');
@@ -375,9 +373,11 @@ class SidepanelApp {
             
             if (arenaToggleButton) {
                 arenaToggleButton.classList.toggle('arena-mode-on', isArenaModeActive);
+                arenaToggleButton.textContent = isArenaModeActive ? ICON.ARENA : ICON.CHAT;
             }
             if (councilToggleButton) {
-                councilToggleButton.classList.toggle('arena-mode-on', isCouncilModeActive);
+                councilToggleButton.classList.toggle('council-mode-on', isCouncilModeActive);
+                councilToggleButton.textContent = ICON.COUNCIL;
             }
         };
         

@@ -181,7 +181,7 @@ export const setDefaults = async () => {
     await Promise.all([
         loadPrompt("src/prompts/prompt.txt", "selection_prompt"),
         loadPrompt("src/prompts/chat_prompt.txt", "chat_prompt"),
-        loadPrompt("src/prompts/council_collector_prompt.txt", "council_collector_prompt", "You are the Council Chair. Synthesize the council responses into a single, high-quality, and authoritative response. Identify the strongest points, reconcile disagreements, and provide a unified, superior answer."),
+        loadPrompt("src/prompts/council_collector_prompt.txt", "council_collector_prompt", "You are acting as The Arbiter. Your role is to evaluate and synthesize the provided council responses into a single, definitive, and high-quality final answer."),
         chrome.storage.local.set({
             thinking_prompt: thinkingPrompt.trim(),
             solver_prompt: solverPrompt.trim()

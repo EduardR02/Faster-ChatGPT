@@ -85,6 +85,7 @@ export class TabState {
             this.activeCouncilModels = null;
             this.councilCollectorModel = null;
         }
+        this.globalState.updateSettingsLocal({ arena_mode: next, council_mode: false });
         return this._isArenaModeActive;
     }
 
@@ -95,6 +96,7 @@ export class TabState {
             this._isArenaModeActive = false;
             this.activeArenaModels = null;
         }
+        this.globalState.updateSettingsLocal({ council_mode: next, arena_mode: false });
         return this._isCouncilModeActive;
     }
 

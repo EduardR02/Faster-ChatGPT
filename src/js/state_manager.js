@@ -430,7 +430,7 @@ export class ArenaStateManager extends SettingsManager {
  */
 export class HistoryStateManager extends ArenaStateManager {
     constructor() {
-        super();
+        super(['show_model_name', 'models']);
         Object.assign(this, {
             isLoading: false,
             offset: 0,
@@ -615,11 +615,13 @@ export class SidepanelStateManager extends ArenaStateManager {
     }
 
     toggleArenaMode() {
-        this.updateSettingsLocal({ arena_mode: !this.getSetting('arena_mode'), council_mode: false });
+        const next = !this.getSetting('arena_mode');
+        this.updateSettingsPersistent({ arena_mode: next, council_mode: false });
     }
 
     toggleCouncilMode() {
-        this.updateSettingsLocal({ council_mode: !this.getSetting('council_mode'), arena_mode: false });
+        const next = !this.getSetting('council_mode');
+        this.updateSettingsPersistent({ council_mode: next, arena_mode: false });
     }
 
     toggleChatState(hasChatStarted) {

@@ -134,6 +134,25 @@ describe('ChatStorage.extractTextFromMessage', () => {
     expect(text).not.toContain('null');
   });
 
+  test('extracts from council message - text and responses', () => {
+    const message = {
+      role: 'assistant',
+      council: {
+        responses: {
+          'gpt-4o': { messages: [[{ type: 'thought', content: 'Thought A' }, { type: 'text', content: 'Response A' }]] },
+          'claude-3-5-sonnet': { messages: [[{ type: 'text', content: 'Response B' }]] }
+        }
+      },
+      contents: [[{ type: 'text', content: 'Final Summary' }]]
+    };
+    const text = ChatStorage.extractTextFromMessage(message);
+    expect(text).toContain('Response A');
+    expect(text).toContain('Response B');
+    expect(text).toContain('Final Summary');
+    // Council also excludes thoughts from search to reduce noise
+    expect(text).not.toContain('Thought A');
+  });
+
   test('handles very long text content', () => {
     const longText = 'a'.repeat(10000);
     const message = {

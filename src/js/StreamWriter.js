@@ -58,9 +58,7 @@ export class StreamWriterSimple {
         this.isThinkingModel = true;
     }
 
-    onComplete() {
-        this.contentDiv.classList.remove('thoughts');
-    }
+    onComplete() {}
 
     addThinkingCounter() {
         const prefixSpan = this.contentDiv.closest('.assistant-message')?.querySelector('.message-prefix');
@@ -136,11 +134,6 @@ export class StreamWriterSimple {
         const nextDiv = this.produceNextDiv('assistant', isThought);
         const wrapper = this.contentDiv.closest('.message-wrapper') || this.contentDiv.parentElement;
         
-        // Ensure no leftover thought styling on the new div unless it IS a thought div
-        if (!isThought) {
-            nextDiv.classList.remove('thoughts');
-        }
-        
         wrapper.appendChild(nextDiv);
         this.contentDiv = nextDiv;
     }
@@ -212,9 +205,8 @@ export class StreamWriter extends StreamWriterSimple {
                 this.parts.at(-1).content = this.parts.at(-1).content.join('');
             } else {
                 this.parts.pop();
-                this.contentDiv.classList.remove('thoughts');
             }
-            this.parts.push({ type: isThought ? 'thought' : 'text', content: [] });
+            this.parts.push({ type: 'text', content: [] });
         }
 
         this.parts.at(-1).content.push(content);
@@ -242,8 +234,11 @@ export class StreamWriter extends StreamWriterSimple {
                     this.updateTextContent(previousPart.content);
                 }
 
-
                 this.switchDiv(this.parts.at(-1).type === 'thought');
+                
+                // Reset accumulated chars to prevent "clumped" start on new div
+                this.accumulatedChars = 0;
+                this.lastFrameTime = timestamp;
             }
 
             if (!this.contentQueue.length) {
@@ -254,10 +249,6 @@ export class StreamWriter extends StreamWriterSimple {
                     super.addFooter(footer).then(resolve);
                 }
                 
-                // Cleanup styling when done
-                if (this.isThoughtEnd) {
-                    this.contentDiv.classList.remove('thoughts');
-                }
                 return;
             }
 

@@ -256,7 +256,7 @@ function initMessageListeners() {
         } else if (message.type === 'appended_messages_to_saved_chat') {
             handleAppended(message.chatId, message.addedCount, message.startIndex, null, message.searchDelta, message.timestamp);
         } else if (message.type === 'message_updated') {
-            handleUpdate(message.chatId, message.messageId);
+            handleUpdate(message.chatId, message.messageId, message.timestamp, message.message);
         } else if (message.type === 'chat_renamed') {
             handleRenamed(message.chatId, message.title);
         } else if (message.type === 'history_reindex') {
@@ -302,25 +302,33 @@ async function handleAppended(chatId, addedCount, startIndex, message = null, se
     }
 }
 
-async function handleUpdate(chatId, messageId) {
-    if (chatCore.getChatId() !== chatId) return;
-    const message = await chatStorage.getMessage(chatId, messageId);
-    if (!message) return;
-    if (messageId >= chatCore.getLength()) {
-        return handleAppended(chatId, 1, chatCore.getLength(), message, ChatStorage.extractTextFromMessages([message]), message.timestamp);
+async function handleUpdate(chatId, messageId, timestamp = null, messageData = null) {
+    if (chatCore.getChatId() === chatId) {
+        const message = messageData || await chatStorage.getMessage(chatId, messageId);
+        if (!message) return;
+        
+        if (messageId >= chatCore.getLength()) {
+            return handleAppended(chatId, 1, chatCore.getLength(), message, ChatStorage.extractTextFromMessages([message]), message.timestamp || timestamp);
+        }
+        
+        if (message.responses) {
+            chatUI.updateArena(message, messageId);
+        } else if (message.council) {
+            chatUI.updateCouncil(message, messageId);
+        } else {
+            chatUI.appendSingleRegen(message, messageId);
+        }
+        
+        chatCore.currentChat.messages[messageId] = message;
     }
+    
+    if (timestamp || messageData?.timestamp) {
+        await handleHistoryRefresh(chatId, { timestamp: timestamp || messageData.timestamp });
+    }
+    
     if (mediaTab) {
         mediaTab.deferredForceRefresh = true;
     }
-    await handleHistoryRefresh(chatId, { timestamp: message.timestamp || Date.now() });
-    if (message.responses) {
-        chatUI.updateArena(message, messageId);
-    } else if (message.council) {
-        chatUI.updateCouncil(message, messageId);
-    } else {
-        chatUI.appendSingleRegen(message, messageId);
-    }
-    chatCore.miscUpdate({ messages: chatCore.currentChat.messages.map((msg, index) => index === messageId ? message : msg) });
 }
 
 function handleRenamed(chatId, title) {

@@ -443,7 +443,7 @@ export class ChatStorage {
                 }
             }
             
-            this.announce('message_updated', { chatId, messageId });
+            this.announce('message_updated', { chatId, messageId, timestamp, message: messageRecord });
         });
     }
 
@@ -668,12 +668,16 @@ export class ChatStorage {
     static extractTextFromMessage(message) {
         if (!message) return '';
 
+        const results = [];
+
+        // 1. Standard contents (including collector and user/system)
         if (Array.isArray(message.contents)) {
-            return message.contents
+            const contentsText = message.contents
                 .flat()
                 .filter(part => part && (part.type === 'text' || part.type === 'thought'))
                 .map(part => part.content || '')
                 .join(' ');
+            if (contentsText) results.push(contentsText);
         }
 
         const collectResponseText = (responses) => {
@@ -686,23 +690,19 @@ export class ChatStorage {
                 .join(' ');
         };
 
-        // Arena responses: only index 'text' type, not 'thought' (matches old behavior)
+        // 2. Arena responses
         if (message.responses) {
-            return collectResponseText(message.responses);
+            const arenaText = collectResponseText(message.responses);
+            if (arenaText) results.push(arenaText);
         }
 
-        // Council responses: index all response text for search
+        // 3. Council responses
         if (message.council?.responses) {
-            const collectorText = (message.contents || [])
-                .flat()
-                .filter(part => part && part.type === 'text')
-                .map(part => part.content || '')
-                .join(' ');
             const councilText = collectResponseText(message.council.responses);
-            return [collectorText, councilText].filter(Boolean).join(' ');
+            if (councilText) results.push(councilText);
         }
 
-        return '';
+        return results.join(' ').trim();
     }
 
     async refreshSearchDoc(chatId) {

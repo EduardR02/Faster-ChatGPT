@@ -182,10 +182,11 @@ export class SidepanelChatCore extends ChatCore {
     async updateCouncil(parts, modelId) {
         const latestMessage = this.getLatestMessage();
         if (!latestMessage?.council?.responses?.[modelId]) return;
+
         if (this.thinkingChat) {
             this.thinkingChat.addCouncilMessage(parts, modelId);
             if (this.thinkingChat.isDone) {
-                this.commitThinkingChat();
+                await this.commitThinkingChat();
             }
         } else {
             latestMessage.council.responses[modelId].messages.push(parts);
@@ -204,11 +205,25 @@ export class SidepanelChatCore extends ChatCore {
         latestMessage.council.collector_model = collectorModel;
         latestMessage.council.collector_status = 'complete';
 
-        if (latestMessage.contents) {
-            latestMessage.contents.push(parts);
+        if (this.thinkingChat) {
+            this.thinkingChat.addMessage({ contents: [parts] }, collectorModel);
+            if (this.thinkingChat.isDone) {
+                await this.commitThinkingChat();
+            }
         } else {
-            latestMessage.contents = [parts];
+            if (latestMessage.contents) {
+                latestMessage.contents.push(parts);
+            } else {
+                latestMessage.contents = [parts];
+            }
+            await this.updateSaved();
         }
+    }
+
+    async updateCouncilCollectorStatus(status) {
+        const latestMessage = this.getLatestMessage();
+        if (!latestMessage?.council) return;
+        latestMessage.council.collector_status = status;
         await this.updateSaved();
     }
 
@@ -223,7 +238,7 @@ export class SidepanelChatCore extends ChatCore {
         if (this.thinkingChat) {
             this.thinkingChat.addMessage(parts, modelId, modelKey);
             if (this.thinkingChat.isDone) {
-                this.commitThinkingChat();
+                await this.commitThinkingChat();
             }
         } else {
             this.getLatestMessage().responses[modelKey].messages.push(parts);
@@ -259,7 +274,7 @@ export class SidepanelChatCore extends ChatCore {
         if (this.thinkingChat) {
             this.thinkingChat.addMessage(message, modelId);
             if (this.thinkingChat.isDone) {
-                this.commitThinkingChat();
+                await this.commitThinkingChat();
             }
         } else {
             this.currentChat.messages.push(message);
@@ -458,13 +473,16 @@ export class SidepanelChatCore extends ChatCore {
         return messages;
     }
 
-    commitThinkingChat() {
+    async commitThinkingChat() {
         if (!this.thinkingChat) return;
 
         const latestMessage = this.getLatestMessage();
         const thinkingMessage = this.thinkingChat.message;
 
-        if (latestMessage?.role === 'assistant') {
+        if (latestMessage?.role === 'user') {
+            this.currentChat.messages.push(thinkingMessage);
+            await this.saveNew();
+        } else if (latestMessage?.role === 'assistant') {
             if (latestMessage.responses) {
                 for (const modelKey of Object.keys(latestMessage.responses)) {
                     const newMessages = thinkingMessage.responses[modelKey].messages;
@@ -472,27 +490,24 @@ export class SidepanelChatCore extends ChatCore {
                         latestMessage.responses[modelKey].messages.push(newMessages.at(-1));
                     }
                 }
-        } else if (latestMessage.council?.responses) {
-            for (const modelKey of Object.keys(latestMessage.council.responses)) {
-                const newMessages = thinkingMessage.council.responses[modelKey].messages;
-                if (newMessages.length > 0) {
-                    latestMessage.council.responses[modelKey].messages.push(newMessages.at(-1));
-                    latestMessage.council.status[modelKey] = 'complete';
+            } else if (latestMessage.council?.responses) {
+                for (const modelKey of Object.keys(latestMessage.council.responses)) {
+                    const newMessages = thinkingMessage.council.responses[modelKey].messages;
+                    if (newMessages.length > 0) {
+                        latestMessage.council.responses[modelKey].messages.push(newMessages.at(-1));
+                        latestMessage.council.status[modelKey] = 'complete';
+                    }
                 }
-            }
-            if (thinkingMessage.contents?.length) {
-                latestMessage.contents = latestMessage.contents || [];
+                if (thinkingMessage.contents?.length) {
+                    latestMessage.contents = latestMessage.contents || [];
+                    latestMessage.contents.push(thinkingMessage.contents.at(-1));
+                    latestMessage.council.collector_status = 'complete';
+                }
+            } else {
                 latestMessage.contents.push(thinkingMessage.contents.at(-1));
-                latestMessage.council.collector_status = 'complete';
             }
-        } else {
-            latestMessage.contents.push(thinkingMessage.contents.at(-1));
-        }
 
-            this.updateSaved();
-        } else {
-            this.currentChat.messages.push(thinkingMessage);
-            this.saveNew();
+            await this.updateSaved();
         }
         this.thinkingChat = null;
     }
