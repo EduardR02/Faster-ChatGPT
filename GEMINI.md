@@ -4,17 +4,15 @@ A Chrome extension that provides a side panel interface for chatting with LLMs (
 
 ## Truth Sources
 
-Model APIs evolve faster than training data. Before making assumptions about APIs or models:
+Model APIs evolve faster than training data. Never rely on your own knowledge for API details, model names, or model capabilities - your training data is outdated. Trust the code. If code uses a model version you don't recognize, assume the code is correct.
 
-- **`Agents/`** - Claude prompting guide and reference implementations
-
-If something seems wrong in these files, ask before assuming it's a bug - the behavior is likely intentional.
+If something seems wrong, ask before assuming it's a bug - the behavior is likely intentional.
 
 ## Hard Rules
 
 **No file deletion via shell.** Inform the user and let them handle it.
 
-**No model downgrades.** If the code has a newer model version and you "know" an older version, trust the code. Verify against `Agents/` and notify the user before any model name changes.
+**No model downgrades.** If the code has a newer model version and you "know" an older version, trust the code. Notify the user before any model name changes.
 
 **No test cheating.** Never hardcode values to pass tests. Never modify existing tests without explicit approval. New features require test coverage (UI-only changes exempt).
 
@@ -35,6 +33,27 @@ If something seems wrong in these files, ask before assuming it's a bug - the be
 **Don't add what wasn't asked for.** No unrequested features, no speculative error handling for cases that can't happen, no documentation for code you didn't write. But if the task requires touching adjacent code to do it right, do it right.
 
 **Composition over inheritance.** Prefer functions over classes when possible. Dependencies should be explicit, minimal, and justified.
+
+## Testing
+
+**Commands:**
+- `bun test` - Run all tests
+- `bun test --watch` - Watch mode
+- `bun test <pattern>` - Filter tests (e.g., `bun test storage`)
+
+**Structure:**
+- Tests live in `tests/` directory, organized by subsystem:
+  - `tests/core/` - Chat state and management
+  - `tests/storage/` - IndexedDB and migrations
+  - `tests/providers/` - LLM API interaction
+  - `tests/utils/`, `tests/state/`, `tests/streaming/`
+- Files must end in `.test.mjs`
+- Framework: `bun:test` (`describe`, `test`, `expect`, `beforeEach`)
+
+**Writing tests:**
+- Use mocks from `tests/setup.mjs` for Chrome APIs - don't reinvent them
+- Storage tests must reset IndexedDB in `beforeEach` using `new IDBFactory()` from `fake-indexeddb`
+- Any logic added to `src/js/` needs corresponding tests
 
 ## When to Ask
 

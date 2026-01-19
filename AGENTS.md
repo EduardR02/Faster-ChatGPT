@@ -34,6 +34,27 @@ If something seems wrong, ask before assuming it's a bug - the behavior is likel
 
 **Composition over inheritance.** Prefer functions over classes when possible. Dependencies should be explicit, minimal, and justified.
 
+## Testing
+
+**Commands:**
+- `bun test` - Run all tests
+- `bun test --watch` - Watch mode
+- `bun test <pattern>` - Filter tests (e.g., `bun test storage`)
+
+**Structure:**
+- Tests live in `tests/` directory, organized by subsystem:
+  - `tests/core/` - Chat state and management
+  - `tests/storage/` - IndexedDB and migrations
+  - `tests/providers/` - LLM API interaction
+  - `tests/utils/`, `tests/state/`, `tests/streaming/`
+- Files must end in `.test.mjs`
+- Framework: `bun:test` (`describe`, `test`, `expect`, `beforeEach`)
+
+**Writing tests:**
+- Use mocks from `tests/setup.mjs` for Chrome APIs - don't reinvent them
+- Storage tests must reset IndexedDB in `beforeEach` using `new IDBFactory()` from `fake-indexeddb`
+- Any logic added to `src/js/` needs corresponding tests
+
 ## When to Ask
 
 Ask when:
