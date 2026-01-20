@@ -1,1 +1,0 @@
-Find the root cause and report: Finding, Location (file:line), Root cause, Suggested fix. Do not modify files. Be concise.

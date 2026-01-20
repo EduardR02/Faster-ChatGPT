@@ -1018,6 +1018,7 @@ p {
   gap: 1em;
 }
 
+/* Council mode container */
 .council-message {
   display: flex;
   flex-direction: column;
@@ -1028,26 +1029,7 @@ p {
   border: 1px solid rgba(253, 170, 170, 0.25);
 }
 
-.council-status {
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 0.75em;
-  padding: 0.1em 0.45em;
-  border-radius: 999px;
-  border: 1px solid rgba(253, 170, 170, 0.35);
-  color: #fdaaaa;
-}
-
-.council-row[data-status="complete"] .council-status {
-  color: #98c379;
-  border-color: rgba(152, 195, 121, 0.4);
-}
-
-.council-row[data-status="error"] .council-status {
-  color: #ef596f;
-  border-color: rgba(239, 89, 111, 0.4);
-}
-
+/* Council header */
 .council-header {
   display: flex;
   align-items: center;
@@ -1068,32 +1050,7 @@ p {
   color: #abb2bf;
 }
 
-.council-collector {
-  padding: 0 0.5em;
-  border-top: 1px solid rgba(253, 170, 170, 0.15);
-  padding-top: 0.75em;
-}
-
-.council-collector [data-council-collector-status="pending"] .message-content {
-  opacity: 0.6;
-}
-
-.council-collector [data-council-collector-status="error"] .message-content {
-  color: #ef596f;
-}
-
-.council-collector [data-council-collector-status="pending"] .message-content::after {
-  content: " (synthesizing...)";
-  color: #abb2bf;
-  font-size: 0.85em;
-}
-
-.council-collector [data-council-collector-status="error"] .message-content::after {
-  content: " (collector failed)";
-  color: #ef596f;
-  font-size: 0.85em;
-}
-
+/* Council toggle button */
 .council-toggle {
   align-self: flex-start;
   margin: 0 0.75em;
@@ -1105,6 +1062,7 @@ p {
   font-size: 0.85em;
 }
 
+/* Council list (expandable) */
 .council-list {
   display: none;
   flex-direction: column;
@@ -1116,14 +1074,14 @@ p {
   display: flex;
 }
 
+/* Council row (individual model response) */
 .council-row {
-  border-radius: 0.75em;
-  border: 1px solid rgba(171, 178, 191, 0.2);
-  background: transparent;
-  padding: 0.5em 0.75em;
   display: flex;
   flex-direction: column;
   gap: 0.5em;
+  padding: 0.5em 0.75em;
+  border-radius: 0.75em;
+  border: 1px solid rgba(171, 178, 191, 0.2);
 }
 
 .council-row .history-prefix-wrapper {
@@ -1131,23 +1089,77 @@ p {
 }
 
 .council-row .message-prefix {
-  width: 100%;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  box-sizing: border-box;
 }
 
 .council-row-content {
   display: flex;
   flex-direction: column;
   gap: 0.75em;
+  flex: 1;
 }
 
 .council-empty {
   font-size: 0.85em;
   color: #abb2bf;
   padding: 0.25em 0.75em;
+}
+
+/* Council collector (synthesized response) */
+.council-collector {
+  padding: 0.75em 0.5em 0;
+  border-top: 1px solid rgba(253, 170, 170, 0.15);
+}
+
+.council-collector .message-prefix {
+  display: flex;
+  align-items: center;
+}
+
+.council-collector [data-council-collector-status="pending"] .message-content {
+  opacity: 0.6;
+}
+
+.council-collector [data-council-collector-status="error"] .message-content {
+  color: #ef596f;
+}
+
+/* Council status pill - shared styles */
+.council-status {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.75em;
+  padding: 0.1em 0.45em;
+  border-radius: 999px;
+  border: 1px solid rgba(171, 178, 191, 0.4);
+  color: #abb2bf;
+  margin-left: auto;
+  margin-right: 0.5em;
+}
+
+/* Status: complete (green) */
+.council-status[data-status="complete"] {
+  color: #98c379;
+  border-color: rgba(152, 195, 121, 0.4);
+}
+
+/* Status: streaming/synthesizing/pending (blue/yellow/grey) */
+.council-status[data-status="streaming"],
+.council-status[data-status="synthesizing"] {
+  color: #61afef;
+  border-color: rgba(97, 175, 239, 0.4);
+}
+
+.council-status[data-status="pending"] {
+  color: #ef596f;
+  border-color: rgba(239, 89, 111, 0.4);
+}
+
+/* Status: error (red) */
+.council-status[data-status="error"] {
+  color: #ef596f;
+  border-color: rgba(239, 89, 111, 0.4);
 }
 
 .arena-footer {
@@ -1337,7 +1349,7 @@ p {
 .textarea-wrapper .std-input {
   border-radius: 0.75rem;
   padding-bottom: 2.25rem; /* Space for bottom-left controls */
-  min-height: 5.5rem; /* Space for right + bottom buttons */
+  min-height: 8rem; /* Space for right + bottom buttons */
   max-height: 50vh;
   overflow-y: hidden; /* JS switches to auto when at max-height */
 }
@@ -1395,6 +1407,8 @@ p {
 .fade-out {
   transition: opacity 0.3s ease;
   opacity: 0;
+  position: absolute;
+  pointer-events: none;
 }
 
 .button.delete-arena {
@@ -1474,6 +1488,10 @@ p {
   background: #ef596f;
   color: #ffffff;
   box-shadow: 0 0 8px rgba(239, 89, 111, 0.4);
+}
+
+.council-toggle-button {
+  font-size: 1.6em !important;
 }
 
 .thinking-mode {

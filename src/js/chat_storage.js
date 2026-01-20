@@ -114,7 +114,16 @@ export class ChatStorage {
 
         // 4. Council responses
         if (message.council?.responses) {
-            await mapResponses(message.council.responses);
+            for (const [modelId, resp] of Object.entries(message.council.responses)) {
+                if (resp.parts) {
+                    resp.parts = await Promise.all(resp.parts.map(async (part) => {
+                        if (part?.type === 'image') {
+                            return { ...part, content: await callback(part.content) };
+                        }
+                        return part;
+                    }));
+                }
+            }
         }
 
         return message;
@@ -228,8 +237,8 @@ export class ChatStorage {
         }
         if (message.council?.responses) {
             for (const key of Object.keys(message.council.responses)) {
-                if (message.council.responses[key]?.messages?.some(group =>
-                    Array.isArray(group) && group.some(part => part?.type === 'image' && ChatStorage.isDataUrl(part.content))
+                if (message.council.responses[key]?.parts?.some(part =>
+                    part?.type === 'image' && ChatStorage.isDataUrl(part.content)
                 )) {
                     return true;
                 }
@@ -1290,7 +1299,7 @@ export class ChatStorage {
         }
         if (message.council?.responses) {
             for (const key in message.council.responses) {
-                message.council.responses[key].messages?.flat().forEach(collectHash);
+                message.council.responses[key].parts?.forEach(collectHash);
             }
         }
         return hashes;
@@ -1322,20 +1331,16 @@ export class ChatStorage {
 
     initCouncilMessage(models, collectorModel) {
         const responses = {};
-        const status = {};
         models.forEach(modelId => {
-            responses[modelId] = { name: modelId, messages: [] };
-            status[modelId] = 'pending';
+            responses[modelId] = { name: modelId, parts: [] };
         });
 
         return {
             role: 'assistant',
-            contents: [],
+            contents: [[]],
             council: {
                 collector_model: collectorModel,
-                collector_status: 'pending',
-                responses,
-                status
+                responses
             }
         };
     }

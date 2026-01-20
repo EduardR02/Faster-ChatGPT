@@ -106,14 +106,23 @@ export class SidepanelController {
             tokenCounter.updateLifetimeTokens();
             this.chatUI.removeManualAbortButton(modelId);
             
-            const isThinkingStatusCallback = disableRegenerate ? () => true : (isCallSuccessful ? null : () => false);
-            const messageFooter = this.createFooter(tokenCounter, modelId, isThinkingStatusCallback, isArenaMode);
-            await streamWriter.addFooter(messageFooter);
+            if (mode === 'collector') {
+                streamWriter.finalizeCurrentPart();
+            } else {
+                const isThinkingStatusCallback = disableRegenerate ? () => true : (isCallSuccessful ? null : () => false);
+                const messageFooter = this.createFooter(tokenCounter, modelId, isThinkingStatusCallback, isArenaMode);
+                await streamWriter.addFooter(messageFooter);
+            }
         }
 
         if (isCallSuccessful) {
             await this.handleSuccessfulCall(modelId, displayModelName, streamWriter.parts, isRegeneration, mode);
+            if (mode === 'normal' && !this.state.isCouncilModeActive && !this.state.isArenaModeActive) {
+                this.chatUI.addRegenerateFooterToLastMessage(() => this.regenerateResponse(modelId));
+            }
         }
+
+        return { inputTokens: tokenCounter.inputTokens, outputTokens: tokenCounter.outputTokens };
     }
 
     processNonStreamedResponse(responseParts, writer) {
@@ -304,18 +313,17 @@ export class SidepanelController {
                 return this.chatUI.addErrorMessage("Enable at least 2 models for Council.");
             }
 
-            const currentMessageIndex = this.chatCore.getLength();
             this.state.initCouncilResponse(councilModels, collectorModel);
             this.state.initThinkingState();
-            this.chatCore.initThinkingChat();
-
+            
             this.chatCore.initCouncil(councilModels, collectorModel);
 
             const councilContainer = this.chatUI.createCouncilMessage(this.chatCore.getLatestMessage(), {
-                messageIndex: currentMessageIndex,
+                messageIndex: this.chatCore.getLength() - 1,
                 allowContinue: false,
                 hideModels: !this.state.getSetting('show_model_name')
             });
+            this.chatUI.activeDivs = councilContainer;
 
             const councilCalls = councilModels.map(modelId => {
                 const rowContent = councilContainer.querySelector(`.council-row[data-model-id="${modelId}"] .council-row-content`);
@@ -343,18 +351,15 @@ export class SidepanelController {
                 const collectorMessage = councilContainer.querySelector('.council-collector .assistant-message');
                 const collectorContent = collectorMessage?.querySelector('.message-content');
                 const collectorWrapper = collectorMessage?.querySelector('.message-wrapper');
-                // Set collector to streaming - tag disappears once collector starts
-                this.chatUI.updateCouncilCollectorStatus('streaming');
-                await this.chatCore.updateCouncilCollectorStatus('streaming');
                 
-                await this.makeApiCall(collectorModel, false, {
+                const tokenResult = await this.makeApiCall(collectorModel, false, {
                     mode: 'collector',
                     messages: this.buildCollectorPrompt(councilModels),
                     contentDiv: collectorContent || collectorWrapper || collectorMessage
                 });
+                this.chatUI.addCouncilRegenerateFooter(tokenResult.inputTokens, tokenResult.outputTokens, () => this.initApiCall());
             } else {
                 this.chatUI.updateCouncilCollectorStatus('error');
-                await this.chatCore.updateCouncilCollectorStatus('error');
                 this.chatUI.addErrorMessage('Council responses failed. Collector skipped.');
             }
 
@@ -432,7 +437,7 @@ export class SidepanelController {
         const responses = councilMessage?.responses || {};
 
         const responseBlocks = councilModels.map(modelId => {
-            const modelResponse = responses[modelId]?.messages?.at(-1) || [];
+            const modelResponse = responses[modelId]?.parts || [];
             const text = modelResponse
                 .filter(part => part?.type === 'text')
                 .map(part => part.content)

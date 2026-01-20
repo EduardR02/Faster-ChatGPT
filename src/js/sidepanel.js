@@ -15,7 +15,8 @@ const NEW_TAB_URL = 'chrome://newtab';
 const ICON = {
     ARENA: '\u{2694}',       // ⚔️ Crossed swords - arena mode enabled
     CHAT: '\u{1F916}',       // 🤖 Robot - normal chat mode
-    COUNCIL: '\u{2042}'      // ⁂ Asterism - council mode
+    COUNCIL_OFF: '\u{2726}', // ✦ Black Four Pointed Star - council mode disabled
+    COUNCIL_ON: '\u{2042}'   // ⁂ Asterism - council mode enabled
 };
 
 class SidepanelApp {
@@ -325,7 +326,7 @@ class SidepanelApp {
         if (councilToggleButton) {
             const isCouncilModeActive = tabState?.isCouncilModeActive ?? this.stateManager.getSetting('council_mode');
             councilToggleButton.classList.toggle('council-mode-on', isCouncilModeActive);
-            councilToggleButton.textContent = ICON.COUNCIL;
+            councilToggleButton.textContent = isCouncilModeActive ? ICON.COUNCIL_ON : ICON.COUNCIL_OFF;
         }
 
         const reasoningToggleButton = document.getElementById('sonnet-thinking-toggle');
@@ -377,7 +378,7 @@ class SidepanelApp {
             }
             if (councilToggleButton) {
                 councilToggleButton.classList.toggle('council-mode-on', isCouncilModeActive);
-                councilToggleButton.textContent = ICON.COUNCIL;
+                councilToggleButton.textContent = isCouncilModeActive ? ICON.COUNCIL_ON : ICON.COUNCIL_OFF;
             }
         };
         

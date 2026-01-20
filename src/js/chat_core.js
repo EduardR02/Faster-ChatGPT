@@ -149,8 +149,9 @@ export class SidepanelChatCore extends ChatCore {
     async appendRegenerated(parts, modelId) {
         const latestMessage = this.getLatestMessage();
         
-        // If the last message isn't an assistant text message, add a new one instead
-        if (latestMessage?.role !== 'assistant' || latestMessage.responses) {
+        // If the last message isn't a normal assistant message, create a new one
+        // This handles cross-mode regeneration (arena->normal, council->normal, etc.)
+        if (latestMessage?.role !== 'assistant' || latestMessage.responses || latestMessage.council) {
             return this.addAssistantMessage(parts, modelId);
         }
 
@@ -183,16 +184,8 @@ export class SidepanelChatCore extends ChatCore {
         const latestMessage = this.getLatestMessage();
         if (!latestMessage?.council?.responses?.[modelId]) return;
 
-        if (this.thinkingChat) {
-            this.thinkingChat.addCouncilMessage(parts, modelId);
-            if (this.thinkingChat.isDone) {
-                await this.commitThinkingChat();
-            }
-        } else {
-            latestMessage.council.responses[modelId].messages.push(parts);
-            latestMessage.council.status[modelId] = 'complete';
-            await this.updateSaved();
-        }
+        latestMessage.council.responses[modelId].parts = parts;
+        await this.updateSaved();
     }
 
     async updateCouncilCollector(parts, collectorModel) {
@@ -203,35 +196,17 @@ export class SidepanelChatCore extends ChatCore {
         const latestMessage = this.getLatestMessage();
         if (!latestMessage?.council) return;
         latestMessage.council.collector_model = collectorModel;
-        latestMessage.council.collector_status = 'complete';
 
-        if (this.thinkingChat) {
-            this.thinkingChat.addMessage({ contents: [parts] }, collectorModel);
-            if (this.thinkingChat.isDone) {
-                await this.commitThinkingChat();
-            }
-        } else {
-            if (latestMessage.contents) {
-                latestMessage.contents.push(parts);
-            } else {
-                latestMessage.contents = [parts];
-            }
-            await this.updateSaved();
-        }
+        latestMessage.contents[0] = parts;
+        await this.updateSaved();
     }
 
     async updateCouncilCollectorStatus(status) {
-        const latestMessage = this.getLatestMessage();
-        if (!latestMessage?.council) return;
-        latestMessage.council.collector_status = status;
-        await this.updateSaved();
+        // No-op: status is ephemeral
     }
 
     async updateCouncilStatus(modelId, status) {
-        const latestMessage = this.getLatestMessage();
-        if (!latestMessage?.council?.status) return;
-        latestMessage.council.status[modelId] = status;
-        await this.updateSaved();
+        // No-op: status is ephemeral
     }
 
     async updateArena(parts, modelId, modelKey) {
@@ -395,11 +370,19 @@ export class SidepanelChatCore extends ChatCore {
 
         // Handle council messages
         if (message.council?.responses) {
+            const strippedResponses = {};
+            for (const [modelKey, modelResp] of Object.entries(message.council.responses)) {
+                strippedResponses[modelKey] = {
+                    ...modelResp,
+                    parts: stripGroup(modelResp.parts || [])
+                };
+            }
             return {
                 ...message,
+                contents: message.contents.map(stripGroup),
                 council: {
-                    ...message.council,
-                    responses: stripResponses(message.council.responses)
+                    collector_model: message.council.collector_model,
+                    responses: strippedResponses
                 }
             };
         }
@@ -462,7 +445,7 @@ export class SidepanelChatCore extends ChatCore {
         }).filter(Boolean);
         
         // Remove trailing assistant message for regeneration
-        if (messages.at(-1)?.role === 'assistant') {
+        while (messages.at(-1)?.role === 'assistant') {
             messages.pop();
         }
 
@@ -495,13 +478,11 @@ export class SidepanelChatCore extends ChatCore {
                     const newMessages = thinkingMessage.council.responses[modelKey].messages;
                     if (newMessages.length > 0) {
                         latestMessage.council.responses[modelKey].messages.push(newMessages.at(-1));
-                        latestMessage.council.status[modelKey] = 'complete';
                     }
                 }
                 if (thinkingMessage.contents?.length) {
                     latestMessage.contents = latestMessage.contents || [];
                     latestMessage.contents.push(thinkingMessage.contents.at(-1));
-                    latestMessage.council.collector_status = 'complete';
                 }
             } else {
                 latestMessage.contents.push(thinkingMessage.contents.at(-1));

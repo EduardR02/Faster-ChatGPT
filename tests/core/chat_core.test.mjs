@@ -334,4 +334,182 @@ describe('SidepanelChatCore Integration', () => {
         expect(messages).toHaveLength(1);
         expect(messages[0].parts[0].content).toBe('Version 2');
     });
+
+    describe('Cross-Mode Regeneration', () => {
+        test('Normal -> Normal: appends to same message contents', async () => {
+            await core.addUserMessage('Test');
+            await core.addAssistantMessage([{ type: 'text', content: 'V1' }], 'm1');
+            await core.appendRegenerated([{ type: 'text', content: 'V2' }], 'm1');
+            
+            const chat = core.getChat();
+            expect(chat.messages).toHaveLength(2);
+            expect(chat.messages[1].role).toBe('assistant');
+            expect(chat.messages[1].contents).toHaveLength(2);
+            expect(chat.messages[1].contents[0][0].content).toBe('V1');
+            expect(chat.messages[1].contents[1][0].content).toBe('V2');
+        });
+
+        test('Arena -> Normal: creates NEW message', async () => {
+            await core.addUserMessage('Test');
+            core.initArena('Model A', 'Model B');
+            await core.updateArena([{ type: 'text', content: 'Arena response' }], 'm_a', 'model_a');
+            
+            // Switch to normal mode and regenerate
+            await core.appendRegenerated([{ type: 'text', content: 'Normal response' }], 'm1');
+            
+            const chat = core.getChat();
+            // User + Arena + Normal = 3 messages
+            expect(chat.messages).toHaveLength(3);
+            expect(chat.messages[1].responses).toBeDefined(); // Still an arena message
+            expect(chat.messages[2].role).toBe('assistant');
+            expect(chat.messages[2].contents).toHaveLength(1); // New normal message
+            expect(chat.messages[2].contents[0][0].content).toBe('Normal response');
+        });
+
+        test('Council -> Normal: creates NEW message', async () => {
+            await core.addUserMessage('Test');
+            core.initCouncil(['m_a'], 'collector');
+            await core.updateCouncil([{ type: 'text', content: 'Council response' }], 'm_a');
+            await core.updateCouncilCollector([{ type: 'text', content: 'Collected' }], 'collector');
+
+            // Switch to normal mode and regenerate
+            await core.appendRegenerated([{ type: 'text', content: 'Normal response' }], 'm1');
+
+            const chat = core.getChat();
+            // User + Council + Normal = 3 messages
+            expect(chat.messages).toHaveLength(3);
+            expect(chat.messages[1].council).toBeDefined(); // Still a council message
+            expect(chat.messages[2].role).toBe('assistant');
+            expect(chat.messages[2].contents).toHaveLength(1);
+            expect(chat.messages[2].contents[0][0].content).toBe('Normal response');
+        });
+
+        test('Normal -> Arena: creates NEW arena message', async () => {
+            await core.addUserMessage('Test');
+            await core.addAssistantMessage([{ type: 'text', content: 'Normal' }], 'm1');
+            
+            // Switch to arena mode - UI calls initArena
+            core.initArena('Model A', 'Model B');
+            await core.updateArena([{ type: 'text', content: 'Arena' }], 'm_a', 'model_a');
+
+            const chat = core.getChat();
+            // User + Normal + Arena = 3 messages
+            expect(chat.messages).toHaveLength(3);
+            expect(chat.messages[1].contents).toBeDefined();
+            expect(chat.messages[2].responses).toBeDefined();
+        });
+
+        test('Arena -> Arena: appends to same arena message', async () => {
+            await core.addUserMessage('Test');
+            core.initArena('Model A', 'Model B');
+            await core.updateArena([{ type: 'text', content: 'A1' }], 'm_a', 'model_a');
+            
+            // Regenerating in arena mode doesn't call initArena again, just updateArena
+            await core.updateArena([{ type: 'text', content: 'A2' }], 'm_a', 'model_a');
+
+            const chat = core.getChat();
+            expect(chat.messages).toHaveLength(2);
+            expect(chat.messages[1].responses.model_a.messages).toHaveLength(2);
+            expect(chat.messages[1].responses.model_a.messages[0][0].content).toBe('A1');
+            expect(chat.messages[1].responses.model_a.messages[1][0].content).toBe('A2');
+        });
+
+        test('Council -> Council: creates NEW council message', async () => {
+            await core.addUserMessage('Test');
+            core.initCouncil(['m_a'], 'collector');
+            await core.updateCouncil([{ type: 'text', content: 'C1' }], 'm_a');
+            await core.updateCouncilCollector([{ type: 'text', content: 'Col1' }], 'collector');
+
+            // Regenerating council creates a NEW message (new design)
+            core.initCouncil(['m_a'], 'collector');
+            await core.updateCouncil([{ type: 'text', content: 'C2' }], 'm_a');
+            await core.updateCouncilCollector([{ type: 'text', content: 'Col2' }], 'collector');
+
+            const chat = core.getChat();
+            expect(chat.messages).toHaveLength(3); // User + Council1 + Council2
+            expect(chat.messages[1].council.responses.m_a.parts[0].content).toBe('C1');
+            expect(chat.messages[2].council.responses.m_a.parts[0].content).toBe('C2');
+        });
+
+        test('getMessagesForAPI with mixed history', async () => {
+            await core.addUserMessage('User 1');
+            await core.addAssistantMessage([{ type: 'text', content: 'Normal' }], 'm1');
+            
+            await core.addUserMessage('User 2');
+            core.initArena('Model A', 'Model B');
+            await core.updateArena([{ type: 'text', content: 'Arena A' }], 'm_a', 'model_a');
+            await core.updateArenaMisc('model_a', 'model_a'); // Pick A and set continued_with
+
+            await core.addUserMessage('User 3');
+            core.initCouncil(['m_a'], 'collector');
+            await core.updateCouncil([{ type: 'text', content: 'Council' }], 'm_a');
+            await core.updateCouncilCollector([{ type: 'text', content: 'Collected' }], 'collector');
+
+            // Add a final user message so council isn't the latest (which gets popped)
+            await core.addUserMessage('User 4');
+
+            const apiMessages = core.getMessagesForAPI();
+            
+            // Expected:
+            // 0: User 1
+            // 1: Normal
+            // 2: User 2
+            // 3: Arena A (because model_a was chosen)
+            // 4: User 3
+            // 5: Council response (Collected)
+            // 6: User 4
+            
+            expect(apiMessages).toHaveLength(7);
+            expect(apiMessages[0].parts[0].content).toBe('User 1');
+            expect(apiMessages[1].parts[0].content).toBe('Normal');
+            expect(apiMessages[2].parts[0].content).toBe('User 2');
+            expect(apiMessages[3].parts[0].content).toBe('Arena A');
+            expect(apiMessages[4].parts[0].content).toBe('User 3');
+            expect(apiMessages[5].parts[0].content).toBe('Collected');
+            expect(apiMessages[6].parts[0].content).toBe('User 4');
+        });
+
+        test('getMessagesForAPI handles consecutive assistant messages correctly', async () => {
+            // This happens during cross-mode regeneration like Arena -> Normal
+            await core.addUserMessage('User 1');
+            core.initArena('Model A', 'Model B');
+            await core.updateArena([{ type: 'text', content: 'Arena response' }], 'm_a', 'model_a');
+            await core.updateArenaMisc('model_a', 'model_a');
+
+            // Switch to normal and regenerate - this creates a second assistant message
+            await core.appendRegenerated([{ type: 'text', content: 'Normal response' }], 'm1');
+
+            // Add follow-up user message so the regenerated normal message isn't popped
+            await core.addUserMessage('User 2');
+
+            const apiMessages = core.getMessagesForAPI();
+            // Should have: User 1, then Arena (as choice), then Normal, then User 2.
+            expect(apiMessages).toHaveLength(4);
+            expect(apiMessages[0].role).toBe('user');
+            expect(apiMessages[1].parts[0].content).toBe('Arena response');
+            expect(apiMessages[2].parts[0].content).toBe('Normal response');
+            expect(apiMessages[3].parts[0].content).toBe('User 2');
+        });
+    });
+
+    describe('Regeneration Edge Cases', () => {
+        test('Regenerate when no previous assistant message', async () => {
+            await core.addUserMessage('Test');
+            await core.appendRegenerated([{ type: 'text', content: 'New' }], 'm1');
+            
+            const chat = core.getChat();
+            expect(chat.messages).toHaveLength(2);
+            expect(chat.messages[1].role).toBe('assistant');
+            expect(chat.messages[1].contents[0][0].content).toBe('New');
+        });
+
+        test('Regenerate arena message when model key doesn\'t exist', async () => {
+            core.initArena('Model A', 'Model B');
+            // Trying to update a non-existent model key should probably fail gracefully or be handled
+            // In current code: this.getLatestMessage().responses[modelKey].messages.push(parts);
+            // So it will throw if modelKey is wrong.
+            
+            expect(core.updateArena([{type: 'text', content: 'Fail'}], 'm_c', 'model_c')).rejects.toThrow();
+        });
+    });
 });
