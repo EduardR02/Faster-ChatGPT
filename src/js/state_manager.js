@@ -491,7 +491,7 @@ export class SidepanelStateManager extends ArenaStateManager {
             chatState: CHAT_STATE.NORMAL
         });
 
-        this.state.prompts = { active_prompt: {}, thinking: '', solver: '', council_collector: '' };
+        this.state.prompts = { active_prompt: {}, thinking: '', solver: '', council_collector_prompt: '' };
         this.initThinkingStateDefault();
         this.loadPrompts(activePromptKey);
 
@@ -518,7 +518,7 @@ export class SidepanelStateManager extends ArenaStateManager {
             } else if (key === 'solver_prompt') {
                 this.state.prompts.solver = value;
             } else if (key === 'council_collector_prompt') {
-                this.state.prompts.council_collector = value;
+                this.state.prompts.council_collector_prompt = value;
             } else {
                 this.state.prompts.active_prompt = { [key]: value };
             }
@@ -541,8 +541,8 @@ export class SidepanelStateManager extends ArenaStateManager {
         if (type === 'active_prompt') {
             return Object.values(this.state.prompts.active_prompt)[0];
         }
-        if (type === 'council_collector') {
-            return this.state.prompts.council_collector;
+        if (type === 'council_collector_prompt') {
+            return this.state.prompts.council_collector_prompt;
         }
         return this.state.prompts[type];
     }

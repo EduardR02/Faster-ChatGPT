@@ -428,30 +428,76 @@ export class SidepanelController {
     }
 
     buildCollectorPrompt(councilModels) {
-        let systemPrompt = this.chatCore.getSystemPrompt() || this.state.getPrompt('active_prompt') || '';
+        const canonicalMessages = this.chatCore.getMessagesForAPI();
 
-        const userMessages = this.chatCore.getChat().messages.filter(msg => msg.role === 'user');
-        const latestUser = userMessages.at(-1);
-        const latestUserText = latestUser?.contents?.at(-1)?.find(part => part.type === 'text')?.content || '';
-        const councilMessage = this.chatCore.getLatestMessage()?.council;
-        const responses = councilMessage?.responses || {};
-
-        const responseBlocks = councilModels.map(modelId => {
-            const modelResponse = responses[modelId]?.parts || [];
-            const text = modelResponse
-                .filter(part => part?.type === 'text')
-                .map(part => part.content)
-                .join('\n');
-            return `Model (${modelId}) response:\n${text || '[no response]'}\n`;
-        }).join('\n');
+        // Build system content: collector prompt appended to existing system or standalone
+        let systemContent = '';
+        const hasSystemMessage = canonicalMessages[0]?.role === 'system';
+        if (hasSystemMessage) {
+            systemContent = canonicalMessages[0].parts[0]?.content || '';
+        }
 
         const collectorPrompt = this.state.getPrompt('council_collector_prompt') || '';
+        if (systemContent) {
+            systemContent += '\n\n' + collectorPrompt;
+        } else {
+            systemContent = collectorPrompt;
+        }
 
-        return [
-            { role: 'system', parts: [{ type: 'text', content: systemPrompt + (collectorPrompt ? `\n\n${collectorPrompt}` : '') }] },
-            { role: 'user', parts: [{ type: 'text', content: `User request:\n${latestUserText}` }] },
-            { role: 'user', parts: [{ type: 'text', content: `Council responses:\n${responseBlocks}` }] }
-        ];
+        // Get council responses - text only, thoughts are excluded for synthesis context
+        const councilResponses = this.extractCouncilResponses(councilModels);
+
+        // Get latest user query (last user message, not first)
+        const userMessages = canonicalMessages.filter(m => m.role === 'user');
+        let lastUserContent = '';
+        for (let i = userMessages.length - 1; i >= 0; i--) {
+            const textPart = userMessages[i].parts?.find(p => p.type === 'text');
+            if (textPart?.content?.trim()) {
+                lastUserContent = textPart.content.trim();
+                break;
+            }
+        }
+
+        // Build final user message with latest query and council responses
+        const taskInstruction = 'Synthesize these expert responses into a single, definitive answer.';
+        const userContent = taskInstruction
+            + '\n\n<user_query>' + lastUserContent + '</user_query>'
+            + '\n\n<council_responses>\n' + councilResponses + '\n</council_responses>';
+
+        // Build messages: system + full canonical history (minus last user) + new user message
+        const messages = [];
+
+        // System message (update existing or insert new)
+        messages.push({ role: 'system', parts: [{ type: 'text', content: systemContent }] });
+
+        // Include all canonical messages except the last user (to avoid duplication)
+        const historyStart = hasSystemMessage ? 1 : 0;
+        const lastUserIndex = canonicalMessages.lastIndexOf(userMessages[userMessages.length - 1]);
+        if (lastUserIndex >= 0) {
+            messages.push(...canonicalMessages.slice(historyStart, lastUserIndex));
+        } else {
+            messages.push(...canonicalMessages.slice(historyStart));
+        }
+
+        // Single user message with latest query and council responses
+        messages.push({ role: 'user', parts: [{ type: 'text', content: userContent }] });
+
+        return messages;
+    }
+    
+    extractCouncilResponses(councilModels) {
+        const latestMessage = this.chatCore.getLatestMessage();
+        const councilData = latestMessage?.council;
+        if (!councilData?.responses) return '';
+        
+        return councilModels.map(modelId => {
+            const response = councilData.responses[modelId];
+            const text = response?.parts
+                ?.filter(p => p?.type === 'text')
+                .map(p => p.content)
+                .join('\n') || '[no response]';
+            return `<response model="${modelId}">${text}</response>`;
+        }).join('\n');
     }
 
     sendUserMessage() {

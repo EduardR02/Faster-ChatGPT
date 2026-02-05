@@ -52,6 +52,32 @@ describe('SidepanelChatCore.stripEphemeral', () => {
     expect(stripped.responses.model_b.messages[0][0].thoughtSignature).toBeUndefined();
     expect(stripped.responses.model_a.messages[0][0].content).toBe('A');
   });
+
+  test('removes thoughtSignature from council responses when contents exist', () => {
+    const message = {
+      role: 'assistant',
+      contents: [[{ type: 'text', content: 'Summary', thoughtSignature: 'sum-sig' }]],
+      council: {
+        collector_model: 'collector',
+        responses: {
+          'model-a': {
+            name: 'model-a',
+            parts: [
+              { type: 'thought', content: 'Internal', thoughtSignature: 'thought-sig' },
+              { type: 'text', content: 'Council answer', thoughtSignature: 'text-sig' }
+            ]
+          }
+        }
+      }
+    };
+
+    const stripped = SidepanelChatCore.stripEphemeral(message);
+
+    expect(stripped.contents[0][0].thoughtSignature).toBeUndefined();
+    expect(stripped.council.responses['model-a'].parts[0].thoughtSignature).toBeUndefined();
+    expect(stripped.council.responses['model-a'].parts[1].thoughtSignature).toBeUndefined();
+    expect(stripped.council.responses['model-a'].parts[1].content).toBe('Council answer');
+  });
   
   test('handles null/undefined message', () => {
     expect(SidepanelChatCore.stripEphemeral(null)).toBeNull();

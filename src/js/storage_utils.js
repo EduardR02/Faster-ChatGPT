@@ -180,7 +180,7 @@ export const setDefaults = async () => {
     await Promise.all([
         loadPrompt("src/prompts/prompt.txt", "selection_prompt"),
         loadPrompt("src/prompts/chat_prompt.txt", "chat_prompt"),
-        loadPrompt("src/prompts/council_collector_prompt.txt", "council_collector_prompt", "You are acting as The Arbiter. Your role is to evaluate and synthesize the provided council responses into a single, definitive, and high-quality final answer."),
+        loadPrompt("src/prompts/council_collector_prompt.txt", "council_collector_prompt", "Synthesize multiple expert responses into a single, high-quality answer.\n\n## Instructions\n- Resolve contradictions using logic and first principles.\n- Avoid repeating what each model said; provide one unified response.\n- Match the tone and style to the user's query.\n- Think privately before responding.\n- If the council missed something critical, fill the gaps with your own knowledge.\n\nOutput only your final answer."),
         chrome.storage.local.set({
             thinking_prompt: thinkingPrompt.trim(),
             solver_prompt: solverPrompt.trim()

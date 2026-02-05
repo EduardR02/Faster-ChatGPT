@@ -689,12 +689,12 @@ export class ChatStorage {
             if (contentsText) results.push(contentsText);
         }
 
-        const collectResponseText = (responses) => {
+        const collectResponseText = (responses, isCouncil = false) => {
             return Object.values(responses || {})
-                .map(entry => entry?.messages || [])
+                .map(entry => isCouncil ? (entry?.parts || []) : (entry?.messages || []))
                 .flat()
                 .flat()
-                .filter(part => part && part.type === 'text')
+                .filter(part => part && (part.type === 'text' || part.type === 'thought'))
                 .map(part => part.content || '')
                 .join(' ');
         };
@@ -707,7 +707,7 @@ export class ChatStorage {
 
         // 3. Council responses
         if (message.council?.responses) {
-            const councilText = collectResponseText(message.council.responses);
+            const councilText = collectResponseText(message.council.responses, true);
             if (councilText) results.push(councilText);
         }
 
@@ -826,19 +826,29 @@ export class ChatStorage {
             });
         }
 
-        const indexResponseImages = (responses, sourceTag) => {
+        const indexResponseImages = (responses, sourceTag, isCouncil = false) => {
             if (!responses) return;
             for (const modelKey of Object.keys(responses)) {
-                const modelMessages = responses[modelKey]?.messages;
-                if (!Array.isArray(modelMessages)) continue;
-                modelMessages.forEach((msgGroup, messageIndex) => {
-                    if (!Array.isArray(msgGroup)) return;
-                    msgGroup.forEach((part, partIndex) => {
+                if (isCouncil) {
+                    const parts = responses[modelKey]?.parts;
+                    if (!Array.isArray(parts)) continue;
+                    parts.forEach((part, partIndex) => {
                         if (part?.type === 'image') {
-                            mediaRecords.push({ chatId, messageId, source: sourceTag, modelKey, messageIndex, partIndex, timestamp, content: part.content });
+                            mediaRecords.push({ chatId, messageId, source: sourceTag, modelKey, partIndex, timestamp, content: part.content });
                         }
                     });
-                });
+                } else {
+                    const modelMessages = responses[modelKey]?.messages;
+                    if (!Array.isArray(modelMessages)) continue;
+                    modelMessages.forEach((msgGroup, messageIndex) => {
+                        if (!Array.isArray(msgGroup)) return;
+                        msgGroup.forEach((part, partIndex) => {
+                            if (part?.type === 'image') {
+                                mediaRecords.push({ chatId, messageId, source: sourceTag, modelKey, messageIndex, partIndex, timestamp, content: part.content });
+                            }
+                        });
+                    });
+                }
             }
         };
 
@@ -847,7 +857,7 @@ export class ChatStorage {
         }
 
         if (message.council?.responses) {
-            indexResponseImages(message.council.responses, 'assistant');
+            indexResponseImages(message.council.responses, 'assistant', true);
         }
 
         await Promise.all(mediaRecords.map(record => {
@@ -993,12 +1003,16 @@ export class ChatStorage {
                     if (entry.source === 'user') {
                         imageHashOrUrl = message.images?.[entry.imageIndex];
                     } else if (entry.modelKey) {
-                        const modelMessages = message.responses?.[entry.modelKey]?.messages
-                            || message.council?.responses?.[entry.modelKey]?.messages;
-                        if (entry.messageIndex != null) {
-                            imageHashOrUrl = modelMessages?.[entry.messageIndex]?.[entry.partIndex]?.content;
+                        const councilParts = message.council?.responses?.[entry.modelKey]?.parts;
+                        if (councilParts) {
+                            imageHashOrUrl = councilParts[entry.partIndex]?.content;
                         } else {
-                            imageHashOrUrl = modelMessages?.flat?.()?.[entry.partIndex]?.content;
+                            const modelMessages = message.responses?.[entry.modelKey]?.messages;
+                            if (entry.messageIndex != null) {
+                                imageHashOrUrl = modelMessages?.[entry.messageIndex]?.[entry.partIndex]?.content;
+                            } else {
+                                imageHashOrUrl = modelMessages?.flat()?.[entry.partIndex]?.content;
+                            }
                         }
                     } else if (entry.contentIndex != null) {
                         imageHashOrUrl = message.contents?.[entry.contentIndex]?.[entry.partIndex]?.content;
@@ -1337,7 +1351,7 @@ export class ChatStorage {
 
         return {
             role: 'assistant',
-            contents: [[]],
+            contents: [],
             council: {
                 collector_model: collectorModel,
                 responses

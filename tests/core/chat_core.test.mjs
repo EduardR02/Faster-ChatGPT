@@ -147,7 +147,8 @@ describe('SidepanelChatCore Integration', () => {
         
         // 2. Second thinking loop
         messages = core.getMessagesForAPI('model-1');
-        expect(messages.find(m => m.role === 'assistant').parts).toEqual([{ type: 'thought', content: 'I am thinking', model: 'model-1' }]);
+        // Thought content should be empty in API messages
+        expect(messages.find(m => m.role === 'assistant').parts).toEqual([{ type: 'thought', content: '', model: 'model-1' }]);
         expect(messages.at(-1).parts[0].content).toBe('Please reflect and improve your thoughts.');
         expect(state.getThinkingState('model-1')).toBe(THINKING_STATE.THINKING);
 
@@ -488,7 +489,149 @@ describe('SidepanelChatCore Integration', () => {
             expect(apiMessages[0].role).toBe('user');
             expect(apiMessages[1].parts[0].content).toBe('Arena response');
             expect(apiMessages[2].parts[0].content).toBe('Normal response');
-            expect(apiMessages[3].parts[0].content).toBe('User 2');
+            expect(apiMessages[3].role).toBe('user');
+        });
+
+        test('getMessagesForAPI should sanitize thought content', async () => {
+            await core.addUserMessage('User');
+            await core.addAssistantMessage([
+                { type: 'thought', content: 'Secret thoughts' },
+                { type: 'text', content: 'Public answer' }
+            ], 'm1');
+            await core.addUserMessage('Next');
+
+            const messages = core.getMessagesForAPI();
+            const assistantMessage = messages.find(m => m.role === 'assistant');
+            expect(assistantMessage.parts).toEqual([
+                { type: 'thought', content: '', model: 'm1' },
+                { type: 'text', content: 'Public answer', model: 'm1' }
+            ]);
+        });
+
+        test('getMessagesForAPI should preserve thoughtSignature but clear content', async () => {
+            await core.addUserMessage('User');
+            await core.addAssistantMessage([
+                { type: 'thought', content: 'Gemini thought', thoughtSignature: 'sig123' },
+                { type: 'text', content: 'Hello' }
+            ], 'gemini-model');
+            await core.addUserMessage('Next');
+
+            const messages = core.getMessagesForAPI();
+            const assistantMessage = messages.find(m => m.role === 'assistant');
+            expect(assistantMessage.parts).toEqual([
+                { type: 'thought', content: '', thoughtSignature: 'sig123', model: 'gemini-model' },
+                { type: 'text', content: 'Hello', model: 'gemini-model' }
+            ]);
+        });
+
+        test('getMessagesForAPI should tolerate null parts in assistant messages', async () => {
+            core.currentChat = {
+                messages: [
+                    { role: 'user', contents: [[{ type: 'text', content: 'User' }]] },
+                    {
+                        role: 'assistant',
+                        contents: [[
+                            null,
+                            { type: 'thought', content: 'Hidden thought' },
+                            { type: 'text', content: 'Visible answer' }
+                        ]]
+                    },
+                    { role: 'user', contents: [[{ type: 'text', content: 'Next' }]] }
+                ]
+            };
+
+            const messages = core.getMessagesForAPI();
+            const assistantMessage = messages.find(m => m.role === 'assistant');
+
+            expect(assistantMessage.parts[0]).toBeNull();
+            expect(assistantMessage.parts[1]).toEqual({ type: 'thought', content: '' });
+            expect(assistantMessage.parts[2]).toEqual({ type: 'text', content: 'Visible answer' });
+        });
+
+        test('ThinkingChat.getLatestParts should tolerate null parts', () => {
+            state.toggleThinkingMode();
+            state.updateThinkingMode();
+            core.initThinkingChat();
+            core.thinkingChat.message = {
+                role: 'assistant',
+                contents: [[null, { type: 'thought', content: 'Hidden thought' }, { type: 'text', content: 'Visible answer' }]]
+            };
+
+            const latestParts = core.thinkingChat.getLatestParts('model-1');
+
+            expect(latestParts.parts[0]).toBeNull();
+            expect(latestParts.parts[1]).toEqual({ type: 'thought', content: '' });
+            expect(latestParts.parts[2]).toEqual({ type: 'text', content: 'Visible answer' });
+        });
+
+        test('Council message in mid-conversation for getMessagesForAPI', async () => {
+            await core.addUserMessage('user 1');
+            
+            // Council message
+            core.initCouncil(['model-a'], 'collector');
+            await core.updateCouncil([{ type: 'text', content: 'council response' }], 'model-a');
+            await core.updateCouncilCollector([{ type: 'text', content: 'collector synthesis' }], 'collector');
+            
+            await core.addUserMessage('user 2');
+            await core.addAssistantMessage([{ type: 'text', content: 'normal assistant' }], 'model-b');
+            await core.addUserMessage('user 3');
+
+            const apiMessages = core.getMessagesForAPI();
+            // Expected: user 1 -> collector synthesis -> user 2 -> normal assistant -> user 3
+            expect(apiMessages).toHaveLength(5);
+            expect(apiMessages[0].parts[0].content).toBe('user 1');
+            expect(apiMessages[1].role).toBe('assistant');
+            expect(apiMessages[1].parts[0].content).toBe('collector synthesis');
+            expect(apiMessages[2].parts[0].content).toBe('user 2');
+            expect(apiMessages[3].parts[0].content).toBe('normal assistant');
+            expect(apiMessages[4].parts[0].content).toBe('user 3');
+        });
+
+        test('getMessagesForAPI strips trailing council message for regeneration', async () => {
+            await core.addUserMessage('user 1');
+            
+            // Trailing council message
+            core.initCouncil(['model-a'], 'collector');
+            await core.updateCouncil([{ type: 'text', content: 'council response' }], 'model-a');
+            await core.updateCouncilCollector([{ type: 'text', content: 'collector synthesis' }], 'collector');
+
+            const apiMessages = core.getMessagesForAPI();
+            // Should pop the trailing assistant (council) and return only user 1
+            expect(apiMessages).toHaveLength(1);
+            expect(apiMessages[0].role).toBe('user');
+            expect(apiMessages[0].parts[0].content).toBe('user 1');
+        });
+
+        test('Council thought sanitization in getMessagesForAPI', async () => {
+            await core.addUserMessage('user 1');
+            
+            core.initCouncil(['model-a'], 'collector');
+            // Council response with thought
+            await core.updateCouncil([
+                { type: 'thought', content: 'council thought' },
+                { type: 'text', content: 'council text' }
+            ], 'model-a');
+            // Collector output with thought
+            await core.updateCouncilCollector([
+                { type: 'thought', content: 'collector thought' },
+                { type: 'text', content: 'collector synthesis' }
+            ], 'collector');
+            
+            await core.addUserMessage('user 2');
+
+            const apiMessages = core.getMessagesForAPI();
+            const councilAssistant = apiMessages.find(m => m.role === 'assistant');
+            
+            // Collector synthesis thoughts should be sanitized
+            expect(councilAssistant.parts).toEqual([
+                { type: 'thought', content: '', model: 'collector' },
+                { type: 'text', content: 'collector synthesis', model: 'collector' }
+            ]);
+
+            // verify internal council responses are NOT touched (they are not in apiMessages anyway, 
+            // but let's check the chat core state)
+            const chat = core.getChat();
+            expect(chat.messages[1].council.responses['model-a'].parts[0].content).toBe('council thought');
         });
     });
 

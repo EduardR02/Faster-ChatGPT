@@ -340,6 +340,25 @@ export class SidepanelChatCore extends ChatCore {
 
         const stripGroup = group => group.map(({ thoughtSignature, ...part }) => part);
 
+        // Handle council messages
+        if (message.council?.responses) {
+            const strippedResponses = {};
+            for (const [modelKey, modelResp] of Object.entries(message.council.responses)) {
+                strippedResponses[modelKey] = {
+                    ...modelResp,
+                    parts: stripGroup(modelResp.parts || [])
+                };
+            }
+            return {
+                ...message,
+                contents: message.contents.map(stripGroup),
+                council: {
+                    collector_model: message.council.collector_model,
+                    responses: strippedResponses
+                }
+            };
+        }
+
         // Handle regular messages with contents
         if (message.contents) {
             return {
@@ -368,25 +387,6 @@ export class SidepanelChatCore extends ChatCore {
             return { ...message, responses: stripResponses(message.responses) };
         }
 
-        // Handle council messages
-        if (message.council?.responses) {
-            const strippedResponses = {};
-            for (const [modelKey, modelResp] of Object.entries(message.council.responses)) {
-                strippedResponses[modelKey] = {
-                    ...modelResp,
-                    parts: stripGroup(modelResp.parts || [])
-                };
-            }
-            return {
-                ...message,
-                contents: message.contents.map(stripGroup),
-                council: {
-                    collector_model: message.council.collector_model,
-                    responses: strippedResponses
-                }
-            };
-        }
-
         return message;
     }
 
@@ -412,6 +412,19 @@ export class SidepanelChatCore extends ChatCore {
     }
 
     getMessagesForAPI(modelId = null) {
+        const sanitizePart = (part) => {
+            if (!part) return part;
+            if (part.type === 'thought') {
+                return { ...part, content: '' };
+            }
+            return part;
+        };
+
+        const sanitizeParts = (parts) => {
+            if (!Array.isArray(parts)) return [];
+            return parts.map(sanitizePart);
+        };
+
         const messages = this.currentChat.messages.map(message => {
             if (message.role === 'user' || message.role === 'system') {
                 const lastContentVersion = message.contents.at(-1) || [];
@@ -432,16 +445,16 @@ export class SidepanelChatCore extends ChatCore {
             if (message.responses) {
                 const modelKey = message.continued_with;
                 if (modelKey && modelKey !== 'none') {
-                    return { role: message.role, parts: message.responses[modelKey].messages.at(-1) };
+                    return { role: message.role, parts: sanitizeParts(message.responses[modelKey].messages.at(-1)) };
                 }
                 return null;
             }
             
             if (message.council) {
-                return { role: message.role, parts: message.contents?.at(-1) || [] };
+                return { role: message.role, parts: sanitizeParts(message.contents?.at(-1) || []) };
             }
             
-            return { role: message.role, parts: message.contents.at(-1) };
+            return { role: message.role, parts: sanitizeParts(message.contents.at(-1)) };
         }).filter(Boolean);
         
         // Remove trailing assistant message for regeneration
@@ -475,9 +488,9 @@ export class SidepanelChatCore extends ChatCore {
                 }
             } else if (latestMessage.council?.responses) {
                 for (const modelKey of Object.keys(latestMessage.council.responses)) {
-                    const newMessages = thinkingMessage.council.responses[modelKey].messages;
-                    if (newMessages.length > 0) {
-                        latestMessage.council.responses[modelKey].messages.push(newMessages.at(-1));
+                    const newParts = thinkingMessage.council.responses[modelKey].parts;
+                    if (newParts.length > 0) {
+                        latestMessage.council.responses[modelKey].parts = newParts;
                     }
                 }
                 if (thinkingMessage.contents?.length) {
@@ -599,10 +612,20 @@ class ThinkingChat {
         if (!this.message) return null;
         
         const partsList = this.message.responses 
-            ? this.message.responses[this.stateManager.getArenaModelKey(modelId)]?.messages 
-            : (this.message.council?.responses?.[modelId]?.messages || this.message.contents);
+            ? this.message.responses[this.stateManager.getArenaModelKey(modelId)]?.messages?.at(-1)
+            : (this.message.council?.responses?.[modelId]?.parts || this.message.contents?.at(-1));
             
-        return partsList?.length ? { role: 'assistant', parts: partsList.at(-1) } : null;
+        if (!partsList?.length) return null;
+
+        const sanitizePart = (part) => {
+            if (!part) return part;
+            if (part.type === 'thought') {
+                return { ...part, content: '' };
+            }
+            return part;
+        };
+
+        return { role: 'assistant', parts: partsList.map(sanitizePart) };
     }
 
     getMessagesForAPI(messages, modelId) {
@@ -659,16 +682,6 @@ class ThinkingChat {
             }
             this.updateLoopState(0, modelId);
         }
-    }
-
-    addCouncilMessage(parts, modelId) {
-        if (this.isDone || !this.message?.council?.responses?.[modelId]) return;
-        const modelMsgs = this.message.council.responses[modelId].messages;
-        if (!modelMsgs.length) {
-            modelMsgs.push([]);
-        }
-        modelMsgs.at(-1).push(...parts);
-        this.updateLoopState(0, modelId);
     }
 
     updateLoopState(index, modelId, modelKey = null) {

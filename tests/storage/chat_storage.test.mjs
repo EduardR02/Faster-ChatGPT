@@ -139,8 +139,8 @@ describe('ChatStorage', () => {
         collector_model: 'gpt-4o',
         collector_status: 'complete',
         responses: {
-          'gpt-4o': { name: 'gpt-4o', messages: [[{ type: 'text', content: 'Council A' }]] },
-          'claude-3-5-sonnet': { name: 'claude-3-5-sonnet', messages: [[{ type: 'text', content: 'Council B' }]] }
+          'gpt-4o': { name: 'gpt-4o', parts: [{ type: 'text', content: 'Council A' }] },
+          'claude-3-5-sonnet': { name: 'claude-3-5-sonnet', parts: [{ type: 'text', content: 'Council B' }] }
         },
         status: { 'gpt-4o': 'complete', 'claude-3-5-sonnet': 'complete' }
       },
@@ -154,8 +154,17 @@ describe('ChatStorage', () => {
     
     const loaded = await storage.loadChat(result.chatId);
     expect(loaded.messages[1].council.collector_model).toBe('gpt-4o');
-    expect(loaded.messages[1].council.responses['gpt-4o'].messages[0][0].content).toBe('Council A');
+    expect(loaded.messages[1].council.responses['gpt-4o'].parts[0].content).toBe('Council A');
     expect(loaded.messages[1].contents[0][0].content).toBe('Final Summary');
+  });
+
+  test('initCouncilMessage starts with empty collector contents', () => {
+    const councilMessage = storage.initCouncilMessage(['model-a', 'model-b'], 'collector');
+
+    expect(councilMessage.contents).toEqual([]);
+    expect(councilMessage.council.collector_model).toBe('collector');
+    expect(councilMessage.council.responses['model-a'].parts).toEqual([]);
+    expect(councilMessage.council.responses['model-b'].parts).toEqual([]);
   });
 
   describe('ChatStorage static methods', () => {
@@ -185,7 +194,7 @@ describe('ChatStorage', () => {
       expect(text).toContain('Answer');
     });
     
-    test('extractTextFromMessages arena excludes thoughts', () => {
+    test('extractTextFromMessages arena includes thoughts', () => {
       const messages = [{
         role: 'assistant',
         responses: {
@@ -194,11 +203,11 @@ describe('ChatStorage', () => {
         }
       }];
       
-    const text = ChatStorage.extractTextFromMessages(messages);
-    expect(text).toContain('Answer A');
-    expect(text).toContain('Answer B');
-    expect(text).not.toContain('Thinking');
-  });
+      const text = ChatStorage.extractTextFromMessages(messages);
+      expect(text).toContain('Answer A');
+      expect(text).toContain('Answer B');
+      expect(text).toContain('Thinking');
+    });
 
   test('loadChat handles empty chats', async () => {
     const result = await storage.createChatWithMessages('Empty', []);
@@ -249,6 +258,47 @@ describe('ChatStorage', () => {
     const chat = await storage.loadChat(chatId);
     expect(chat).not.toBeNull();
     expect(chat.title).toBe('Test');
+  });
+
+  test('Council image indexing with flat parts', async () => {
+    const councilMessage = {
+      role: 'assistant',
+      council: {
+        responses: {
+          'model-a': { 
+            name: 'model-a',
+            parts: [
+              { type: 'text', content: 'text' }, 
+              { type: 'image', content: 'hash123' }
+            ] 
+          }
+        }
+      },
+      contents: [[{ type: 'text', content: 'Summary' }]]
+    };
+
+    const { chatId } = await storage.createChatWithMessages('Council Image Test', [
+      { role: 'user', contents: [[{ type: 'text', content: 'hi' }]] },
+      councilMessage
+    ]);
+
+    // Manually trigger indexAllMediaFromExistingMessages or check if createChatWithMessages does it.
+    // createChatWithMessages calls indexMediaFromMessage for each message.
+    
+    const db = await storage.getDB();
+    const tx = db.transaction('mediaIndex', 'readonly');
+    const store = tx.objectStore('mediaIndex');
+    const allMedia = await new Promise(resolve => {
+        const req = store.getAll();
+        req.onsuccess = () => resolve(req.result);
+    });
+
+    // Should find one image from model-a
+    const modelMedia = allMedia.find(m => m.modelKey === 'model-a');
+    expect(modelMedia).toBeDefined();
+    expect(modelMedia.partIndex).toBe(1);
+    expect(modelMedia.chatId).toBe(chatId);
+    expect(modelMedia.messageId).toBe(1);
   });
 });
 });

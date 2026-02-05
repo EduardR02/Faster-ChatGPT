@@ -76,7 +76,7 @@ describe('ChatStorage.extractTextFromMessage', () => {
     expect(text).toBe('First response Second response');
   });
   
-  test('extracts from arena message - text only, no thoughts', () => {
+  test('extracts from arena message - includes text and thoughts', () => {
     const message = {
       role: 'assistant',
       responses: {
@@ -94,8 +94,8 @@ describe('ChatStorage.extractTextFromMessage', () => {
       }
     };
     const text = ChatStorage.extractTextFromMessage(message);
-    expect(text).toBe('GPT answer Claude answer');
-    expect(text).not.toContain('GPT thinking'); // Arena excludes thoughts
+    expect(text).toBe('GPT thinking GPT answer Claude answer');
+    expect(text).toContain('GPT thinking');
   });
   
   test('handles empty message', () => {
@@ -134,13 +134,13 @@ describe('ChatStorage.extractTextFromMessage', () => {
     expect(text).not.toContain('null');
   });
 
-  test('extracts from council message - text and responses', () => {
+  test('extracts from council message - text, thoughts, and responses', () => {
     const message = {
       role: 'assistant',
       council: {
         responses: {
-          'gpt-4o': { messages: [[{ type: 'thought', content: 'Thought A' }, { type: 'text', content: 'Response A' }]] },
-          'claude-3-5-sonnet': { messages: [[{ type: 'text', content: 'Response B' }]] }
+          'gpt-4o': { parts: [{ type: 'thought', content: 'Thought A' }, { type: 'text', content: 'Response A' }] },
+          'claude-3-5-sonnet': { parts: [{ type: 'text', content: 'Response B' }] }
         }
       },
       contents: [[{ type: 'text', content: 'Final Summary' }]]
@@ -149,8 +149,7 @@ describe('ChatStorage.extractTextFromMessage', () => {
     expect(text).toContain('Response A');
     expect(text).toContain('Response B');
     expect(text).toContain('Final Summary');
-    // Council also excludes thoughts from search to reduce noise
-    expect(text).not.toContain('Thought A');
+    expect(text).toContain('Thought A');
   });
 
   test('handles very long text content', () => {
