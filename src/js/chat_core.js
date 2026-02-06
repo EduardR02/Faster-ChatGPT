@@ -1,4 +1,4 @@
-import { SidepanelRenameManager } from './rename_manager.js';
+import { RenameManager } from './rename_manager.js';
 
 /**
  * Core chat data logic. Handles the structure of the current conversation.
@@ -80,14 +80,18 @@ export class ChatCore {
  * Specialized ChatCore for the Sidepanel, including media and thinking states.
  */
 export class SidepanelChatCore extends ChatCore {
-    constructor(chatStorage, stateManager, chatHeader, onTitleChange = null, onChatIdChange = null) {
+    constructor(chatStorage, stateManager, chatHeader, onTitleChange = null, onChatIdChange = null, apiManager = null) {
         super(chatStorage);
         Object.assign(this, {
             stateManager,
             chatHeader,
             onTitleChange,
             onChatIdChange,
-            renameManager: new SidepanelRenameManager(chatStorage)
+            renameManager: new RenameManager(chatStorage, {
+                apiManager,
+                announceUpdate: true,
+                allowAutoRename: true
+            })
         });
         this.resetState();
     }

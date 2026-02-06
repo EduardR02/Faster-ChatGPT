@@ -2,7 +2,6 @@ import { TokenCounter } from './TokenCounter.js';
 import { StreamWriter, StreamWriterSimple } from './StreamWriter.js';
 import { Footer } from './Footer.js';
 import { ArenaRatingManager } from './ArenaRatingManager.js';
-import { SidepanelRenameManager } from './rename_manager.js';
 import { SidepanelChatCore } from './chat_core.js';
 
 /**
@@ -15,7 +14,6 @@ export class SidepanelController {
             chatUI: options.chatUI, 
             api: options.apiManager, 
             storage: options.chatStorage, 
-            rename: new SidepanelRenameManager(options.chatStorage), 
             arenaRating: new ArenaRatingManager() 
         });
         
@@ -26,7 +24,8 @@ export class SidepanelController {
             options.stateManager, 
             this.chatUI.getChatHeader(), 
             options.onTitleChange, 
-            options.onChatIdChange
+            options.onChatIdChange,
+            options.apiManager
         );
     }
 

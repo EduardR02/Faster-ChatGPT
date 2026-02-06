@@ -1,9 +1,10 @@
 import { ChatStorage } from './chat_storage.js';
 import { HistoryChatUI } from './chat_ui.js';
 import { HistoryStateManager } from './state_manager.js';
-import { HistoryRenameManager } from './rename_manager.js';
+import { RenameManager } from './rename_manager.js';
 import { ChatCore } from './chat_core.js';
 import { createElementWithClass } from './ui_utils.js';
+import { normaliseForSearch } from './search_utils.js';
 
 /**
  * timing and duration formatting helpers.
@@ -206,7 +207,7 @@ const chatMetaCache = new Map();
 const chatMetaComplete = new Set();
 const chatStorage = new ChatStorage();
 const chatCore = new ChatCore(chatStorage);
-const renameManager = new HistoryRenameManager(chatStorage);
+const renameManager = new RenameManager(chatStorage, { timeoutMs: 30000 });
 const stateManager = new HistoryStateManager();
 
 const cacheMeta = (meta, complete = false) => {
@@ -1549,16 +1550,16 @@ class ChatSearch {
         }
 
         if (typeof doc.searchTitle !== 'string') {
-            doc.searchTitle = this.normaliseForSearch(doc.title || '');
+            doc.searchTitle = normaliseForSearch(doc.title || '');
         }
 
-        const normalisedDelta = this.normaliseForSearch(trimmed);
+        const normalisedDelta = normaliseForSearch(trimmed);
         if (normalisedDelta) {
             const base = typeof doc.content === 'string' ? doc.content : '';
             doc.content = base ? `${base} ${normalisedDelta}`.trim() : normalisedDelta;
             doc._normalized = true;
         } else if (typeof doc.content !== 'string') {
-            doc.content = this.normaliseForSearch('');
+            doc.content = normaliseForSearch('');
             doc._normalized = true;
         }
 
@@ -1574,31 +1575,13 @@ class ChatSearch {
         return idString.match(/^\d+$/) ? Number(idString) : rawId;
     }
 
-    normaliseForSearch(input, { collapseWhitespace = true } = {}) {
-        if (!input) return '';
-
-        const normalized = input
-            .toLowerCase()
-            .normalize('NFKD')
-            .replace(/[\u0300-\u036f]/g, '')
-            .replace(/[\u0000-\u001f]+/g, ' ');
-
-        if (!collapseWhitespace) {
-            return normalized.trim();
-        }
-
-        return normalized
-            .replace(/\s+/g, ' ')
-            .trim();
-    }
-
     decorateDocument(doc) {
         if (!doc) return doc;
 
-        doc.searchTitle = this.normaliseForSearch(doc.title || '');
+        doc.searchTitle = normaliseForSearch(doc.title || '');
 
         if (doc._normalized !== true) {
-            doc.content = this.normaliseForSearch(doc.content || '');
+            doc.content = normaliseForSearch(doc.content || '');
             doc._normalized = true;
         }
 
@@ -1915,7 +1898,7 @@ class ChatSearch {
 
         try {
             const hasTrailingSpace = /\s$/.test(query);
-            const normalisedQuery = this.normaliseForSearch(trimmed);
+            const normalisedQuery = normaliseForSearch(trimmed);
             const needsLiteralCheck = /[^a-z0-9]/i.test(trimmed);
             const cacheKey = `${normalisedQuery}__${hasTrailingSpace ? '1' : '0'}`;
 

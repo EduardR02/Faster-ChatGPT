@@ -140,6 +140,35 @@ describe('ApiManager', () => {
         });
     });
 
+    describe('Provider resolution cache', () => {
+        it('memoizes provider lookup per model', () => {
+            const lookupSpy = jest.spyOn(apiManager, 'findProviderFromModelMap');
+
+            expect(apiManager.getProviderName('gpt-5.2')).toBe('openai');
+            expect(apiManager.getProviderName('gpt-5.2')).toBe('openai');
+            expect(apiManager.getProvider('gpt-5.2')).toBeDefined();
+
+            expect(lookupSpy).toHaveBeenCalledTimes(1);
+        });
+
+        it('invalidates memoized provider lookup when models change', () => {
+            const lookupSpy = jest.spyOn(apiManager, 'findProviderFromModelMap');
+
+            expect(apiManager.getProviderName('gpt-5.2')).toBe('openai');
+            expect(lookupSpy).toHaveBeenCalledTimes(1);
+
+            apiManager.settingsManager.updateSettingsLocal({
+                models: {
+                    openai: { 'gpt-5.2': 'GPT-5.2' },
+                    anthropic: { 'claude-4.5-opus': 'Claude 4.5 Opus' }
+                }
+            });
+
+            expect(apiManager.getProviderName('gpt-5.2')).toBe('openai');
+            expect(lookupSpy).toHaveBeenCalledTimes(2);
+        });
+    });
+
     describe('Timeout handling', () => {
         it('uses AbortController with correct timeout and aborts on timeout', async () => {
             const originalFetch = globalThis.fetch;

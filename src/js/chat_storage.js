@@ -1,5 +1,6 @@
 import { base64NeedsRepair, sanitizeBase64Image } from './image_utils.js';
 import { Migrations } from './migrations.js';
+import { normaliseForSearch } from './search_utils.js';
 
 /**
  * Manages chat persistence using IndexedDB.
@@ -644,12 +645,7 @@ export class ChatStorage {
     // ==================== SEARCH & MEDIA ====================
 
     static normaliseForSearch(string) {
-        if (!string) return '';
-        return string.toLowerCase()
-            .normalize('NFKD')
-            .replace(/[\u0300-\u036f]/g, '')
-            .replace(/\s+/g, ' ')
-            .trim();
+        return normaliseForSearch(string);
     }
 
     static tokenizeForMiniSearch(text) {

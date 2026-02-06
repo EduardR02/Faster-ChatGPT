@@ -22,27 +22,50 @@ const LOCAL_SERVER = {
  */
 export class ApiManager {
     constructor(options = {}) {
-        this.settingsManager = new SettingsManager([
+        const { settingsManager = null, ...optionOverrides } = options;
+
+        this.settingsManager = settingsManager || new SettingsManager([
             'api_keys', 'max_tokens', 'temperature', 'models',
-            'current_model', 'web_search', 'reasoning_effort'
+            'current_model', 'web_search', 'reasoning_effort',
+            'auto_rename', 'auto_rename_model'
         ]);
         this.localServerPort = LOCAL_SERVER.DEFAULT_PORT;
+        this.providerResolutionCache = new Map();
+        this.providerResolutionCacheLimit = 100;
+
         Object.assign(this, {
-            getShouldThink: options.getShouldThink || (() => false),
-            getWebSearch: options.getWebSearch || (() => !!this.settingsManager.getSetting('web_search')),
-            getOpenAIReasoningEffort: options.getOpenAIReasoningEffort || (() => this.settingsManager.getSetting('reasoning_effort') || 'medium'),
-            getGeminiThinkingLevel: options.getGeminiThinkingLevel || (() => this.settingsManager.getSetting('reasoning_effort') || 'medium'),
-            getImageAspectRatio: options.getImageAspectRatio || (() => '16:9'),
-            getImageResolution: options.getImageResolution || (() => '2K')
+            getShouldThink: optionOverrides.getShouldThink || (() => false),
+            getWebSearch: optionOverrides.getWebSearch || (() => !!this.settingsManager.getSetting('web_search')),
+            getOpenAIReasoningEffort: optionOverrides.getOpenAIReasoningEffort || (() => this.settingsManager.getSetting('reasoning_effort') || 'medium'),
+            getGeminiThinkingLevel: optionOverrides.getGeminiThinkingLevel || (() => this.settingsManager.getSetting('reasoning_effort') || 'medium'),
+            getImageAspectRatio: optionOverrides.getImageAspectRatio || (() => '16:9'),
+            getImageResolution: optionOverrides.getImageResolution || (() => '2K')
         });
-        Object.assign(this, options);
+        Object.assign(this, optionOverrides);
+
+        this.settingsManager.subscribeToSetting('models', () => {
+            this.providerResolutionCache.clear();
+        });
     }
 
     resolveProvider(modelId) {
+        if (modelId && this.providerResolutionCache.has(modelId)) {
+            return this.providerResolutionCache.get(modelId);
+        }
+
         const models = this.settingsManager.getSetting('models') || {};
         const resolved = this.findProviderFromModelMap(models, modelId);
-        if (resolved) return resolved;
-        return { name: 'llamacpp', instance: Providers.llamacpp };
+        const provider = resolved || { name: 'llamacpp', instance: Providers.llamacpp };
+
+        if (modelId) {
+            this.providerResolutionCache.set(modelId, provider);
+            if (this.providerResolutionCache.size > this.providerResolutionCacheLimit) {
+                const oldestKey = this.providerResolutionCache.keys().next().value;
+                this.providerResolutionCache.delete(oldestKey);
+            }
+        }
+
+        return provider;
     }
 
     findProviderFromModelMap(modelMap, modelId) {

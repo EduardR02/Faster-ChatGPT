@@ -6,6 +6,7 @@ import { TabManager } from './tab_manager.js';
 import { SidepanelChatUI } from './chat_ui.js';
 import { DragDropManager } from './drag_drop_manager.js';
 import { VoiceManager } from './voice_manager.js';
+import { createStateProxy } from './state_proxy.js';
 
 // Configuration constants
 const STARTUP_WINDOW_MS = 2000;  // Time window to consider closing empty startup tabs
@@ -22,7 +23,7 @@ const ICON = {
 class SidepanelApp {
     constructor() {
         this.stateManager = new SidepanelStateManager('chat_prompt');
-        this.apiManager = new ApiManager();
+        this.apiManager = new ApiManager({ settingsManager: this.stateManager });
         this.stateManager.apiManager = this.apiManager;
         this.chatStorage = new ChatStorage();
 
@@ -156,35 +157,7 @@ class SidepanelApp {
             getArenaModels: () => [],
         };
 
-        // Create a proxy to delegate property access between global state and active tab state
-        const stateProxyHandler = {
-            get: (target, prop) => {
-                const activeTabState = this.getActiveTabState() || dummyTabState;
-                
-                // Prioritize active tab state if property exists there
-                if (prop in activeTabState) {
-                    const value = activeTabState[prop];
-                    return typeof value === 'function' ? value.bind(activeTabState) : value;
-                }
-                
-                // Fallback to global state manager
-                const globalValue = target[prop];
-                return typeof globalValue === 'function' ? globalValue.bind(target) : globalValue;
-            },
-            set: (target, prop, value) => {
-                const activeTabState = this.getActiveTabState();
-                
-                // Set on active tab state if it exists there
-                if (activeTabState && prop in activeTabState) {
-                    activeTabState[prop] = value;
-                } else {
-                    target[prop] = value;
-                }
-                return true;
-            }
-        };
-
-        const sharedState = new Proxy(this.stateManager, stateProxyHandler);
+        const sharedState = createStateProxy(() => this.getActiveTabState(), this.stateManager, dummyTabState);
 
         // Configure shared UI instance by properly calling the constructor
         const ui = new SidepanelChatUI({

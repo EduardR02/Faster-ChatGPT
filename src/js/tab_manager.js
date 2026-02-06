@@ -2,6 +2,7 @@ import { TabState } from './tab_state.js';
 import { SidepanelChatUI } from './chat_ui.js';
 import { SidepanelController } from './sidepanel_controller.js';
 import { createElementWithClass } from './ui_utils.js';
+import { createStateProxy } from './state_proxy.js';
 
 const STORAGE_KEY = 'sidekick_open_tabs';
 const MAX_TABS = 20;
@@ -126,34 +127,7 @@ export class TabManager {
     }
 
     createTabStateProxy(state) {
-        return new Proxy(state, {
-            get: (target, prop) => {
-                if (prop in target) {
-                    const value = target[prop];
-                    return typeof value === 'function' ? value.bind(target) : value;
-                }
-                if (prop in this.globalState) {
-                    const value = this.globalState[prop];
-                    return typeof value === 'function' ? value.bind(this.globalState) : value;
-                }
-                return undefined;
-            },
-            set: (target, prop, value) => {
-                // Per-tab state
-                if (prop in target) {
-                    target[prop] = value;
-                    return true;
-                }
-                // Global state (only if prop already exists)
-                if (prop in this.globalState) {
-                    this.globalState[prop] = value;
-                    return true;
-                }
-                // Unknown props go to target (tab state), not global
-                target[prop] = value;
-                return true;
-            }
-        });
+        return createStateProxy(state, this.globalState);
     }
 
     renderTabButton(tab) {

@@ -1,4 +1,24 @@
 import { ModeEnum } from './storage_utils.js';
+import {
+    THINKING_STATE,
+    initializeArenaCouncilState,
+    initializeInteractiveState,
+    applyArenaCouncilStateMixin,
+    applyInteractiveStateMixin
+} from './conversation_state.js';
+
+export {
+    CHAT_STATE,
+    THINKING_STATE,
+    REASONING_EFFORT_OPTIONS,
+    IMAGE_ASPECT_OPTIONS,
+    IMAGE_RESOLUTION_OPTIONS,
+    cycleOption,
+    readThinkingState,
+    writeThinkingState,
+    advanceThinkingState,
+    initializeThinkingStates
+} from './conversation_state.js';
 
 const settingsManagers = new Set();
 let storageListenerAttached = false;
@@ -14,70 +34,6 @@ const registerSettingsManager = (manager) => {
         chrome.storage.onChanged.addListener(dispatchStorageChanges);
         storageListenerAttached = true;
     }
-};
-
-/**
- * Enums for application states.
- */
-export const CHAT_STATE = { NORMAL: 0, INCOGNITO: 1, CONVERTED: 2 };
-export const THINKING_STATE = { INACTIVE: 0, THINKING: 1, SOLVING: 2 };
-export const REASONING_EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
-export const IMAGE_ASPECT_OPTIONS = ['auto', '16:9', '9:16', '1:1', '4:3', '3:4', '3:2', '2:3', '4:5', '5:4', '21:9'];
-export const IMAGE_RESOLUTION_OPTIONS = ['1K', '2K', '4K'];
-
-export const cycleOption = (currentValue, options) => {
-    const currentIndex = options.indexOf(currentValue);
-    return options[(currentIndex + 1) % options.length];
-};
-
-export const readThinkingState = (state, modelId = null) => {
-    if ((state.isArenaModeActive || state.isCouncilModeActive) && modelId) {
-        return state.thinkingStates[modelId] ?? THINKING_STATE.INACTIVE;
-    }
-    return state.thinkingStates.default;
-};
-
-export const writeThinkingState = (state, value, modelId = null) => {
-    if ((state.isArenaModeActive || state.isCouncilModeActive) && modelId) {
-        state.thinkingStates[modelId] = value;
-    } else {
-        state.thinkingStates.default = value;
-    }
-};
-
-export const advanceThinkingState = (state, modelId = null) => {
-    const current = readThinkingState(state, modelId);
-    const next = current === THINKING_STATE.THINKING ? THINKING_STATE.SOLVING : THINKING_STATE.INACTIVE;
-    writeThinkingState(state, next, modelId);
-};
-
-export const initializeThinkingStates = (state, modelId = null) => {
-    const initialState = state.activeThinkingMode ? THINKING_STATE.THINKING : THINKING_STATE.INACTIVE;
-
-    if (state.isArenaModeActive) {
-        if (modelId) {
-            writeThinkingState(state, initialState, modelId);
-            return;
-        }
-        const [modelA, modelB] = state.activeArenaModels;
-        state.thinkingStates = { [modelA]: initialState, [modelB]: initialState };
-        return;
-    }
-
-    if (state.isCouncilModeActive) {
-        if (modelId) {
-            writeThinkingState(state, initialState, modelId);
-            return;
-        }
-        const models = state.activeCouncilModels || [];
-        state.thinkingStates = models.reduce((acc, model) => {
-            acc[model] = initialState;
-            return acc;
-        }, {});
-        return;
-    }
-
-    state.thinkingStates = { default: initialState };
 };
 
 /**
@@ -183,6 +139,26 @@ export class SettingsManager {
 
     isInstantPromptMode() {
         return this.getSetting('mode') === ModeEnum.InstantPromptMode;
+    }
+
+    getSessionState() {
+        return this.state;
+    }
+
+    applyModeSettingUpdates(settingUpdates) {
+        this.updateSettingsPersistent(settingUpdates);
+    }
+
+    shouldSyncModeFlagsOnToggle() {
+        return false;
+    }
+
+    getModeDefaultsForReset() {
+        return { arena_mode: false, council_mode: false };
+    }
+
+    initializeThinkingStateForReset() {
+        this.initThinkingStateDefault?.();
     }
 }
 
@@ -349,88 +325,22 @@ export class SettingsStateManager extends SettingsManager {
 }
 
 /**
- * Manages Arena-specific state.
+ * Compatibility wrapper for direct ArenaStateManager imports.
  */
 export class ArenaStateManager extends SettingsManager {
     constructor(requestedSettings = []) {
         super(requestedSettings);
-        this.state.isArenaModeActive = false;
-        this.state.activeArenaModels = null;
-        this.state.isCouncilModeActive = false;
-        this.state.activeCouncilModels = null;
-        this.state.councilCollectorModel = null;
-    }
-
-    initArenaResponse(modelA, modelB) {
-        Object.assign(this.state, {
-            activeArenaModels: [modelA, modelB],
-            isArenaModeActive: true
-        });
-    }
-
-    clearArenaState() {
-        Object.assign(this.state, {
-            activeArenaModels: null,
-            isArenaModeActive: false
-        });
-    }
-
-    initCouncilResponse(models, collectorModel) {
-        Object.assign(this.state, {
-            activeCouncilModels: models,
-            councilCollectorModel: collectorModel,
-            isCouncilModeActive: true
-        });
-    }
-
-    clearCouncilState() {
-        Object.assign(this.state, {
-            activeCouncilModels: null,
-            councilCollectorModel: null,
-            isCouncilModeActive: false
-        });
-    }
-
-    getCouncilModels() {
-        return this.state.activeCouncilModels || [];
-    }
-
-    getCouncilCollectorModel() {
-        return this.state.councilCollectorModel || this.getSetting('council_collector_model');
-    }
-
-    get isCouncilModeActive() {
-        return this.state.isCouncilModeActive;
-    }
-
-    getArenaModel(index) {
-        return this.state.activeArenaModels ? this.state.activeArenaModels[index] : null;
-    }
-
-    getArenaModelKey(modelId) {
-        if (!this.state.activeArenaModels) return 'model_a';
-        return this.state.activeArenaModels.indexOf(modelId) === 0 ? 'model_a' : 'model_b';
-    }
-
-    getModelIndex(modelId) {
-        return this.state.activeArenaModels?.indexOf(modelId) ?? 0;
-    }
-
-    getArenaModels() {
-        return this.state.activeArenaModels || [];
-    }
-
-    get isArenaModeActive() {
-        return this.state.isArenaModeActive;
+        initializeArenaCouncilState(this.state);
     }
 }
 
 /**
  * Manages state for the History page.
  */
-export class HistoryStateManager extends ArenaStateManager {
+export class HistoryStateManager extends SettingsManager {
     constructor() {
         super(['show_model_name', 'models']);
+        initializeArenaCouncilState(this.state);
         Object.assign(this, {
             isLoading: false,
             offset: 0,
@@ -442,8 +352,8 @@ export class HistoryStateManager extends ArenaStateManager {
     }
 
     shouldLoadMore() {
-        return this.historyList && 
-               this.historyList.scrollHeight <= this.historyList.clientHeight && 
+        return this.historyList &&
+               this.historyList.scrollHeight <= this.historyList.clientHeight &&
                this.hasMoreItems;
     }
 
@@ -468,27 +378,26 @@ export class HistoryStateManager extends ArenaStateManager {
 /**
  * Manages state for the Sidepanel application.
  */
-export class SidepanelStateManager extends ArenaStateManager {
+export class SidepanelStateManager extends SettingsManager {
     constructor(activePromptKey) {
         super([
-            'loop_threshold', 'current_model', 'arena_models', 'stream_response', 
-            'arena_mode', 'show_model_name', 'models', 'web_search', 
+            'api_keys', 'max_tokens', 'temperature',
+            'loop_threshold', 'current_model', 'arena_models', 'stream_response',
+            'arena_mode', 'show_model_name', 'models', 'web_search',
             'reasoning_effort', 'persist_tabs', 'transcription_model',
+            'auto_rename', 'auto_rename_model',
             'council_mode', 'council_models', 'council_collector_model'
         ]);
-        
+
         Object.assign(this, {
             apiManager: null,
             chatResetListeners: new Map(),
-            requestedPromptKey: activePromptKey,
-            shouldSave: true
+            requestedPromptKey: activePromptKey
         });
 
-        Object.assign(this.state, {
-            pendingThinkingMode: false,
-            activeThinkingMode: false,
-            thinkingStates: { default: THINKING_STATE.INACTIVE },
-            chatState: CHAT_STATE.NORMAL
+        initializeArenaCouncilState(this.state);
+        initializeInteractiveState(this.state, {
+            thinkingStates: { default: THINKING_STATE.INACTIVE }
         });
 
         this.state.prompts = { active_prompt: {}, thinking: '', solver: '', council_collector_prompt: '' };
@@ -497,14 +406,14 @@ export class SidepanelStateManager extends ArenaStateManager {
 
         chrome.storage.onChanged.addListener((changes, area) => {
             if (area !== 'local') return;
-            
+
             const promptUpdates = {};
             for (const [key, change] of Object.entries(changes)) {
                 if (key.endsWith('_prompt')) {
                     promptUpdates[key] = change.newValue;
                 }
             }
-            
+
             if (Object.keys(promptUpdates).length > 0) {
                 this.updatePromptsLocal(promptUpdates);
             }
@@ -526,7 +435,7 @@ export class SidepanelStateManager extends ArenaStateManager {
     }
 
     async loadPrompts(promptKey) {
-        const result = await new Promise(resolve => 
+        const result = await new Promise(resolve =>
             chrome.storage.local.get(['thinking_prompt', 'solver_prompt', 'council_collector_prompt', promptKey], resolve)
         );
         this.updatePromptsLocal(result);
@@ -547,9 +456,6 @@ export class SidepanelStateManager extends ArenaStateManager {
         return this.state.prompts[type];
     }
 
-    get shouldSave() { return this.state.shouldSave; }
-    set shouldSave(value) { this.state.shouldSave = !!value; }
-
     subscribeToChatReset(id, callback) {
         this.chatResetListeners.set(id, callback);
     }
@@ -557,144 +463,9 @@ export class SidepanelStateManager extends ArenaStateManager {
     notifyChatReset() {
         this.chatResetListeners.forEach(callback => callback());
     }
-
-    // --- Thinking States ---
-
-    isThinking(modelId = null) {
-        return readThinkingState(this.state, modelId) === THINKING_STATE.THINKING;
-    }
-
-    isSolving(modelId = null) {
-        return readThinkingState(this.state, modelId) === THINKING_STATE.SOLVING;
-    }
-
-    isInactive(modelId = null) {
-        return readThinkingState(this.state, modelId) === THINKING_STATE.INACTIVE;
-    }
-
-    getThinkingState(modelId) {
-        return readThinkingState(this.state, modelId);
-    }
-
-    setThinkingState(state, modelId = null) {
-        writeThinkingState(this.state, state, modelId);
-    }
-
-    nextThinkingState(modelId = null) {
-        advanceThinkingState(this.state, modelId);
-    }
-
-    initThinkingStateDefault() {
-        initializeThinkingStates(this.state);
-    }
-
-    initThinkingState(modelId = null) {
-        initializeThinkingStates(this.state, modelId);
-    }
-
-    updateThinkingMode() {
-        this.state.activeThinkingMode = this.state.pendingThinkingMode;
-    }
-
-    toggleThinkingMode() {
-        this.state.pendingThinkingMode = !this.state.pendingThinkingMode;
-    }
-
-    get thinkingMode() {
-        return this.state.activeThinkingMode;
-    }
-
-    // --- Chat State Toggles ---
-
-    resetChatState() {
-        this.state.chatState = CHAT_STATE.NORMAL;
-        this.shouldSave = true;
-        this.clearArenaState();
-        this.clearCouncilState();
-        this.initThinkingStateDefault();
-    }
-
-    toggleArenaMode() {
-        const next = !this.getSetting('arena_mode');
-        this.updateSettingsPersistent({ arena_mode: next, council_mode: false });
-    }
-
-    toggleCouncilMode() {
-        const next = !this.getSetting('council_mode');
-        this.updateSettingsPersistent({ council_mode: next, arena_mode: false });
-    }
-
-    toggleChatState(hasChatStarted) {
-        const current = this.state.chatState;
-        
-        if (current === CHAT_STATE.NORMAL) {
-            this.shouldSave = false;
-            this.state.chatState = hasChatStarted ? CHAT_STATE.CONVERTED : CHAT_STATE.INCOGNITO;
-        } else if (current === CHAT_STATE.INCOGNITO) {
-            this.shouldSave = true;
-            this.state.chatState = hasChatStarted ? CHAT_STATE.CONVERTED : CHAT_STATE.NORMAL;
-        } else if (current === CHAT_STATE.CONVERTED) {
-            this.shouldSave = false;
-            this.state.chatState = CHAT_STATE.INCOGNITO;
-            this.notifyChatReset();
-        }
-    }
-
-    isChatNormal() { return this.state.chatState === CHAT_STATE.NORMAL; }
-    isChatIncognito() { return this.state.chatState === CHAT_STATE.INCOGNITO; }
-
-    // --- Feature Toggles ---
-
-    getShouldThink() { return !!this.state.shouldThink; }
-    setShouldThink(value) { this.state.shouldThink = !!value; }
-    toggleShouldThink() { this.state.shouldThink = !this.state.shouldThink; }
-
-    ensureWebSearchInitialized() {
-        if (this.state.shouldWebSearch === undefined) {
-            this.state.shouldWebSearch = !!this.getSetting('web_search');
-        }
-    }
-
-    getShouldWebSearch() {
-        this.ensureWebSearchInitialized();
-        return !!this.state.shouldWebSearch;
-    }
-
-    setShouldWebSearch(value) { this.state.shouldWebSearch = !!value; }
-    toggleShouldWebSearch() {
-        this.ensureWebSearchInitialized();
-        this.state.shouldWebSearch = !this.state.shouldWebSearch;
-    }
-
-    // --- Configuration Cyclers ---
-
-    getReasoningEffort() {
-        return this.state.reasoningEffort || this.getSetting('reasoning_effort') || 'medium';
-    }
-
-    cycleReasoningEffort() {
-        const nextEffort = cycleOption(this.getReasoningEffort(), REASONING_EFFORT_OPTIONS);
-        this.state.reasoningEffort = nextEffort;
-        return nextEffort;
-    }
-
-    getImageAspectRatio() {
-        return this.state.imageAspectRatio || 'auto';
-    }
-
-    cycleImageAspectRatio() {
-        const nextOption = cycleOption(this.getImageAspectRatio(), IMAGE_ASPECT_OPTIONS);
-        this.state.imageAspectRatio = nextOption;
-        return nextOption;
-    }
-
-    getImageResolution() {
-        return this.state.imageResolution || '2K';
-    }
-
-    cycleImageResolution() {
-        const nextOption = cycleOption(this.getImageResolution(), IMAGE_RESOLUTION_OPTIONS);
-        this.state.imageResolution = nextOption;
-        return nextOption;
-    }
 }
+
+applyArenaCouncilStateMixin(ArenaStateManager.prototype);
+applyArenaCouncilStateMixin(HistoryStateManager.prototype);
+applyArenaCouncilStateMixin(SidepanelStateManager.prototype);
+applyInteractiveStateMixin(SidepanelStateManager.prototype);
