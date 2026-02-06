@@ -194,7 +194,8 @@ export class StreamWriterSimple {
         this.flushBufferedContent();
 
         const current = this.parts.at(-1);
-        current.content = current.content.join('');
+        const content = getPartContentText(current);
+        current.content = current.type === 'thought' && !content.trim() ? '' : content;
         
         if (current.type === 'image') {
             this.updateImageContent(current.content);

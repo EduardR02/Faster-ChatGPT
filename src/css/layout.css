@@ -1272,6 +1272,10 @@ p {
   color: #abb2bf;
 }
 
+.message-content.thoughts:empty {
+  display: none;
+}
+
 .thoughts::selection {
   color: #61afef;
 }
