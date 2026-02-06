@@ -243,6 +243,32 @@ const chatUI = new HistoryChatUI({
 });
 popupMenu.chatUI = chatUI;
 
+let liveUpdateQueue = Promise.resolve();
+const liveMessageTimestamps = new Map();
+
+const queueLiveUpdate = (operation) => {
+    liveUpdateQueue = liveUpdateQueue
+        .then(() => operation())
+        .catch(error => console.error('Live history update failed:', error));
+    return liveUpdateQueue;
+};
+
+const getLiveMessageTimestamp = (explicitTimestamp = null, message = null) => {
+    const numeric = Number(explicitTimestamp ?? message?.timestamp ?? null);
+    return Number.isFinite(numeric) ? numeric : null;
+};
+
+const shouldApplyLiveMessage = (chatId, messageId, timestamp = null) => {
+    if (timestamp == null) return true;
+    const key = `${chatId}:${messageId}`;
+    const latestTimestamp = liveMessageTimestamps.get(key);
+    if (latestTimestamp != null && timestamp < latestTimestamp) {
+        return false;
+    }
+    liveMessageTimestamps.set(key, timestamp);
+    return true;
+};
+
 function initMessageListeners() {
     chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.type === 'new_chat_saved') {
@@ -255,9 +281,9 @@ function initMessageListeners() {
                 chatSearch?.enqueueNewDocument(message.searchDoc);
             }
         } else if (message.type === 'appended_messages_to_saved_chat') {
-            handleAppended(message.chatId, message.addedCount, message.startIndex, null, message.searchDelta, message.timestamp);
+            void queueLiveUpdate(() => handleAppended(message.chatId, message.addedCount, message.startIndex, null, message.searchDelta, message.timestamp));
         } else if (message.type === 'message_updated') {
-            handleUpdate(message.chatId, message.messageId, message.timestamp, message.message);
+            void queueLiveUpdate(() => handleUpdate(message.chatId, message.messageId, message.timestamp, message.message));
         } else if (message.type === 'chat_renamed') {
             handleRenamed(message.chatId, message.title);
         } else if (message.type === 'history_reindex') {
@@ -298,7 +324,7 @@ async function handleAppended(chatId, addedCount, startIndex, message = null, se
     if (chatCore.getChatId() !== chatId) return;
     const messages = message ? [message] : await chatStorage.getMessages(chatId, startIndex, addedCount);
     if (messages) { 
-        chatUI.appendMessages(messages, chatCore.getLength()); 
+        chatUI.appendMessages(messages, startIndex); 
         chatCore.addMultipleFromHistory(messages); 
     }
 }
@@ -307,13 +333,15 @@ async function handleUpdate(chatId, messageId, timestamp = null, messageData = n
     if (chatCore.getChatId() !== chatId) return;
     const message = messageData || await chatStorage.getMessage(chatId, messageId);
     if (!message) return;
+    const effectiveTimestamp = getLiveMessageTimestamp(timestamp, message);
+    if (!shouldApplyLiveMessage(chatId, messageId, effectiveTimestamp)) return;
     if (messageId >= chatCore.getLength()) {
-        return handleAppended(chatId, 1, chatCore.getLength(), message, ChatStorage.extractTextFromMessages([message]), message.timestamp || timestamp);
+        return handleAppended(chatId, 1, messageId, message, ChatStorage.extractTextFromMessages([message]), effectiveTimestamp);
     }
     if (mediaTab) {
         mediaTab.deferredForceRefresh = true;
     }
-    await handleHistoryRefresh(chatId, { timestamp: timestamp || message.timestamp || Date.now() });
+    await handleHistoryRefresh(chatId, { timestamp: effectiveTimestamp || Date.now() });
     if (message.responses) {
         chatUI.updateArena(message, messageId);
     } else if (message.council) {

@@ -208,12 +208,14 @@ class ChatUI {
                         this.createArenaWrapper(message, { 
                             continueFunc: options.continueFunc, 
                             messageIndex: i,
+                            messageId: message.messageId ?? i,
                             isRegeneration
                         });
                     } else if (isCouncil) {
                         this.createCouncilWrapper(message, {
                             continueFunc: options.continueFunc,
                             messageIndex: i,
+                            messageId: message.messageId ?? i,
                             allowContinue: options.allowContinue,
                             isRegeneration
                         });
@@ -279,8 +281,12 @@ class ChatUI {
     createArenaMessage(messageData, options = {}) {
         messageData = messageData || {};
         const arenaMessageBlock = createElementWithClass('div', 'assistant-message');
+        const messageId = options.messageId ?? options.messageIndex ?? messageData.messageId;
         if (options.messageIndex != null) {
             arenaMessageBlock.dataset.messageIndex = options.messageIndex;
+        }
+        if (messageId != null) {
+            arenaMessageBlock.dataset.messageId = messageId;
         }
 
         const arenaFullContainer = createElementWithClass('div', 'arena-full-container');
@@ -332,8 +338,12 @@ class ChatUI {
     createCouncilMessage(messageData, options = {}) {
         messageData = messageData || {};
         const councilBlock = createElementWithClass('div', 'assistant-message council-message');
+        const messageId = options.messageId ?? options.messageIndex ?? messageData.messageId;
         if (options.messageIndex != null) {
             councilBlock.dataset.messageIndex = options.messageIndex;
+        }
+        if (messageId != null) {
+            councilBlock.dataset.messageId = messageId;
         }
 
         const header = createElementWithClass('div', 'council-header');
@@ -466,7 +476,7 @@ class ChatUI {
     }
 
     updateCouncil(message, index) {
-        const oldBlock = this.conversationDiv.children[index];
+        const oldBlock = this.conversationDiv.querySelector(`.council-message[data-message-id="${index}"]`) || this.conversationDiv.children[index];
         if (!oldBlock) return;
 
         // If in sidepanel and we're currently streaming this council block
@@ -504,7 +514,8 @@ class ChatUI {
         } else {
             const newBlock = this.createCouncilMessage(message, {
                 continueFunc: this.continueFunc,
-                messageIndex: index
+                messageIndex: index,
+                messageId: message.messageId ?? index
             });
             this.conversationDiv.replaceChild(newBlock, oldBlock);
             if (this.activeDivs === oldBlock) {
@@ -2015,12 +2026,13 @@ export class HistoryChatUI extends ChatUI {
 
     appendMessages(messages, start) {
         messages.forEach((msg, i) => {
+            const messageId = msg.messageId ?? (start + i);
             if (msg.responses) {
-                this.createArenaWrapper(msg, { continueFunc: this.continueFunc, messageIndex: start + i });
+                this.createArenaWrapper(msg, { continueFunc: this.continueFunc, messageIndex: messageId, messageId });
             } else if (msg.council) {
-                this.createCouncilWrapper(msg, { continueFunc: this.continueFunc, messageIndex: start + i });
+                this.createCouncilWrapper(msg, { continueFunc: this.continueFunc, messageIndex: messageId, messageId });
             } else {
-                this.buildFullMessage(msg, start + i);
+                this.buildFullMessage(msg, messageId);
             }
             this.pendingMediaDiv = null;
         });
@@ -2052,11 +2064,12 @@ export class HistoryChatUI extends ChatUI {
     }
 
     updateArena(message, index) {
-        const oldBlock = this.conversationDiv.children[index];
+        const oldBlock = this.conversationDiv.querySelector(`.assistant-message[data-message-id="${index}"]`) || this.conversationDiv.children[index];
         if (oldBlock) {
             const divs = this.createArenaWrapper(message, { 
                 continueFunc: this.continueFunc, 
-                messageIndex: index 
+                messageIndex: index,
+                messageId: message.messageId ?? index
             });
             const newBlock = divs[0].parentElement.parentElement;
             newBlock.remove(); // Prevent duplicate append from createArenaWrapper
