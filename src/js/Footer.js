@@ -1,5 +1,21 @@
 import { createElementWithClass } from './ui_utils.js';
 
+export const createRegenerateButton = (onRegenerate, onAfterRemove = null) => {
+    const regenerateButton = createElementWithClass('button', 'button regenerate-button', '\u{21BB}');
+    regenerateButton.onclick = () => {
+        onRegenerate();
+        regenerateButton.classList.add('fade-out');
+
+        regenerateButton.ontransitionend = (event) => {
+            if (event.propertyName === 'opacity') {
+                regenerateButton.remove();
+                onAfterRemove?.();
+            }
+        };
+    };
+    return regenerateButton;
+};
+
 export class Footer {
     constructor(inputTokens, outputTokens, isArena, isThinkingCallback, regenCallback, options = {}) {
         this.inputTokens = inputTokens;
@@ -21,20 +37,9 @@ export class Footer {
         footerDiv.appendChild(infoSpan);
         
         if (!this.isThinking() && !this.hideRegenerate) {
-            const regenerateButton = createElementWithClass('button', 'button regenerate-button', '\u{21BB}'); // Refresh icon
-            
-            regenerateButton.onclick = () => {
-                this.regen();
-                regenerateButton.classList.add('fade-out');
-                
-                regenerateButton.ontransitionend = (event) => {
-                    if (event.propertyName === 'opacity') {
-                        regenerateButton.remove();
-                        footerDiv.classList.add('centered');
-                    }
-                };
-            };
-            
+            const regenerateButton = createRegenerateButton(this.regen, () => {
+                footerDiv.classList.add('centered');
+            });
             footerDiv.appendChild(regenerateButton);
         } else {
             footerDiv.classList.add('centered');

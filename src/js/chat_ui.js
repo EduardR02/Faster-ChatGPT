@@ -1,13 +1,23 @@
 import { createElementWithClass, formatContent, updateTextfieldHeight, highlightCodeBlocks } from './ui_utils.js';
-import { Footer } from './Footer.js';
+import { Footer, createRegenerateButton } from './Footer.js';
 
 // UI constants
-const SCROLL_THRESHOLD_PX = 5;          // Pixels from bottom to consider "at bottom"
+const SCROLL_BOTTOM_THRESHOLD_PX = 5;   // Pixels from bottom to consider "at bottom"
+const SCROLL_REENGAGE_PX = 150;         // Grace area to re-engage autoscroll
 const POPUP_OFFSET_PX = 5;              // Offset for popup positioning
 const HISTORY_SCROLL_BUFFER = 10;       // Pixels from bottom to trigger loading more history
 const KEYBOARD_NAV_HIGHLIGHT_MS = 300;  // Duration for keyboard navigation highlight
 const ERROR_FLASH_MS = 1000;            // Duration for error flash animation
 const MS_PER_DAY = 86400000;            // Milliseconds in a day
+
+export const getDistanceFromBottom = element => {
+    if (!element) return Number.POSITIVE_INFINITY;
+    return element.scrollHeight - element.clientHeight - element.scrollTop;
+};
+
+export const isWithinBottomGrace = (element, thresholdPx = SCROLL_REENGAGE_PX) => {
+    return getDistanceFromBottom(element) <= thresholdPx;
+};
 
 // Unicode character constants (for readability)
 const UNICODE = {
@@ -276,8 +286,10 @@ class ChatUI {
         if (options.isRegeneration) {
             title.textContent += ` ${UNICODE.REGEN_ARROW}`;
         }
+        const headerActions = createElementWithClass('div', 'council-header-actions');
         const meta = createElementWithClass('span', 'council-meta');
-        header.append(title, meta);
+        headerActions.appendChild(meta);
+        header.append(title, headerActions);
 
         const responses = messageData.council?.responses || {};
         const responseKeys = Object.keys(responses);
@@ -328,17 +340,19 @@ class ChatUI {
             role: 'assistant',
             model: collectorModel,
             hideModels: false,
-            allowContinue: true,
+            allowContinue: false,
             isCouncilRow: true
         };
-
-        if (options.continueFunc) {
-            collectorOptions.continueFunc = () => options.continueFunc(options.messageIndex, 0);
-        }
 
         const collectorMessage = this.createMessage('assistant', collectorResponse, collectorOptions);
         collectorMessage.dataset.model = collectorModel;
         collectorWrapper.appendChild(collectorMessage);
+
+        if (options.continueFunc && options.allowContinue !== false && collectorResponse.length > 0 && options.messageIndex != null) {
+            const continueButton = this.createContinueButton(() => options.continueFunc(options.messageIndex, 0));
+            continueButton.classList.add('council-continue-button');
+            headerActions.appendChild(continueButton);
+        }
 
         if (this.mode === 'history') {
             if (collectorResponse.length > 0) {
@@ -710,8 +724,11 @@ class ChatUI {
     removeRegenerateButtons() {
         this.conversationDiv.querySelectorAll('.regenerate-button').forEach(btn => {
             const parent = btn.parentElement;
-            parent.classList.add('centered');
+            parent?.classList.add('centered');
             btn.remove();
+            if (parent?.classList.contains('arena-actions')) {
+                parent.remove();
+            }
         });
     }
 }
@@ -1074,9 +1091,9 @@ export class SidepanelChatUI extends ChatUI {
             skipTextarea: true
         };
         super.buildChat(chat, options);
-        this.shouldScroll = true;
+        this.resetAutoScroll();
         this.updateChatHeader(chat.title);
-        this.scrollIntoView();
+        this.scrollIntoView(true);
     }
 
     addErrorMessage(text) {
@@ -1087,8 +1104,25 @@ export class SidepanelChatUI extends ChatUI {
         this.conversationDiv.appendChild(this.createSystemMessage(text, 'System Message: Warning'));
     }
 
-    addCouncilRegenerateFooter(inputTokens, outputTokens, onRegenerate) {
-        const councilBlock = this.activeDivs;
+    getTopLevelAssistantBlocks() {
+        return Array.from(this.conversationDiv.children).filter(child => child.classList?.contains('assistant-message'));
+    }
+
+    getLatestAssistantBlock() {
+        return this.getTopLevelAssistantBlocks().at(-1) || null;
+    }
+
+    isNearBottom(thresholdPx = SCROLL_REENGAGE_PX) {
+        return isWithinBottomGrace(this.scrollToElement, thresholdPx);
+    }
+
+    resetAutoScroll() {
+        this.shouldScroll = true;
+        this.lastScrollTop = this.scrollToElement?.scrollTop || 0;
+    }
+
+    addCouncilRegenerateFooter(inputTokens, outputTokens, onRegenerate, councilBlockOverride = null) {
+        const councilBlock = councilBlockOverride || this.activeDivs;
         if (!councilBlock || !councilBlock.classList.contains('council-message')) return;
         
         // Find the collector's last content div to attach footer (like normal messages)
@@ -1106,8 +1140,74 @@ export class SidepanelChatUI extends ChatUI {
         this.scrollIntoView();
     }
 
-    scrollIntoView() {
-        if (!this.shouldScroll || !this.scrollToElement) return;
+    addArenaRegenerateButton(arenaBlock, onRegenerate) {
+        if (!arenaBlock) return;
+        let actionRow = arenaBlock.querySelector('.arena-actions');
+        if (!actionRow) {
+            actionRow = createElementWithClass('div', 'arena-actions');
+            arenaBlock.appendChild(actionRow);
+        }
+        actionRow.innerHTML = '';
+        actionRow.appendChild(createRegenerateButton(onRegenerate, () => actionRow.remove()));
+    }
+
+    removeRegenerateButtonsOutside(latestAssistantBlock) {
+        this.conversationDiv.querySelectorAll('.regenerate-button').forEach(button => {
+            if (!latestAssistantBlock?.contains(button)) {
+                const parent = button.parentElement;
+                parent?.classList.add('centered');
+                button.remove();
+                if (parent?.classList.contains('arena-actions')) {
+                    parent.remove();
+                }
+            }
+        });
+    }
+
+    ensureLatestAssistantRegenerate(handler, options = {}) {
+        const latest = this.getLatestAssistantBlock();
+        if (!latest || typeof handler !== 'function') return;
+
+        this.removeRegenerateButtonsOutside(latest);
+        if (latest.querySelector('.regenerate-button')) return;
+
+        if (latest.classList.contains('council-message')) {
+            this.addCouncilRegenerateFooter(options.inputTokens ?? 0, options.outputTokens ?? 0, handler, latest);
+            return;
+        }
+
+        if (latest.querySelector('.arena-full-container')) {
+            const arenaFooter = latest.querySelector('.arena-footer');
+            if (arenaFooter && !arenaFooter.classList.contains('slide-left')) {
+                return;
+            }
+            this.addArenaRegenerateButton(latest, handler);
+            this.scrollIntoView();
+            return;
+        }
+
+        this.addRegenerateFooterToMessage(latest, handler);
+    }
+
+    addRegenerateFooterToMessage(messageBlock, handler) {
+        if (!messageBlock || messageBlock.classList.contains('council-message')) return;
+
+        const candidates = messageBlock.querySelectorAll('.message-content, .image-content');
+        const content = candidates.length ? candidates[candidates.length - 1] : messageBlock.querySelector('.message-wrapper');
+        if (!content || content.querySelector('.message-footer')) return;
+
+        new Footer(0, 0, false, () => false, handler).create(content);
+        this.scrollIntoView();
+    }
+
+    scrollIntoView(force = false) {
+        if (!this.scrollToElement) return;
+
+        if (!force && !this.shouldScroll && this.isNearBottom()) {
+            this.shouldScroll = true;
+        }
+
+        if (!force && !this.shouldScroll) return;
         
         const element = this.scrollToElement;
         const target = element.scrollHeight - element.clientHeight;
@@ -1117,30 +1217,41 @@ export class SidepanelChatUI extends ChatUI {
         element.scrollTop = target;
     }
 
-    renderContinueForAssistant(index, subIndex = 0, modelKey = null) {
+    addContinueToLatestAssistant(index, subIndex = 0, modelKey = null) {
         if (!this.continueFunc) return;
-        
-        const wrapper = this.conversationDiv.children[index]?.querySelector('.history-prefix-wrapper');
+
+        const latest = this.getLatestAssistantBlock();
+        if (!latest || latest.classList.contains('council-message') || latest.querySelector('.arena-full-container')) return;
+
+        const wrapper = latest.querySelector('.history-prefix-wrapper');
         if (wrapper && !wrapper.querySelector('.continue-conversation-button')) {
             wrapper.appendChild(this.createContinueButton(() => this.continueFunc(index, subIndex, modelKey)));
         }
     }
 
+    renderContinueForAssistant(index, subIndex = 0, modelKey = null) {
+        this.addContinueToLatestAssistant(index, subIndex, modelKey);
+    }
+
+    addCouncilContinueButton(messageIndex = null) {
+        if (!this.continueFunc) return;
+
+        const councilBlock = messageIndex == null ? this.activeDivs : this.conversationDiv.children[messageIndex];
+        if (!councilBlock?.classList?.contains('council-message')) return;
+
+        const resolvedIndex = Number.isFinite(messageIndex) ? messageIndex : Number(councilBlock.dataset.messageIndex);
+        if (!Number.isFinite(resolvedIndex)) return;
+
+        const actions = councilBlock.querySelector('.council-header-actions');
+        if (!actions || actions.querySelector('.continue-conversation-button')) return;
+
+        const continueButton = this.createContinueButton(() => this.continueFunc(resolvedIndex, 0));
+        continueButton.classList.add('council-continue-button');
+        actions.appendChild(continueButton);
+    }
+
     addRegenerateFooterToLastMessage(handler) {
-        const assistantMessages = this.conversationDiv.querySelectorAll('.assistant-message');
-        const last = assistantMessages[assistantMessages.length - 1];
-        if (!last || last.querySelector('.message-footer')) return;
-
-        // Don't add individual regenerate for council messages (except collector if needed, but instructions say no individual regenerate)
-        if (last.classList.contains('council-message') || last.closest('.council-message')) return;
-
-        const candidates = last.querySelectorAll('.message-content, .image-content');
-        const content = candidates.length ? candidates[candidates.length - 1] : last.querySelector('.message-wrapper');
-        
-        if (content) {
-            new Footer(0, 0, false, () => false, handler).create(content);
-            this.scrollIntoView();
-        }
+        this.ensureLatestAssistantRegenerate(handler);
     }
 
     initScrollListener() {
@@ -1148,25 +1259,24 @@ export class SidepanelChatUI extends ChatUI {
         
         this.lastScrollTop = this.scrollToElement.scrollTop;
         this.scrollToElement.addEventListener('scroll', () => {
-            const element = this.scrollToElement;
-            const current = element.scrollTop;
+            const current = this.scrollToElement.scrollTop;
             const previous = this.lastScrollTop;
             this.lastScrollTop = current;
 
-            // If user scrolls up, disable auto-scroll
             if (current < previous) {
                 this.shouldScroll = false;
                 return;
             }
 
-            // If user scrolls back to bottom, re-enable auto-scroll
-            if (element.scrollHeight - element.clientHeight - current <= SCROLL_THRESHOLD_PX) {
+            if (this.isNearBottom()) {
                 this.shouldScroll = true;
             }
         }, { passive: true });
 
         this.isScrollActive = true;
-        this.shouldScroll = true;
+        if (this.isNearBottom(SCROLL_BOTTOM_THRESHOLD_PX)) {
+            this.shouldScroll = true;
+        }
     }
 
     addArenaFooter(onChoice) {
@@ -1334,6 +1444,7 @@ export class SidepanelChatUI extends ChatUI {
         super.clearConversation(options);
         if (titleWrapper) this.conversationDiv.prepend(titleWrapper);
         this.activeDivs = null;
+        this.resetAutoScroll();
         this.updateChatHeader('conversation');
         if (!options.skipTextarea) {
             this.setTextareaText('');

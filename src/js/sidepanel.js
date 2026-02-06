@@ -609,10 +609,6 @@ class SidepanelApp {
             activeChatUI.updateIncognito(activeController.chatCore.hasChatStarted()); 
             activeChatUI.buildChat(activeController.chatCore.getChat());
             
-            if (activeTab?.container) {
-                requestAnimationFrame(() => activeTab.container.scrollTop = activeTab.container.scrollHeight);
-            }
-            
             activeController.chatCore.continuedChatOptions = { 
                 fullChatLength: await this.chatStorage.getChatLength(numericChatId), 
                 lastMessage: lastHistoryMessage, 
@@ -634,14 +630,8 @@ class SidepanelApp {
         }
         
         this.handleLastUserMsg(lastHistoryMessage?.role === 'user' ? lastHistoryMessage : reconstructOptions.pendingUserMessage);
-        
-        const latestMessage = activeController.chatCore.getLatestMessage();
-        if (latestMessage?.role === 'assistant' && !latestMessage.responses) {
-            activeChatUI.addRegenerateFooterToLastMessage(() => {
-                const lastModelId = latestMessage.contents?.at(-1)?.at(-1)?.model || this.stateManager.getSetting('current_model');
-                activeController.regenerateResponse(lastModelId);
-            });
-        }
+
+        activeController.restoreLatestAssistantActions();
     }
 
     handleLastUserMsg(message) {

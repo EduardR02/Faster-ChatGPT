@@ -1038,6 +1038,18 @@ p {
   padding: 0 0.75em;
 }
 
+.council-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  margin-left: auto;
+}
+
+.council-continue-button {
+  font-size: 1.1em;
+  padding: 0 6px;
+}
+
 .council-title {
   font-weight: bold;
   letter-spacing: 0.08em;
@@ -1167,6 +1179,16 @@ p {
   margin-top: 0.5em;
   justify-content: space-between;
   transition: all 0.4s ease;
+}
+
+.arena-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.5em;
+}
+
+.arena-actions .regenerate-button {
+  margin-left: 0;
 }
 
 .arena-footer.slide-left {

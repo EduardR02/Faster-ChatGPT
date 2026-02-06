@@ -369,15 +369,10 @@ export class TabManager {
             
             tab.chatUI.updateIncognito(tab.controller.chatCore.hasChatStarted());
             tab.chatUI.buildChat(tab.controller.chatCore.getChat());
+            tab.controller.restoreLatestAssistantActions();
             
             tab.tabState.chatId = chatData.chatId;
             this.updateTabTitle(tabId, chatData.title || 'Chat');
-
-            requestAnimationFrame(() => {
-                if (this.tabs.has(tabId)) {
-                    tab.container.scrollTop = tab.container.scrollHeight;
-                }
-            });
             return true;
         } catch (error) {
             if (this.tabs.has(tabId)) {
