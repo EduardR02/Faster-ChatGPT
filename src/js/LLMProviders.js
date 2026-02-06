@@ -29,8 +29,8 @@ export const MaxTokens = {
 };
 
 export const DEFAULT_MODELS = {
-    openai: { "gpt-5.2": "GPT-5.2", "gpt-5.2-mini": "GPT-5.2 mini" },
-    anthropic: { "claude-4.5-opus": "Claude 4.5 Opus", "claude-sonnet-4-5": "Claude 4.5 Sonnet", "claude-4.5-haiku": "Claude 4.5 Haiku" },
+    openai: { "gpt-5.2": "GPT-5.2", "gpt-5.3-codex": "GPT-5.3 Codex", "gpt-5.2-mini": "GPT-5.2 mini" },
+    anthropic: { "claude-opus-4-6": "Claude Opus 4.6", "claude-4.5-opus": "Claude 4.5 Opus", "claude-sonnet-4-5": "Claude 4.5 Sonnet", "claude-4.5-haiku": "Claude 4.5 Haiku" },
     gemini: { "gemini-3-pro-preview": "Gemini 3 Pro", "gemini-3-flash-preview": "Gemini 3 Flash", "gemini-3-pro-image-preview": "Nano Banana Pro", "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite", "gemini-2.5-flash-image-preview": "Nano Banana" },
     deepseek: { "deepseek-chat": "DeepSeek V3.2", "deepseek-reasoner": "DeepSeek V3.2 thinking" },
     mistral: { "mistral-large-latest": "Mistral Large", "mistral-small-latest": "Mistral Small" },
@@ -276,6 +276,10 @@ export class AnthropicProvider extends BaseProvider {
 
     supports(feature, model) {
         const thinkingModels = ['3-7-sonnet', 'sonnet-4', 'opus-4'];
+
+        if (feature === 'reasoning') {
+            return model.includes('opus-4-6');
+        }
         
         if (feature === 'thinking') {
             return thinkingModels.some(substring => model.includes(substring));
@@ -316,18 +320,20 @@ export class AnthropicProvider extends BaseProvider {
     }
 
     createRequest({ model, messages, stream, options, apiKey, settings }) {
+        const hasReasoningLevels = this.supports('reasoning', model);
         const canThink = this.supports('thinking', model);
-        const isThinking = canThink && (options.shouldThink ?? options.getShouldThink?.() ?? false);
+        const isThinking = hasReasoningLevels ||
+            (canThink && (options.shouldThink ?? options.getShouldThink?.() ?? false));
         const shouldWebSearch = (options.webSearch ?? options.getWebSearch?.() ?? false) && 
                               this.supports('web_search', model);
         
         let maxLimit = this.maxTokens;
-        if (model.includes('opus')) {
+        if (isThinking) {
+            maxLimit = MaxTokens.anthropic_thinking;
+        } else if (model.includes('opus')) {
             maxLimit = MaxTokens.anthropic;
         } else if (!canThink) {
             maxLimit = MaxTokens.anthropic_old;
-        } else if (isThinking) {
-            maxLimit = MaxTokens.anthropic_thinking;
         }
         
         const maxTokens = Math.min(settings.max_tokens, maxLimit);
@@ -347,10 +353,22 @@ export class AnthropicProvider extends BaseProvider {
 
 
         if (isThinking) {
-            body.thinking = { 
-                type: "enabled", 
-                budget_tokens: Math.max(1024, maxTokens - 4000) 
-            };
+            if (hasReasoningLevels) {
+                const effort = options.reasoningEffort ?? options.getOpenAIReasoningEffort?.() ?? 'medium';
+                const effortMap = { minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'max' };
+                body.thinking = {
+                    type: 'adaptive',
+                    effort: effortMap[effort] || 'medium'
+                };
+                if (options.streamWriter) {
+                    options.streamWriter.addThinkingCounter();
+                }
+            } else {
+                body.thinking = {
+                    type: "enabled",
+                    budget_tokens: Math.max(1024, maxTokens - 4000)
+                };
+            }
             if (options.streamWriter) {
                 options.streamWriter.setThinkingModel();
             }
