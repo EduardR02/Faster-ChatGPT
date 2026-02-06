@@ -45,7 +45,8 @@ describe('AnthropicProvider adaptive thinking', () => {
         expect(body.max_tokens).toBe(MaxTokens.anthropic_thinking);
         expect(body.temperature).toBeUndefined();
         expect(streamWriter.setThinkingModel).toHaveBeenCalledTimes(1);
-        expect(streamWriter.addThinkingCounter).toHaveBeenCalledTimes(1);
+        // Anthropic streams thinking content - uses collapsible block, not counter
+        expect(streamWriter.addThinkingCounter).toHaveBeenCalledTimes(0);
     });
 
     const effortMappings = {

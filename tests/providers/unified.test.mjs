@@ -322,6 +322,27 @@ describe('OpenAIProvider - Specifics', () => {
     const provider = Providers.openai;
     const model = 'gpt-5.2';
 
+    test('reasoning request enables summary and thinking blocks', () => {
+        const streamWriter = {
+            setThinkingModel: mock(),
+            addThinkingCounter: mock()
+        };
+
+        const [_, request] = provider.createRequest({
+            model,
+            messages: createConversation(),
+            stream: true,
+            options: { reasoningEffort: 'high', streamWriter },
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 10000 }
+        });
+
+        const body = JSON.parse(request.body);
+        expect(body.reasoning).toEqual({ effort: 'high', summary: 'auto' });
+        expect(streamWriter.setThinkingModel).toHaveBeenCalledTimes(1);
+        expect(streamWriter.addThinkingCounter).toHaveBeenCalledTimes(0);
+    });
+
     test('stream reconstruction and token counting', () => {
         const collected = [];
         const writer = { processContent: (c) => collected.push(c) };
@@ -339,6 +360,28 @@ describe('OpenAIProvider - Specifics', () => {
 
         expect(collected.join('')).toBe('Hello');
         expect(tokenCounter.update).toHaveBeenCalledWith(10, 5);
+    });
+
+    test('stream extracts reasoning summary deltas as thoughts', () => {
+        const collected = [];
+        const writer = { processContent: (c, isThought) => collected.push({ c, isThought: !!isThought }) };
+
+        provider.handleStream({
+            parsed: { type: 'response.reasoning_summary_text.delta', delta: 'I am thinking' },
+            writer,
+            tokenCounter: { update: () => {} }
+        });
+
+        provider.handleStream({
+            parsed: { type: 'response.output_text.delta', delta: 'I am answering' },
+            writer,
+            tokenCounter: { update: () => {} }
+        });
+
+        expect(collected).toEqual([
+            { c: 'I am thinking', isThought: true },
+            { c: 'I am answering', isThought: false }
+        ]);
     });
 
     test('thought extraction from response', () => {

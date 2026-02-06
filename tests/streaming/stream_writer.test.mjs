@@ -200,6 +200,80 @@ describe('StreamWriterSimple', () => {
         expect(writer.parts[1].content).toEqual(['Final answer']);
     });
 
+    test('handles empty thinking (model skips thinking entirely)', () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const writer = new TestStreamWriterSimple(div, () => nextDiv);
+
+        writer.setThinkingModel();
+        writer.processContent('Hello world', false);
+
+        expect(writer.parts).toHaveLength(1);
+        expect(writer.parts[0].type).toBe('text');
+        expect(writer.parts[0].content).toEqual(['Hello world']);
+
+        writer.finalizeCurrentPart();
+        expect(writer.currentText).toBe('Hello world');
+    });
+
+    test('handles interleaved thinking and text blocks', () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const writer = new TestStreamWriterSimple(div, () => nextDiv);
+
+        writer.setThinkingModel();
+        writer.processContent('thinking 1', true);
+        writer.processContent('answer 1', false);
+        writer.processContent('thinking 2', true);
+        writer.processContent('answer 2', false);
+
+        writer.finalizeCurrentPart();
+
+        expect(writer.parts).toHaveLength(4);
+        expect(writer.parts[0].type).toBe('thought');
+        expect(writer.parts[1].type).toBe('text');
+        expect(writer.parts[2].type).toBe('thought');
+        expect(writer.parts[3].type).toBe('text');
+        expect(writer.parts[0].content).toBe('thinking 1');
+        expect(writer.parts[1].content).toBe('answer 1');
+        expect(writer.parts[2].content).toBe('thinking 2');
+        expect(writer.parts[3].content).toBe('answer 2');
+    });
+
+    test('handles text to thought transition', () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const writer = new TestStreamWriterSimple(div, () => nextDiv);
+
+        writer.setThinkingModel();
+        writer.processContent('initial thought', true);
+        writer.processContent('some text', false);
+        writer.processContent('more thinking', true);
+
+        writer.finalizeCurrentPart();
+
+        expect(writer.parts).toHaveLength(3);
+        expect(writer.parts[0].type).toBe('thought');
+        expect(writer.parts[1].type).toBe('text');
+        expect(writer.parts[2].type).toBe('thought');
+        expect(writer.parts[0].content).toBe('initial thought');
+        expect(writer.parts[1].content).toBe('some text');
+        expect(writer.parts[2].content).toBe('more thinking');
+    });
+
+    test('ignores empty content in processContent', () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const writer = new TestStreamWriterSimple(div, () => nextDiv);
+
+        writer.processContent('', false);
+        writer.processContent('real content', false);
+
+        expect(writer.parts).toHaveLength(1);
+        expect(writer.parts[0].type).toBe('text');
+        expect(writer.parts[0].content).toEqual(['real content']);
+    });
+
     test('discard thoughts in StreamWriterBase', () => {
         const { StreamWriterBase } = require('../../src/js/StreamWriter.js');
         const writer = new StreamWriterBase();
@@ -309,5 +383,48 @@ describe('StreamWriter (Smooth)', () => {
         // Confirm thought content stays in original container
         expect(div.textContent).toContain('Long thought content');
         expect(nextDiv.textContent).toContain('Immediate answer');
+    });
+
+    test('handles empty thinking (model skips thinking entirely)', async () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const writer = new TestStreamWriter(div, () => nextDiv, () => {}, 1000000);
+
+        writer.setThinkingModel();
+        writer.processContent('Hello', false);
+
+        await waitForProcessing(writer);
+
+        expect(writer.parts).toHaveLength(1);
+        expect(writer.parts[0].type).toBe('text');
+        expect(writer.parts[0].content).toEqual(['Hello']);
+
+        writer.finalizeCurrentPart();
+        expect(writer.currentText).toBe('Hello');
+    });
+
+    test('handles interleaved thinking and text blocks', async () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const writer = new TestStreamWriter(div, () => nextDiv, () => {}, 1000000);
+
+        writer.setThinkingModel();
+        writer.processContent('thinking 1', true);
+        writer.processContent('answer 1', false);
+        writer.processContent('thinking 2', true);
+        writer.processContent('answer 2', false);
+
+        await waitForProcessing(writer);
+        writer.finalizeCurrentPart();
+
+        expect(writer.parts).toHaveLength(4);
+        expect(writer.parts[0].type).toBe('thought');
+        expect(writer.parts[1].type).toBe('text');
+        expect(writer.parts[2].type).toBe('thought');
+        expect(writer.parts[3].type).toBe('text');
+        expect(writer.parts[0].content).toBe('thinking 1');
+        expect(writer.parts[1].content).toBe('answer 1');
+        expect(writer.parts[2].content).toBe('thinking 2');
+        expect(writer.parts[3].content).toBe('answer 2');
     });
 });

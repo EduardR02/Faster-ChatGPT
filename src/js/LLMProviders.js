@@ -257,7 +257,7 @@ export class OpenAIProvider extends BaseProvider {
             ?.map(part => part.content).join('\n');
 
         if (isReasoner && options.streamWriter) {
-            options.streamWriter.addThinkingCounter();
+            options.streamWriter.setThinkingModel();
         }
 
         const body = {
@@ -277,7 +277,8 @@ export class OpenAIProvider extends BaseProvider {
         
         if (isReasoner) {
             body.reasoning = { 
-                effort: options.reasoningEffort ?? options.getOpenAIReasoningEffort?.() ?? 'medium' 
+                effort: options.reasoningEffort ?? options.getOpenAIReasoningEffort?.() ?? 'medium',
+                summary: 'auto'
             };
         } else {
             body.temperature = Math.min(settings.temperature, this.maxTemp);
@@ -306,7 +307,10 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     handleStream({ parsed, tokenCounter, writer }) {
-        if (parsed.type === 'response.output_text.delta' && parsed.delta) {
+        if (parsed.type === 'response.reasoning_summary_text.delta' && parsed.delta) {
+            writer.processContent(parsed.delta, true);
+        } else if (parsed.type === 'response.reasoning_summary_text.done') {
+        } else if (parsed.type === 'response.output_text.delta' && parsed.delta) {
             writer.processContent(parsed.delta);
         } else if (parsed.type === 'response.completed' && parsed.response?.usage) {
             const usage = parsed.response.usage;
@@ -314,23 +318,36 @@ export class OpenAIProvider extends BaseProvider {
         }
     }
 
+    collectReasoningSummaries(output) {
+        const thoughts = [];
+
+        for (const item of output) {
+            if (!item || typeof item !== 'object') continue;
+
+            if (item.type === 'reasoning' && item.summary) {
+                thoughts.push(item.summary);
+            } else if (item.type === 'reasoning_summary_text' && item.text) {
+                thoughts.push(item.text);
+            }
+        }
+
+        return thoughts;
+    }
+
     handleResponse({ data, tokenCounter }) {
         const output = data.output || [];
-        const messageItem = output.find(item => item.type === 'message');
-        const contentParts = messageItem?.content || [];
-        const text = contentParts
-            .filter(part => part.type === 'output_text')
-            .map(part => part.text)
+        const text = output
+            .filter(item => item?.type === 'message' && Array.isArray(item.content))
+            .flatMap(item => item.content)
+            .filter(part => part?.type === 'output_text')
+            .map(part => part.text || '')
             .join('');
-        
-        const reasoningItem = output.find(item => item.type === 'reasoning');
-        const summary = reasoningItem?.summary;
-        
+
         if (data.usage) {
             tokenCounter.update(data.usage.input_tokens, data.usage.output_tokens);
         }
-        
-        const thoughts = summary ? (Array.isArray(summary) ? [summary.join('')] : [summary]) : [];
+
+        const thoughts = this.collectReasoningSummaries(output);
         return this.returnMessage([text], thoughts);
     }
 }
@@ -426,15 +443,13 @@ export class AnthropicProvider extends BaseProvider {
                 const effortMap = { minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'max' };
                 body.thinking = { type: 'adaptive' };
                 body.output_config = { effort: effortMap[effort] || 'high' };
-                if (options.streamWriter) {
-                    options.streamWriter.addThinkingCounter();
-                }
             } else {
                 body.thinking = {
                     type: "enabled",
                     budget_tokens: Math.max(1024, maxTokens - 4000)
                 };
             }
+            // Anthropic always streams thinking content - use collapsible block, not counter
             if (options.streamWriter) {
                 options.streamWriter.setThinkingModel();
             }

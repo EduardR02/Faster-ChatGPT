@@ -239,7 +239,7 @@ const interactiveStateMixin = {
         state.shouldWebSearch = !state.shouldWebSearch;
     },
 
-    getReasoningEffort() { return S(this).reasoningEffort || this.getSetting('reasoning_effort') || 'medium'; },
+    getReasoningEffort() { return S(this).reasoningEffort || this.getSetting('reasoning_effort') || 'high'; },
 
     cycleReasoningEffort() {
         const state = S(this);

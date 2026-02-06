@@ -115,12 +115,33 @@ export class StreamWriterSimple {
     }
 
     processContent(content, isThought = false) {
-        // Handle transitions from thought to text
+        if (!content) return;
+
+        // Handle transitions from thought to text (only when content is non-empty)
         if (!isThought && !this.isThoughtEnd) {
             this.isThoughtEnd = true;
-            this.nextPart();
+            const currentPart = this.parts.at(-1);
+            if (currentPart.type === 'thought' && currentPart.content.length === 0) {
+                this.parts.pop();
+                this.contentDiv.classList.remove('thoughts');
+                this.parts.push({ type: 'text', content: [] });
+            } else {
+                this.nextPart();
+            }
         }
-        
+        // Handle transition back from text to thought (for interleaved streams)
+        else if (isThought && this.isThoughtEnd) {
+            this.isThoughtEnd = false;
+            const currentPart = this.parts.at(-1);
+            if (currentPart.type === 'text' && currentPart.content.length === 0) {
+                this.parts.pop();
+                this.contentDiv.classList.add('thoughts');
+                this.parts.push({ type: 'thought', content: [] });
+            } else {
+                this.nextPart(true);
+            }
+        }
+
         this.parts.at(-1).content.push(content);
         this.bufferedContent += content;
         this.scheduleRender();
@@ -221,7 +242,9 @@ export class StreamWriter extends StreamWriterSimple {
     }
 
     processContent(content, isThought = false) {
-        // Handle transition
+        if (!content) return;
+
+        // Handle transition from thought to text (only when content is non-empty)
         if (!isThought && !this.isThoughtEnd) {
             this.isThoughtEnd = true;
             if (this.parts.at(-1).content.length > 0) {
@@ -231,6 +254,16 @@ export class StreamWriter extends StreamWriterSimple {
                 this.parts.pop();
             }
             this.parts.push({ type: 'text', content: [] });
+        }
+        // Handle transition back from text to thought (for interleaved streams)
+        else if (isThought && this.isThoughtEnd) {
+            this.isThoughtEnd = false;
+            // Finalize current text part if it has content
+            if (this.parts.at(-1).content.length > 0) {
+                this.pendingSwitch = true;
+                this.parts.at(-1).content = this.parts.at(-1).content.join('');
+            }
+            this.parts.push({ type: 'thought', content: [] });
         }
 
         this.parts.at(-1).content.push(content);

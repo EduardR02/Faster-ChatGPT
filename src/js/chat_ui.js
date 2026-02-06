@@ -1264,18 +1264,13 @@ export class SidepanelChatUI extends ChatUI {
 
     scrollIntoView(force = false) {
         if (!this.scrollToElement) return;
-
-        if (!force && !this.shouldScroll && this.isNearBottom()) {
-            this.shouldScroll = true;
-        }
-
         if (!force && !this.shouldScroll) return;
-        
+
         const element = this.scrollToElement;
         const target = element.scrollHeight - element.clientHeight;
-        
+
         if (Math.abs(element.scrollTop - target) <= 1) return;
-        
+
         element.scrollTop = target;
     }
 

@@ -65,6 +65,57 @@ describe('Provider Response Handling', () => {
       assertDeepEqual(tokenCounter.inputTokens, 15);
       assertDeepEqual(tokenCounter.outputTokens, 10);
     });
+
+    test('handleStream processes reasoning summary deltas as thoughts', () => {
+      const provider = Providers.openai;
+      const writer = createMockWriter();
+      const tokenCounter = createMockTokenCounter();
+
+      const chunks = [
+        { type: 'response.reasoning_summary_text.delta', delta: 'Thinking ' },
+        { type: 'response.reasoning_summary_text.delta', delta: 'through options' },
+        { type: 'response.reasoning_summary_text.done' },
+        { type: 'response.output_text.delta', delta: 'Final answer' },
+        {
+          type: 'response.completed',
+          response: { usage: { input_tokens: 21, output_tokens: 13 } }
+        }
+      ];
+
+      for (const chunk of chunks) {
+        provider.handleStream({ parsed: chunk, writer, tokenCounter });
+      }
+
+      assertDeepEqual(writer.getFinalContent(), [
+        { type: 'thought', content: 'Thinking through options' },
+        { type: 'text', content: 'Final answer' }
+      ]);
+
+      assertDeepEqual(tokenCounter.inputTokens, 21);
+      assertDeepEqual(tokenCounter.outputTokens, 13);
+    });
+
+    test('handleResponse extracts reasoning summary text output items', () => {
+      const provider = Providers.openai;
+      const tokenCounter = createMockTokenCounter();
+
+      const mockData = {
+        output: [
+          { type: 'reasoning_summary_text', text: 'Checked tradeoffs quickly.' },
+          { type: 'message', content: [{ type: 'output_text', text: 'Ship it.' }] }
+        ],
+        usage: { input_tokens: 7, output_tokens: 4 }
+      };
+
+      const result = provider.handleResponse({ data: mockData, tokenCounter });
+
+      assertDeepEqual(result, [
+        { type: 'thought', content: 'Checked tradeoffs quickly.' },
+        { type: 'text', content: 'Ship it.' }
+      ]);
+      assertDeepEqual(tokenCounter.inputTokens, 7);
+      assertDeepEqual(tokenCounter.outputTokens, 4);
+    });
   });
 
   // --- Anthropic Tests ---
