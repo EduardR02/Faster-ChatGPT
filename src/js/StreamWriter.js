@@ -1,5 +1,12 @@
 import { formatContent, highlightCodeBlocks } from './ui_utils.js';
 
+const getPartContentText = (part) => {
+    const content = part?.content ?? '';
+    return Array.isArray(content) ? content.join('') : content;
+};
+
+const hasNonWhitespaceContent = (part) => getPartContentText(part).trim().length > 0;
+
 /**
  * Basic writer for non-UI streaming (e.g., auto-renaming).
  */
@@ -121,8 +128,10 @@ export class StreamWriterSimple {
         if (!isThought && !this.isThoughtEnd) {
             this.isThoughtEnd = true;
             const currentPart = this.parts.at(-1);
-            if (currentPart.type === 'thought' && currentPart.content.length === 0) {
+            if (currentPart.type === 'thought' && !hasNonWhitespaceContent(currentPart)) {
                 this.parts.pop();
+                this.contentDiv.textContent = '';
+                this.bufferedContent = '';
                 this.contentDiv.classList.remove('thoughts');
                 this.parts.push({ type: 'text', content: [] });
             } else {
@@ -133,8 +142,10 @@ export class StreamWriterSimple {
         else if (isThought && this.isThoughtEnd) {
             this.isThoughtEnd = false;
             const currentPart = this.parts.at(-1);
-            if (currentPart.type === 'text' && currentPart.content.length === 0) {
+            if (currentPart.type === 'text' && !hasNonWhitespaceContent(currentPart)) {
                 this.parts.pop();
+                this.contentDiv.textContent = '';
+                this.bufferedContent = '';
                 this.contentDiv.classList.add('thoughts');
                 this.parts.push({ type: 'thought', content: [] });
             } else {
@@ -247,21 +258,41 @@ export class StreamWriter extends StreamWriterSimple {
         // Handle transition from thought to text (only when content is non-empty)
         if (!isThought && !this.isThoughtEnd) {
             this.isThoughtEnd = true;
-            if (this.parts.at(-1).content.length > 0) {
+            const currentPart = this.parts.at(-1);
+            if (hasNonWhitespaceContent(currentPart)) {
                 this.pendingSwitch = true;
-                this.parts.at(-1).content = this.parts.at(-1).content.join('');
+                currentPart.content = getPartContentText(currentPart);
             } else {
                 this.parts.pop();
+                this.contentDiv.textContent = '';
+                if (this.pendingSwitch) {
+                    this.pendingQueue = [];
+                } else {
+                    this.contentQueue = [];
+                    this.contentOffset = 0;
+                }
+                this.contentDiv.classList.remove('thoughts');
             }
             this.parts.push({ type: 'text', content: [] });
         }
         // Handle transition back from text to thought (for interleaved streams)
         else if (isThought && this.isThoughtEnd) {
             this.isThoughtEnd = false;
+            const currentPart = this.parts.at(-1);
             // Finalize current text part if it has content
-            if (this.parts.at(-1).content.length > 0) {
+            if (hasNonWhitespaceContent(currentPart)) {
                 this.pendingSwitch = true;
-                this.parts.at(-1).content = this.parts.at(-1).content.join('');
+                currentPart.content = getPartContentText(currentPart);
+            } else {
+                this.parts.pop();
+                this.contentDiv.textContent = '';
+                if (this.pendingSwitch) {
+                    this.pendingQueue = [];
+                } else {
+                    this.contentQueue = [];
+                    this.contentOffset = 0;
+                }
+                this.contentDiv.classList.add('thoughts');
             }
             this.parts.push({ type: 'thought', content: [] });
         }

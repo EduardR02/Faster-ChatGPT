@@ -1554,13 +1554,7 @@ export class SidepanelChatUI extends ChatUI {
 
     removeManualAbortButton(modelId) {
         const button = this.getActiveMessagePrefixElement(modelId)?.querySelector('.manual-abort-button');
-        if (button) {
-            button.disabled = true;
-            button.classList.add('fade-out');
-            button.ontransitionend = (e) => {
-                if (e.propertyName === 'opacity') button.remove();
-            };
-        }
+        if (button) button.remove();
     }
 }
 

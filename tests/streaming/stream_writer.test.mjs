@@ -216,6 +216,48 @@ describe('StreamWriterSimple', () => {
         expect(writer.currentText).toBe('Hello world');
     });
 
+    test('treats whitespace-only thought as empty when switching to text', () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const writer = new TestStreamWriterSimple(div, () => nextDiv);
+
+        writer.setThinkingModel();
+        writer.processContent('\n', true);
+        writer.processContent('Hello world', false);
+
+        expect(writer.parts).toHaveLength(1);
+        expect(writer.parts[0].type).toBe('text');
+        expect(writer.parts[0].content).toEqual(['Hello world']);
+    });
+
+    test('does not leak discarded whitespace thoughts into visible text', async () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const writer = new TestStreamWriterSimple(div, () => nextDiv);
+
+        writer.setThinkingModel();
+        writer.processContent('\n', true);
+        writer.processContent('Hello world', false);
+
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        expect(div.textContent).toBe('Hello world');
+        expect(nextDiv.textContent).toBe('');
+    });
+
+    test('treats whitespace-only text as empty when switching to thought', () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const writer = new TestStreamWriterSimple(div, () => nextDiv);
+
+        writer.processContent('  \n', false);
+        writer.processContent('Thinking starts', true);
+
+        expect(writer.parts).toHaveLength(1);
+        expect(writer.parts[0].type).toBe('thought');
+        expect(writer.parts[0].content).toEqual(['Thinking starts']);
+    });
+
     test('handles interleaved thinking and text blocks', () => {
         const div = createMockDiv();
         const nextDiv = createMockDiv();
@@ -401,6 +443,52 @@ describe('StreamWriter (Smooth)', () => {
 
         writer.finalizeCurrentPart();
         expect(writer.currentText).toBe('Hello');
+    });
+
+    test('treats whitespace-only thought as empty when switching to text', async () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const writer = new TestStreamWriter(div, () => nextDiv, () => {}, 1000000);
+
+        writer.setThinkingModel();
+        writer.processContent('\n', true);
+        writer.processContent('Hello', false);
+
+        await waitForProcessing(writer);
+
+        expect(writer.parts).toHaveLength(1);
+        expect(writer.parts[0].type).toBe('text');
+        expect(writer.parts[0].content).toEqual(['Hello']);
+    });
+
+    test('does not leak discarded whitespace thoughts into visible text', async () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const writer = new TestStreamWriter(div, () => nextDiv, () => {}, 1000000);
+
+        writer.setThinkingModel();
+        writer.processContent('\n', true);
+        writer.processContent('Hello', false);
+
+        await waitForProcessing(writer);
+
+        expect(div.textContent).toBe('Hello');
+        expect(nextDiv.textContent).toBe('');
+    });
+
+    test('treats whitespace-only text as empty when switching to thought', async () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const writer = new TestStreamWriter(div, () => nextDiv, () => {}, 1000000);
+
+        writer.processContent('  \n', false);
+        writer.processContent('Thinking starts', true);
+
+        await waitForProcessing(writer);
+
+        expect(writer.parts).toHaveLength(1);
+        expect(writer.parts[0].type).toBe('thought');
+        expect(writer.parts[0].content).toEqual(['Thinking starts']);
     });
 
     test('handles interleaved thinking and text blocks', async () => {

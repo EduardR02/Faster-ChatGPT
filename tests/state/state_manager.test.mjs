@@ -213,6 +213,32 @@ describe('SidepanelStateManager - State Machine Transitions', () => {
     });
   });
 
+  describe('Reasoning Effort Selection', () => {
+    test('prefers session effort over all defaults', () => {
+      manager.state.reasoningEffort = 'low';
+      manager.state.settings.reasoning_effort = 'medium';
+      manager.getCurrentModel = () => 'claude-opus-4-6';
+
+      expect(manager.getReasoningEffort()).toBe('low');
+    });
+
+    test('defaults Opus 4.6 to high regardless of global setting', () => {
+      manager.state.reasoningEffort = undefined;
+      manager.state.settings.reasoning_effort = 'medium';
+      manager.getCurrentModel = () => 'claude-opus-4-6';
+
+      expect(manager.getReasoningEffort()).toBe('high');
+    });
+
+    test('uses global setting for non-Opus models', () => {
+      manager.state.reasoningEffort = undefined;
+      manager.state.settings.reasoning_effort = 'medium';
+      manager.getCurrentModel = () => 'claude-sonnet-4';
+
+      expect(manager.getReasoningEffort()).toBe('medium');
+    });
+  });
+
   describe('Reset and Invariants', () => {
     test('resetChatState restores defaults and clears arena', () => {
       manager.state.chatState = CHAT_STATE.INCOGNITO;

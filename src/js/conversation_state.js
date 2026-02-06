@@ -239,7 +239,15 @@ const interactiveStateMixin = {
         state.shouldWebSearch = !state.shouldWebSearch;
     },
 
-    getReasoningEffort() { return S(this).reasoningEffort || this.getSetting('reasoning_effort') || 'high'; },
+    getReasoningEffort() {
+        const sessionEffort = S(this).reasoningEffort;
+        if (sessionEffort) return sessionEffort;
+
+        const model = this.getCurrentModel?.() || '';
+        if (model.includes('opus-4-6')) return 'high';
+
+        return this.getSetting('reasoning_effort') || 'high';
+    },
 
     cycleReasoningEffort() {
         const state = S(this);
