@@ -40,7 +40,8 @@ describe('AnthropicProvider adaptive thinking', () => {
 
         const body = JSON.parse(request.body);
 
-        expect(body.thinking).toEqual({ type: 'adaptive', effort: 'high' });
+        expect(body.thinking).toEqual({ type: 'adaptive' });
+        expect(body.output_config).toEqual({ effort: 'high' });
         expect(body.max_tokens).toBe(MaxTokens.anthropic_thinking);
         expect(body.temperature).toBeUndefined();
         expect(streamWriter.setThinkingModel).toHaveBeenCalledTimes(1);
@@ -67,7 +68,8 @@ describe('AnthropicProvider adaptive thinking', () => {
             });
 
             const body = JSON.parse(request.body);
-            expect(body.thinking).toEqual({ type: 'adaptive', effort: expectedEffort });
+            expect(body.thinking).toEqual({ type: 'adaptive' });
+            expect(body.output_config).toEqual({ effort: expectedEffort });
             expect(body.temperature).toBeUndefined();
         });
     });

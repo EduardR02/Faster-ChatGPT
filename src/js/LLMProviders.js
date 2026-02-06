@@ -422,12 +422,10 @@ export class AnthropicProvider extends BaseProvider {
 
         if (isThinking) {
             if (hasReasoningLevels) {
-                const effort = options.reasoningEffort ?? options.getOpenAIReasoningEffort?.() ?? 'medium';
+                const effort = options.reasoningEffort ?? options.getOpenAIReasoningEffort?.() ?? 'high';
                 const effortMap = { minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'max' };
-                body.thinking = {
-                    type: 'adaptive',
-                    effort: effortMap[effort] || 'medium'
-                };
+                body.thinking = { type: 'adaptive' };
+                body.output_config = { effort: effortMap[effort] || 'high' };
                 if (options.streamWriter) {
                     options.streamWriter.addThinkingCounter();
                 }
