@@ -751,13 +751,6 @@ body {
   padding: 0.75em 0 0.5em;
 }
 
-.history-title {
-  color: #fdaaaa;
-  font-size: 1.5em;
-  padding: 1em;
-  text-align: center;
-}
-
 .history-system-message {
   background-color: #17141D;
   border-radius: 1em;
@@ -1447,25 +1440,6 @@ p {
   background: #ef596f;
 }
 
-.button.delete-arena.reindex-busy {
-  background: #fcb7c1;
-}
-
-.button.delete-arena.reindex-success {
-  background: #98c379;
-  color: #1e1e1e;
-}
-
-.button.delete-arena.reindex-failure {
-  background: #ef596f;
-  color: #ffffff;
-}
-
-.button.delete-arena.reindex-prompt {
-  background: #fffafa;
-  color: #1e1e1e;
-}
-
 .arena-button {
   padding: 1px 6px;
   background: #98c379;
@@ -1513,9 +1487,6 @@ p {
 
 .council-toggle-button {
   font-size: 1.6em !important;
-}
-
-.thinking-mode {
 }
 
 .arena-toggle-button.thinking-mode-on {
@@ -1617,10 +1588,6 @@ p {
   all: unset;
 }
 
-.clearfix {
-  clear: both;
-}
-
 /* Container for bottom-left controls */
 .textarea-bottom-left-controls {
   position: absolute;
@@ -1715,16 +1682,6 @@ p {
   box-shadow: 0 0 0 1px rgba(30, 30, 30, 0.25);
 }
 
-.pill-button.is-danger {
-  background: rgba(224, 108, 117, 0.15);
-  color: #e06c75;
-}
-
-.pill-button.is-danger.is-active {
-  background: #e06c75;
-  color: #1e1e1e;
-}
-
 .media-panel {
   height: 100%;
   display: flex;
@@ -1739,7 +1696,6 @@ p {
 }
 
 .media-panel[data-state="loading"] .media-grid,
-.media-panel[data-state="migrating"] .media-grid,
 .media-panel[data-state="empty"] .media-grid,
 .media-panel[data-state="error"] .media-grid {
   display: none;
@@ -1756,7 +1712,6 @@ p {
 }
 
 .media-panel[data-state="loading"] .media-status,
-.media-panel[data-state="migrating"] .media-status,
 .media-panel[data-state="empty"] .media-status,
 .media-panel[data-state="error"] .media-status {
   display: flex;
@@ -1795,10 +1750,6 @@ p {
   content: '⏳';
 }
 
-.media-panel[data-state="migrating"] .media-status-icon::before {
-  content: '📦';
-}
-
 .media-panel[data-state="empty"] .media-status-icon::before {
   content: '🖼️';
 }
@@ -1807,21 +1758,8 @@ p {
   content: '⚠️';
 }
 
-.media-panel[data-state="loading"] .media-status-title {
-  content: 'Loading media…';
-}
-
-.media-panel[data-state="migrating"] .media-status-title {
-  content: 'Indexing existing images…';
-}
-
-.media-panel[data-state="empty"] .media-status-title {
-  content: 'No images found';
-}
-
 .media-panel[data-state="error"] .media-status-title {
   color: #e06c75;
-  content: 'Error loading media';
 }
 
 .media-grid {

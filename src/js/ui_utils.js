@@ -98,13 +98,21 @@ export function updateTextfieldHeight(element) {
     if (!element) return;
     
     element.style.height = 'auto';
-    element.style.height = element.scrollHeight + 'px';
-    
-    const isScrollable = element.scrollHeight > element.clientHeight + 2;
+    const contentHeight = element.scrollHeight;
+    const computedStyle = typeof window !== 'undefined' && typeof window.getComputedStyle === 'function'
+        ? window.getComputedStyle(element)
+        : null;
+    const maxHeight = Number.parseFloat(computedStyle?.maxHeight ?? '');
+    const hasMaxHeight = Number.isFinite(maxHeight);
+    const targetHeight = hasMaxHeight ? Math.min(contentHeight, maxHeight) : contentHeight;
+
+    element.style.height = targetHeight + 'px';
+
+    const isScrollable = hasMaxHeight && contentHeight > maxHeight + 2;
     element.style.overflowY = isScrollable ? 'auto' : 'hidden';
     
     if (isScrollable) {
-        element.scrollTop = element.scrollHeight;
+        element.scrollTop = contentHeight;
     }
 }
 

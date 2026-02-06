@@ -42,6 +42,42 @@ class ChatUI {
             assistant: "Assistant", 
             system: "System" 
         };
+        this._renderTarget = null;
+        this._deferCodeHighlighting = false;
+        this._deferredHighlightTargets = null;
+        this._highlightGeneration = 0;
+        this._isBuildingChat = false;
+    }
+
+    appendConversationNode(node) {
+        const target = this._renderTarget || this.conversationDiv;
+        target.appendChild(node);
+    }
+
+    queueDeferredHighlight(container) {
+        if (!this._deferCodeHighlighting || !this._deferredHighlightTargets || !container) return false;
+        this._deferredHighlightTargets.push(container);
+        return true;
+    }
+
+    scheduleDeferredHighlights(containers) {
+        if (!containers?.length) return;
+
+        const generation = ++this._highlightGeneration;
+        const runHighlight = () => {
+            if (generation !== this._highlightGeneration) return;
+            containers.forEach(container => highlightCodeBlocks(container));
+            if (typeof this.scrollIntoView === 'function') {
+                this.scrollIntoView();
+            }
+        };
+
+        if (typeof requestIdleCallback === 'function') {
+            requestIdleCallback(runHighlight);
+            return;
+        }
+
+        setTimeout(runHighlight, 0);
     }
 
     addMessage(role, parts = [], options = {}) {
@@ -129,7 +165,9 @@ class ChatUI {
         const bodyDiv = createElementWithClass('div', 'message-content history-system-content');
 
         bodyDiv.innerHTML = formatContent(content);
-        highlightCodeBlocks(bodyDiv);
+        if (!this.queueDeferredHighlight(bodyDiv)) {
+            highlightCodeBlocks(bodyDiv);
+        }
         
         toggleButton.append(toggleIcon, title);
         toggleButton.onclick = () => systemMessageDiv.classList.toggle('collapsed');
@@ -140,85 +178,102 @@ class ChatUI {
 
     addSystemMessage(content, title) {
         const systemMessage = this.createSystemMessage(content, title);
-        this.conversationDiv.appendChild(systemMessage);
+        this.appendConversationNode(systemMessage);
     }
 
     buildChat(chat, options = {}) {
         this.clearConversation(options);
-        
-        let messages = chat.messages;
-        let i = 0;
-        let assistantCount = 0;
-        while (i < messages.length) {
-            const message = messages[i];
-            
-            if (message.role === 'assistant') {
-                // Determine rendering mode (Council, Arena, or Normal)
-                const isCouncil = !!message.council;
-                const isArena = !!message.responses;
-                const isRegeneration = assistantCount > 0;
-                
-                if (isArena) {
-                    this.createArenaWrapper(message, { 
-                        continueFunc: options.continueFunc, 
-                        messageIndex: i,
-                        isRegeneration
-                    });
-                } else if (isCouncil) {
-                    this.createCouncilWrapper(message, {
-                        continueFunc: options.continueFunc,
-                        messageIndex: i,
-                        allowContinue: options.allowContinue,
-                        isRegeneration
-                    });
-                } else {
-                    message.contents.forEach((parts, subIndex) => {
-                        const runOptions = { 
-                            ...message, 
-                            hideModels: options.hideModels,
-                            isRegeneration: isRegeneration || subIndex !== 0
-                        };
-                        
-                        if (options.continueFunc) {
-                            runOptions.continueFunc = () => options.continueFunc(i, subIndex);
-                        }
-                        
-                        const messageBlock = this.createMessageFromParts(parts, runOptions);
-                        if (messageBlock) {
-                            this.conversationDiv.appendChild(messageBlock);
-                        }
-                    });
-                }
-                assistantCount++;
-                i++;
-            } else {
-                // User or System
-                assistantCount = 0; // Reset assistant count on user message
-                if (options.addSystemMsg || message.role !== 'system') {
-                    message.contents.forEach((parts, subIndex) => {
-                        const runOptions = { 
-                            ...message, 
-                            hideModels: options.hideModels, 
-                            isRegeneration: subIndex !== 0 
-                        };
-                        
-                        if (options.continueFunc) {
-                            runOptions.continueFunc = () => options.continueFunc(i, subIndex);
-                        }
-                        
-                        const messageBlock = this.createMessageFromParts(parts, runOptions);
-                        if (messageBlock) {
-                            this.conversationDiv.appendChild(messageBlock);
-                        }
-                    });
-                }
-                i++;
-            }
 
-            if (i !== messages.length) {
-                this.pendingMediaDiv = null;
+        const fragment = document.createDocumentFragment();
+        const deferredHighlightTargets = [];
+        this._renderTarget = fragment;
+        this._deferCodeHighlighting = true;
+        this._deferredHighlightTargets = deferredHighlightTargets;
+        this._isBuildingChat = true;
+        
+        try {
+            const messages = chat.messages;
+            let i = 0;
+            let assistantCount = 0;
+            while (i < messages.length) {
+                const message = messages[i];
+                
+                if (message.role === 'assistant') {
+                    // Determine rendering mode (Council, Arena, or Normal)
+                    const isCouncil = !!message.council;
+                    const isArena = !!message.responses;
+                    const isRegeneration = assistantCount > 0;
+                    
+                    if (isArena) {
+                        this.createArenaWrapper(message, { 
+                            continueFunc: options.continueFunc, 
+                            messageIndex: i,
+                            isRegeneration
+                        });
+                    } else if (isCouncil) {
+                        this.createCouncilWrapper(message, {
+                            continueFunc: options.continueFunc,
+                            messageIndex: i,
+                            allowContinue: options.allowContinue,
+                            isRegeneration
+                        });
+                    } else {
+                        message.contents.forEach((parts, subIndex) => {
+                            const runOptions = { 
+                                ...message, 
+                                hideModels: options.hideModels,
+                                isRegeneration: isRegeneration || subIndex !== 0
+                            };
+                            
+                            if (options.continueFunc) {
+                                runOptions.continueFunc = () => options.continueFunc(i, subIndex);
+                            }
+                            
+                            const messageBlock = this.createMessageFromParts(parts, runOptions);
+                            if (messageBlock) {
+                                this.appendConversationNode(messageBlock);
+                            }
+                        });
+                    }
+                    assistantCount++;
+                    i++;
+                } else {
+                    // User or System
+                    assistantCount = 0; // Reset assistant count on user message
+                    if (options.addSystemMsg || message.role !== 'system') {
+                        message.contents.forEach((parts, subIndex) => {
+                            const runOptions = { 
+                                ...message, 
+                                hideModels: options.hideModels, 
+                                isRegeneration: subIndex !== 0 
+                            };
+                            
+                            if (options.continueFunc) {
+                                runOptions.continueFunc = () => options.continueFunc(i, subIndex);
+                            }
+                            
+                            const messageBlock = this.createMessageFromParts(parts, runOptions);
+                            if (messageBlock) {
+                                this.appendConversationNode(messageBlock);
+                            }
+                        });
+                    }
+                    i++;
+                }
+
+                if (i !== messages.length) {
+                    this.pendingMediaDiv = null;
+                }
             }
+        } finally {
+            this._renderTarget = null;
+            this._deferCodeHighlighting = false;
+            this._deferredHighlightTargets = null;
+            this._isBuildingChat = false;
         }
+
+        this.conversationDiv.appendChild(fragment);
+        this.scheduleDeferredHighlights(deferredHighlightTargets);
     }
 
     createArenaMessage(messageData, options = {}) {
@@ -265,7 +320,7 @@ class ChatUI {
         });
 
         arenaMessageBlock.appendChild(arenaFullContainer);
-        this.conversationDiv.appendChild(arenaMessageBlock);
+        this.appendConversationNode(arenaMessageBlock);
 
         if (messageData.responses) {
             this.resolveArena(messageData.choice, messageData.continued_with, columnDivs);
@@ -382,7 +437,7 @@ class ChatUI {
         }
 
         councilBlock.append(header, toggle, listWrapper, collectorWrapper);
-        this.conversationDiv.appendChild(councilBlock);
+        this.appendConversationNode(councilBlock);
         return councilBlock;
     }
 
@@ -529,8 +584,11 @@ class ChatUI {
         const contentDiv = createElementWithClass('div', `message-content ${role}-content`);
         if (content) {
             contentDiv.innerHTML = formatContent(content);
+            if (!this.queueDeferredHighlight(contentDiv)) {
+                highlightCodeBlocks(contentDiv);
+            }
+            return contentDiv;
         }
-        highlightCodeBlocks(contentDiv);
         return contentDiv;
     }
 
@@ -987,13 +1045,17 @@ export class SidepanelChatUI extends ChatUI {
 
     createArenaMessage(messageData = null, options = {}) {
         this.activeDivs = super.createArenaMessage(messageData, options);
-        this.scrollIntoView();
+        if (!this._isBuildingChat) {
+            this.scrollIntoView();
+        }
         return this.activeDivs;
     }
 
     createCouncilMessage(messageData = null, options = {}) {
         this.activeDivs = super.createCouncilMessage(messageData, options);
-        this.scrollIntoView();
+        if (!this._isBuildingChat) {
+            this.scrollIntoView();
+        }
         return this.activeDivs;
     }
 

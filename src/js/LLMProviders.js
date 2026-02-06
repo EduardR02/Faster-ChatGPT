@@ -139,6 +139,74 @@ export class BaseProvider {
     }
 }
 
+export class OpenAICompatibleProvider extends BaseProvider {
+    supports() { return false; }
+    supportsImageMessages() { return false; }
+    formatMessages(messages) {
+        return messages.map(message => {
+            const text = this.extractTextContent(message);
+            if (this.supportsImageMessages() && message.images) {
+                const content = [{ type: 'text', text }];
+                message.images.forEach(imageUrl => content.push({ type: 'image_url', image_url: { url: imageUrl } }));
+                return { role: message.role, content };
+            }
+            return { role: message.role, content: text };
+        });
+    }
+    getApiEndpoint() { throw new Error("Not implemented"); }
+    getAuthHeaders({ apiKey }) { return { 'Authorization': `Bearer ${apiKey}` }; }
+    getRequestModel({ model }) { return model; }
+    beforeCreateRequest(_context) {}
+    extendRequestBody(_body, _context) {}
+    shouldIncludeMaxTokens() { return true; }
+    shouldIncludeTemperature() { return true; }
+    shouldIncludeStreamOptions({ stream }) { return stream; }
+    getRequestTemperature({ settings }) { return Math.min(settings.temperature, this.maxTemp); }
+
+    createRequest({ model, messages, stream, settings, apiKey, options = {} }) {
+        const context = { model, messages, stream, settings, apiKey, options };
+        this.beforeCreateRequest(context);
+        const body = {
+            model: this.getRequestModel(context),
+            messages: this.formatMessages(messages),
+            stream
+        };
+        if (this.shouldIncludeMaxTokens(context)) body.max_tokens = Math.min(settings.max_tokens, this.maxTokens);
+        if (this.shouldIncludeTemperature(context)) body.temperature = this.getRequestTemperature(context);
+        if (this.shouldIncludeStreamOptions(context)) body.stream_options = { include_usage: true };
+        this.extendRequestBody(body, context);
+        return this.buildApiRequest(this.getApiEndpoint(context), body, this.getAuthHeaders(context));
+    }
+    isUsageChunk(parsed) { return !!(parsed.usage && (!parsed.choices || parsed.choices.length === 0)); }
+    updateStreamTokenUsage(parsed, tokenCounter) { tokenCounter.update(parsed.usage.prompt_tokens, parsed.usage.completion_tokens); }
+    afterUsageChunk(_parsed, _writer) {}
+    getStreamDelta(parsed) { return parsed.choices?.[0]?.delta; }
+    processReasoningContent(reasoningContent, writer) { writer.processContent(reasoningContent, true); }
+    requiresResponseUsage() { return true; }
+    decorateResponseContent(content) { return content; }
+
+    handleStream({ parsed, tokenCounter, writer }) {
+        if (this.isUsageChunk(parsed)) {
+            this.updateStreamTokenUsage(parsed, tokenCounter);
+            this.afterUsageChunk(parsed, writer);
+            return;
+        }
+        const delta = this.getStreamDelta(parsed);
+        if (delta?.reasoning_content) this.processReasoningContent(delta.reasoning_content, writer);
+        if (delta?.content) writer.processContent(delta.content);
+    }
+
+    handleResponse({ data, tokenCounter }) {
+        if (this.requiresResponseUsage() || data.usage) {
+            tokenCounter.update(data.usage.prompt_tokens, data.usage.completion_tokens);
+        }
+        const message = data.choices[0].message;
+        const thoughts = message.reasoning_content ? [message.reasoning_content] : [];
+        const content = this.decorateResponseContent(message.content, data);
+        return this.returnMessage([content], thoughts);
+    }
+}
+
 export class OpenAIProvider extends BaseProvider {
     constructor() { 
         super(); 
@@ -647,72 +715,37 @@ export class GeminiProvider extends BaseProvider {
     }
 }
 
-export class DeepSeekProvider extends BaseProvider {
+export class DeepSeekProvider extends OpenAICompatibleProvider {
     constructor() { 
         super(); 
         this.maxTemp = MaxTemp.deepseek; 
         this.maxTokens = MaxTokens.deepseek; 
     }
 
-    formatMessages(messages) { 
-        return messages.map(message => ({ 
-            role: message.role, 
-            content: this.extractTextContent(message) 
-        })); 
+    getApiEndpoint() {
+        return 'https://api.deepseek.com/v1/chat/completions';
     }
 
-    createRequest({ model, messages, stream, settings, apiKey, options }) {
+    beforeCreateRequest({ model, options }) {
         if (model.includes('reasoner') && options.streamWriter) {
             options.streamWriter.setThinkingModel();
         }
-
-        const body = { 
-            model, 
-            messages: this.formatMessages(messages), 
-            max_tokens: Math.min(settings.max_tokens, this.maxTokens), 
-            stream 
-        };
-
-        if (!model.includes('reasoner')) {
-            body.temperature = Math.min(settings.temperature, this.maxTemp);
-        }
-        
-        if (stream) {
-            body.stream_options = { include_usage: true };
-        }
-
-        return this.buildApiRequest('https://api.deepseek.com/v1/chat/completions', body, { 
-            'Authorization': `Bearer ${apiKey}` 
-        });
     }
 
-    handleStream({ parsed, tokenCounter, writer }) {
-        if (parsed.usage && parsed.choices?.[0]?.delta?.content === "") { 
-            tokenCounter.update(parsed.usage.prompt_tokens, parsed.usage.completion_tokens); 
-            return; 
-        }
-
-        const choice = parsed.choices?.[0];
-        const delta = choice?.delta;
-        if (delta?.reasoning_content) {
-            writer.processContent(delta.reasoning_content, true);
-        }
-        if (delta?.content) {
-            writer.processContent(delta.content);
-        }
+    shouldIncludeTemperature({ model }) {
+        return !model.includes('reasoner');
     }
 
-    handleResponse({ data, tokenCounter }) {
-        if (data.usage) {
-            tokenCounter.update(data.usage.prompt_tokens, data.usage.completion_tokens);
-        }
-        const message = data.choices[0].message;
-        const thoughts = message.reasoning_content ? [message.reasoning_content] : [];
-        return this.returnMessage([message.content], thoughts);
+    isUsageChunk(parsed) {
+        return !!(parsed.usage && parsed.choices?.[0]?.delta?.content === "");
+    }
+
+    requiresResponseUsage() {
+        return false;
     }
 }
 
-export class GrokProvider extends BaseProvider {
+export class GrokProvider extends OpenAICompatibleProvider {
     constructor() {
         super();
         this.maxTemp = MaxTemp.grok;
@@ -726,135 +759,63 @@ export class GrokProvider extends BaseProvider {
         return super.supports(feature, model);
     }
 
-    formatMessages(messages) {
-        return messages.map(msg => {
-            const text = this.extractTextContent(msg);
-            if (msg.images) { 
-                const content = [{ type: 'text', text }]; 
-                msg.images.forEach(img => {
-                    content.push({ type: 'image_url', image_url: { url: img } }); 
-                });
-                return { role: msg.role, content }; 
-            }
-            return { role: msg.role, content: text };
-        });
+    supportsImageMessages() {
+        return true;
     }
 
-    createRequest({ model, messages, stream, settings, apiKey, options }) {
+    getApiEndpoint() {
+        return 'https://api.x.ai/v1/chat/completions';
+    }
+
+    beforeCreateRequest({ model, options }) {
         if (model.includes('grok-4') && !model.includes('non-reasoning') && options.streamWriter) {
             options.streamWriter.addThinkingCounter();
         }
+    }
 
-        const body = { 
-            model, 
-            messages: this.formatMessages(messages), 
-            max_tokens: Math.min(settings.max_tokens, this.maxTokens), 
-            temperature: Math.min(settings.temperature, this.maxTemp), 
-            stream 
-        };
-
-        if (stream) {
-            body.stream_options = { include_usage: true };
-        }
-
-        const shouldSearch = (options.webSearch ?? options.getWebSearch?.() ?? false);
+    extendRequestBody(body, { model, options }) {
+        const shouldSearch = options.webSearch ?? options.getWebSearch?.() ?? false;
         if (model.includes('grok-4') && shouldSearch) {
             body.search_parameters = { mode: "auto" };
         }
-
-        return this.buildApiRequest('https://api.x.ai/v1/chat/completions', body, { 
-            'Authorization': `Bearer ${apiKey}` 
-        });
     }
 
-    handleStream({ parsed, tokenCounter, writer }) {
-        if (parsed.usage && (!parsed.choices || !parsed.choices.length)) { 
-            const completion = (parsed.usage.completion_tokens || 0) + 
-                             (parsed.usage.completion_tokens_details?.reasoning_tokens || 0);
-            tokenCounter.update(parsed.usage.prompt_tokens, completion); 
-            
-            if (parsed.citations?.length) {
-                writer.processContent(this.buildCitationsTail(parsed.citations)); 
-            }
-            return; 
-        }
+    updateStreamTokenUsage(parsed, tokenCounter) {
+        const completion = (parsed.usage.completion_tokens || 0) +
+            (parsed.usage.completion_tokens_details?.reasoning_tokens || 0);
+        tokenCounter.update(parsed.usage.prompt_tokens, completion);
+    }
 
-        const d = parsed.choices?.[0]?.delta;
-        if (d?.reasoning_content) {
-            writer.processContent(d.reasoning_content, true);
-        }
-        if (d?.content) {
-            writer.processContent(d.content);
+    afterUsageChunk(parsed, writer) {
+        if (parsed.citations?.length) {
+            writer.processContent(this.buildCitationsTail(parsed.citations));
         }
     }
 
-    handleResponse({ data, tokenCounter }) {
-        tokenCounter.update(data.usage.prompt_tokens, data.usage.completion_tokens);
-        const m = data.choices[0].message; 
-        let c = m.content;
-        
+    decorateResponseContent(content, data) {
+        let finalContent = content;
         if (data.citations?.length) {
-            c += this.buildCitationsTail(data.citations);
+            finalContent += this.buildCitationsTail(data.citations);
         }
-        
-        const thoughts = m.reasoning_content ? [m.reasoning_content] : [];
-        return this.returnMessage([c], thoughts);
+        return finalContent;
     }
 }
 
-export class KimiProvider extends BaseProvider {
+export class KimiProvider extends OpenAICompatibleProvider {
     constructor() { 
         super(); 
         this.maxTemp = MaxTemp.kimi; 
         this.maxTokens = MaxTokens.kimi; 
     }
 
-    formatMessages(messages) { 
-        return messages.map(msg => ({ 
-            role: msg.role, 
-            content: this.extractTextContent(msg) 
-        })); 
+    getApiEndpoint() {
+        return 'https://api.moonshot.ai/v1/chat/completions';
     }
 
-    createRequest({ model, messages, stream, settings, apiKey, options }) {
+    beforeCreateRequest({ model, options }) {
         if (model.includes('thinking') && options.streamWriter) {
             options.streamWriter.setThinkingModel();
         }
-
-        const body = { 
-            model, 
-            messages: this.formatMessages(messages), 
-            max_tokens: Math.min(settings.max_tokens, this.maxTokens), 
-            temperature: Math.min(settings.temperature, this.maxTemp), 
-            stream 
-        };
-
-        if (stream) {
-            body.stream_options = { include_usage: true };
-        }
-
-        return this.buildApiRequest('https://api.moonshot.ai/v1/chat/completions', body, { 
-            'Authorization': `Bearer ${apiKey}` 
-        });
-    }
-
-    handleStream({ parsed, tokenCounter, writer }) {
-        // Only update tokens when usage exists AND choices is empty (final message)
-        if (parsed.usage && (!parsed.choices || parsed.choices.length === 0)) {
-            tokenCounter.update(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);
-            return;
-        }
-
-        const d = parsed.choices?.[0]?.delta;
-        if (d?.reasoning_content) writer.processContent(d.reasoning_content, true);
-        if (d?.content) writer.processContent(d.content);
-    }
-
-    handleResponse({ data, tokenCounter }) { 
-        tokenCounter.update(data.usage.prompt_tokens, data.usage.completion_tokens); 
-        const m = data.choices[0].message; 
-        const thoughts = m.reasoning_content ? [m.reasoning_content] : [];
-        return this.returnMessage([m.content], thoughts); 
     }
 }
 
@@ -954,53 +915,61 @@ export class MistralProvider extends BaseProvider {
     }
 }
 
-export class LlamaCppProvider extends BaseProvider {
-    createRequest({ model, messages, stream, settings, options }) { 
-        const { raw, port } = options.localModelOverride || { raw: model, port: 8080 }; 
-        const body = { 
-            model: raw, 
-            messages: new GrokProvider().formatMessages(messages), 
-            stream, 
-            temperature: settings.temperature 
-        };
-        return this.buildApiRequest(`http://localhost:${port}/v1/chat/completions`, body); 
+export class LlamaCppProvider extends OpenAICompatibleProvider {
+    supportsImageMessages() {
+        return true;
     }
 
-    handleStream({ parsed, tokenCounter, writer }) {
-        // Only complete when usage exists AND choices is empty (final message)
-        if (parsed.usage && (!parsed.choices || parsed.choices.length === 0)) {
-            tokenCounter.update(parsed.usage.prompt_tokens, parsed.usage.completion_tokens);
-            if (parsed.timings) {
-                console.log(`Llama.cpp performance - Speed: ${parsed.timings.predicted_per_second?.toFixed(1)} tokens/sec`);
-            }
-            if (writer?.onComplete) {
-                writer.onComplete();
-            }
-            return;
+    getApiEndpoint({ options }) {
+        const { port } = options.localModelOverride || { port: 8080 };
+        return `http://localhost:${port}/v1/chat/completions`;
+    }
+
+    getAuthHeaders() {
+        return {};
+    }
+
+    getRequestModel({ model, options }) {
+        const { raw } = options.localModelOverride || { raw: model };
+        return raw;
+    }
+
+    shouldIncludeMaxTokens() {
+        return false;
+    }
+
+    getRequestTemperature({ settings }) {
+        return settings.temperature;
+    }
+
+    shouldIncludeStreamOptions() {
+        return false;
+    }
+
+    afterUsageChunk(parsed, writer) {
+        if (parsed.timings) {
+            console.log(`Llama.cpp performance - Speed: ${parsed.timings.predicted_per_second?.toFixed(1)} tokens/sec`);
         }
 
+        if (writer?.onComplete) {
+            writer.onComplete();
+        }
+    }
+
+    getStreamDelta(parsed) {
         const choice = parsed.choices?.[0];
-        const data = choice?.delta || choice?.message;
-
-        if (data?.reasoning_content) {
-            if (writer && !writer.isThinkingModel) {
-                writer.setThinkingModel();
-            }
-            writer.processContent(data.reasoning_content, true);
-        }
-
-        if (data?.content) {
-            writer.processContent(data.content);
-        }
+        return choice?.delta || choice?.message;
     }
 
-    handleResponse({ data, tokenCounter }) { 
-        if (data.usage) {
-            tokenCounter.update(data.usage.prompt_tokens, data.usage.completion_tokens); 
+    processReasoningContent(reasoningContent, writer) {
+        if (writer && !writer.isThinkingModel) {
+            writer.setThinkingModel();
         }
-        const message = data.choices[0].message; 
-        const thoughts = message.reasoning_content ? [message.reasoning_content] : [];
-        return this.returnMessage([message.content], thoughts); 
+        writer.processContent(reasoningContent, true);
+    }
+
+    requiresResponseUsage() {
+        return false;
     }
 }
 

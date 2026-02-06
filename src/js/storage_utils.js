@@ -76,54 +76,6 @@ export const setLifetimeTokens = (inputDelta, outputDelta) => {
 };
 
 /**
- * Retrieves the map of stored model IDs to display names.
- */
-export const getStoredModels = () => {
-    return new Promise(resolve => {
-        chrome.storage.local.get(['models'], result => {
-            resolve(result.models || {});
-        });
-    });
-};
-
-/**
- * Adds a custom model to storage.
- */
-export const addModelToStorage = async (provider, apiName, displayName) => {
-    const models = await getStoredModels();
-    
-    if (!models[provider]) models[provider] = {};
-    models[provider][apiName] = displayName;
-    
-    await chrome.storage.local.set({ models });
-    return models;
-};
-
-/**
- * Removes a model from storage and cleans up the provider if empty.
- */
-export const removeModelFromStorage = async (apiName) => {
-    const models = await getStoredModels();
-    let removed = false;
-    
-    for (const provider in models) {
-        if (models[provider][apiName]) {
-            delete models[provider][apiName];
-            if (Object.keys(models[provider]).length === 0) {
-                delete models[provider];
-            }
-            removed = true;
-            break;
-        }
-    }
-    
-    if (removed) {
-        await chrome.storage.local.set({ models });
-    }
-    return models;
-};
-
-/**
  * Utility to load text content from an extension file.
  */
 export const loadTextFromFile = (filePath) => {
@@ -187,4 +139,3 @@ export const setDefaults = async () => {
         })
     ]);
 };
-

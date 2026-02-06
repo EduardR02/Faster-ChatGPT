@@ -47,7 +47,9 @@ export class StreamWriterSimple {
             isThoughtEnd: true,
             isThinkingModel: false,
             intervalId: null,
-            thinkingCounter: null
+            thinkingCounter: null,
+            bufferedContent: '',
+            renderScheduled: false
         });
     }
 
@@ -120,7 +122,25 @@ export class StreamWriterSimple {
         }
         
         this.parts.at(-1).content.push(content);
-        this.contentDiv.append(content);
+        this.bufferedContent += content;
+        this.scheduleRender();
+    }
+
+    scheduleRender() {
+        if (this.renderScheduled) return;
+
+        this.renderScheduled = true;
+        requestAnimationFrame(() => {
+            this.renderScheduled = false;
+            this.flushBufferedContent();
+        });
+    }
+
+    flushBufferedContent() {
+        if (!this.bufferedContent) return;
+
+        this.contentDiv.append(this.bufferedContent);
+        this.bufferedContent = '';
         this.scrollFunc();
     }
 
@@ -139,6 +159,8 @@ export class StreamWriterSimple {
     }
 
     finalizeCurrentPart() {
+        this.flushBufferedContent();
+
         const current = this.parts.at(-1);
         current.content = current.content.join('');
         
@@ -180,6 +202,7 @@ export class StreamWriter extends StreamWriterSimple {
         super(contentDiv, produceNextDiv, scrollCallback);
         Object.assign(this, {
             contentQueue: [],
+            contentOffset: 0,
             isProcessing: false,
             charDelay: 12000 / wordsPerMinute,
             accumulatedChars: 0,
@@ -194,6 +217,7 @@ export class StreamWriter extends StreamWriterSimple {
         super.setThinkingModel();
         this.pendingSwitch = false;
         this.pendingQueue = [];
+        this.contentOffset = 0;
     }
 
     processContent(content, isThought = false) {
@@ -211,7 +235,9 @@ export class StreamWriter extends StreamWriterSimple {
 
         this.parts.at(-1).content.push(content);
         const targetQueue = this.pendingSwitch ? this.pendingQueue : this.contentQueue;
-        targetQueue.push(...content.split(""));
+        if (content) {
+            targetQueue.push(content);
+        }
 
         if (!this.isProcessing) {
             this.isProcessing = true;
@@ -220,13 +246,56 @@ export class StreamWriter extends StreamWriterSimple {
         }
     }
 
+    hasActiveQueueContent() {
+        this.normalizeActiveQueue();
+        return this.contentQueue.length > 0;
+    }
+
+    normalizeActiveQueue() {
+        while (this.contentQueue.length && this.contentOffset >= this.contentQueue[0].length) {
+            this.contentQueue.shift();
+            this.contentOffset = 0;
+        }
+    }
+
+    consumeChars(charCount) {
+        if (charCount <= 0) return '';
+
+        const chunks = [];
+        let remaining = charCount;
+
+        while (remaining > 0 && this.contentQueue.length) {
+            this.normalizeActiveQueue();
+            if (!this.contentQueue.length) break;
+
+            const current = this.contentQueue[0];
+            const available = current.length - this.contentOffset;
+
+            if (available <= remaining) {
+                chunks.push(current.slice(this.contentOffset));
+                remaining -= available;
+                this.contentQueue.shift();
+                this.contentOffset = 0;
+                continue;
+            }
+
+            const endOffset = this.contentOffset + remaining;
+            chunks.push(current.slice(this.contentOffset, endOffset));
+            this.contentOffset = endOffset;
+            remaining = 0;
+        }
+
+        return chunks.join('');
+    }
+
     runAnimationLoop() {
         requestAnimationFrame(timestamp => {
             // Handle switching to text div after thought queue is empty - must check BEFORE early exit
-            if (this.pendingSwitch && !this.contentQueue.length) {
+            if (this.pendingSwitch && !this.hasActiveQueueContent()) {
                 this.pendingSwitch = false;
-                this.contentQueue.push(...this.pendingQueue);
+                this.contentQueue = this.pendingQueue;
                 this.pendingQueue = [];
+                this.contentOffset = 0;
 
                 // Finalize previous thought part
                 const previousPart = this.parts.length >= 2 ? this.parts.at(-2) : null;
@@ -241,7 +310,7 @@ export class StreamWriter extends StreamWriterSimple {
                 this.lastFrameTime = timestamp;
             }
 
-            if (!this.contentQueue.length) {
+            if (!this.hasActiveQueueContent()) {
                 this.isProcessing = false;
                 if (this.pendingFooter) {
                     const { footer, resolve } = this.pendingFooter;
@@ -261,9 +330,11 @@ export class StreamWriter extends StreamWriterSimple {
             this.accumulatedChars -= charCount;
 
             if (charCount > 0) {
-                const chunk = this.contentQueue.splice(0, charCount).join('');
-                this.contentDiv.append(chunk);
-                this.scrollFunc();
+                const chunk = this.consumeChars(charCount);
+                if (chunk) {
+                    this.contentDiv.append(chunk);
+                    this.scrollFunc();
+                }
             }
 
             this.lastFrameTime = timestamp;

@@ -142,6 +142,45 @@ describe('StreamWriterSimple', () => {
         expect(writer.currentText).toBe('Hello World');
     });
 
+    test('batches append and scroll to animation frame', async () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const appendSpy = spyOn(div, 'append');
+        let scrollCalls = 0;
+        const writer = new TestStreamWriterSimple(div, () => nextDiv, () => {
+            scrollCalls += 1;
+        });
+
+        writer.processContent('Hello');
+        writer.processContent(' ');
+        writer.processContent('World');
+
+        expect(appendSpy).toHaveBeenCalledTimes(0);
+        expect(scrollCalls).toBe(0);
+
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        expect(appendSpy).toHaveBeenCalledTimes(1);
+        expect(appendSpy).toHaveBeenCalledWith('Hello World');
+        expect(scrollCalls).toBe(1);
+    });
+
+    test('flushes buffered thought content before switching div', async () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const writer = new TestStreamWriterSimple(div, () => nextDiv);
+
+        writer.setThinkingModel();
+        writer.processContent('Thinking...', true);
+        writer.processContent('Answer', false);
+
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        expect(div.textContent).toContain('Thinking...');
+        expect(div.textContent).not.toContain('Answer');
+        expect(nextDiv.textContent).toContain('Answer');
+    });
+
     test('thought to text transition', () => {
         const div = createMockDiv();
         const nextDiv = createMockDiv();
@@ -172,6 +211,30 @@ describe('StreamWriterSimple', () => {
 });
 
 describe('StreamWriter (Smooth)', () => {
+    test('stores incoming content as chunks instead of characters', () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const writer = new TestStreamWriter(div, () => nextDiv, () => {}, 120000);
+
+        writer.processContent('chunk-one');
+        writer.processContent('chunk-two');
+
+        expect(writer.contentQueue).toEqual(['chunk-one', 'chunk-two']);
+    });
+
+    test('queues post-thought content in chunk queue during pending switch', () => {
+        const div = createMockDiv();
+        const nextDiv = createMockDiv();
+        const writer = new TestStreamWriter(div, () => nextDiv, () => {}, 120000);
+
+        writer.setThinkingModel();
+        writer.processContent('thought', true);
+        writer.processContent('result', false);
+
+        expect(writer.pendingSwitch).toBe(true);
+        expect(writer.pendingQueue).toEqual(['result']);
+    });
+
     test('animates content over time', async () => {
         const div = createMockDiv();
         const nextDiv = createMockDiv();
