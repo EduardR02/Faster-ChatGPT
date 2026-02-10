@@ -1222,7 +1222,7 @@ p {
 }
 
 .message-content p + p {
-  margin-top: 0.35em;
+  margin-top: 0.75em;
 }
 
 .message-content h1,
@@ -1415,7 +1415,10 @@ p {
 }
 
 .thoughts,
-.thoughts p {
+.thoughts p,
+.thoughts h1, .thoughts h2, .thoughts h3,
+.thoughts h4, .thoughts h5, .thoughts h6,
+.thoughts math {
   color: #abb2bf;
 }
 

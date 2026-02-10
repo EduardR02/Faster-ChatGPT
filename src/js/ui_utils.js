@@ -164,9 +164,15 @@ export class IncrementalRenderer {
                     }
                 }
 
-                // Display math detection ($$ at line start, outside code fences).
-                if (!inFence && ch === '$' && lineStart + 1 < text.length && text[lineStart + 1] === '$') {
-                    inDisplayMath = !inDisplayMath;
+                // Display math detection ($$ and \[ / \] at line start, outside code fences).
+                if (!inFence) {
+                    if (ch === '$' && lineStart + 1 < text.length && text[lineStart + 1] === '$') {
+                        inDisplayMath = !inDisplayMath;
+                    } else if (ch === '\\' && lineStart + 1 < text.length) {
+                        const next = text[lineStart + 1];
+                        if (next === '[') inDisplayMath = true;
+                        else if (next === ']') inDisplayMath = false;
+                    }
                 }
             }
 
