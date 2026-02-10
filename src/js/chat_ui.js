@@ -185,6 +185,7 @@ class ChatUI {
                             isRegeneration
                         });
                     } else {
+                        const capturedIndex = i;
                         message.contents.forEach((parts, subIndex) => {
                             const runOptions = { 
                                 ...message, 
@@ -193,7 +194,7 @@ class ChatUI {
                             };
                             
                             if (options.continueFunc) {
-                                runOptions.continueFunc = () => options.continueFunc(i, subIndex);
+                                runOptions.continueFunc = () => options.continueFunc(capturedIndex, subIndex);
                             }
                             
                             const messageBlock = this.createMessageFromParts(parts, runOptions);
@@ -208,6 +209,7 @@ class ChatUI {
                     // User or System
                     assistantCount = 0; // Reset assistant count on user message
                     if (options.addSystemMsg || message.role !== 'system') {
+                        const capturedIndex = i;
                         message.contents.forEach((parts, subIndex) => {
                             const runOptions = { 
                                 ...message, 
@@ -216,7 +218,7 @@ class ChatUI {
                             };
                             
                             if (options.continueFunc) {
-                                runOptions.continueFunc = () => options.continueFunc(i, subIndex);
+                                runOptions.continueFunc = () => options.continueFunc(capturedIndex, subIndex);
                             }
                             
                             const messageBlock = this.createMessageFromParts(parts, runOptions);

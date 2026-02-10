@@ -1,4 +1,4 @@
-import { formatContent } from './ui_utils.js';
+import { formatContent, IncrementalRenderer } from './ui_utils.js';
 
 const canLiveRenderMarkdown = () => typeof globalThis.markdownit === 'function';
 
@@ -59,6 +59,7 @@ export class StreamWriterSimple {
             thinkingCounter: null,
             bufferedContent: '',
             fullText: '',
+            renderer: new IncrementalRenderer(),
             renderScheduled: false
         });
     }
@@ -69,6 +70,7 @@ export class StreamWriterSimple {
         this.parts = [{ type: 'thought', content: [] }];
         this.bufferedContent = '';
         this.fullText = '';
+        this.renderer.reset();
         this.isThinkingModel = true;
     }
 
@@ -138,6 +140,7 @@ export class StreamWriterSimple {
                 this.contentDiv.textContent = '';
                 this.bufferedContent = '';
                 this.fullText = '';
+                this.renderer.reset();
                 this.contentDiv.classList.remove('thoughts');
                 this.parts.push({ type: 'text', content: [] });
             } else {
@@ -153,6 +156,7 @@ export class StreamWriterSimple {
                 this.contentDiv.textContent = '';
                 this.bufferedContent = '';
                 this.fullText = '';
+                this.renderer.reset();
                 this.contentDiv.classList.add('thoughts');
                 this.parts.push({ type: 'thought', content: [] });
             } else {
@@ -181,7 +185,7 @@ export class StreamWriterSimple {
 
         if (canLiveRenderMarkdown()) {
             this.bufferedContent = '';
-            this.contentDiv.innerHTML = formatContent(this.fullText);
+            this.contentDiv.innerHTML = this.renderer.render(this.fullText);
             this.scrollFunc();
             return;
         }
@@ -205,6 +209,7 @@ export class StreamWriterSimple {
         this.contentDiv = nextDiv;
         this.bufferedContent = '';
         this.fullText = '';
+        this.renderer.reset();
     }
 
     finalizeCurrentPart() {
@@ -283,6 +288,7 @@ export class StreamWriter extends StreamWriterSimple {
                 this.parts.pop();
                 this.contentDiv.textContent = '';
                 this.fullText = '';
+                this.renderer.reset();
                 if (this.pendingSwitch) {
                     this.pendingQueue = [];
                 } else {
@@ -305,6 +311,7 @@ export class StreamWriter extends StreamWriterSimple {
                 this.parts.pop();
                 this.contentDiv.textContent = '';
                 this.fullText = '';
+                this.renderer.reset();
                 if (this.pendingSwitch) {
                     this.pendingQueue = [];
                 } else {
@@ -417,7 +424,7 @@ export class StreamWriter extends StreamWriterSimple {
                 if (chunk) {
                     if (canLiveRenderMarkdown()) {
                         this.fullText += chunk;
-                        this.contentDiv.innerHTML = formatContent(this.fullText);
+                        this.contentDiv.innerHTML = this.renderer.render(this.fullText);
                         this.scrollFunc();
                     } else {
                         this.contentDiv.append(chunk);

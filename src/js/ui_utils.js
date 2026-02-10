@@ -6,6 +6,8 @@ const normalizeFenceLang = (info) => {
     return lang.replace(/[^A-Za-z0-9_-]/g, '');
 };
 
+const mathLangs = new Set(['latex', 'tex', 'math', 'katex']);
+
 let mdInstance = null;
 const getMarkdownRenderer = () => {
     if (mdInstance) return mdInstance;
@@ -18,6 +20,7 @@ const getMarkdownRenderer = () => {
         breaks: true,
         highlight: function(str, lang) {
             const normalizedLang = normalizeFenceLang(lang);
+            if (mathLangs.has(normalizedLang)) return '';
             if (normalizedLang && globalThis.hljs && typeof globalThis.hljs.getLanguage === 'function' && globalThis.hljs.getLanguage(normalizedLang)) {
                 try {
                     return globalThis.hljs.highlight(str, { language: normalizedLang, ignoreIllegals: true }).value;
@@ -29,12 +32,11 @@ const getMarkdownRenderer = () => {
         }
     });
 
-    // Avoid loading remote images from markdown content.
     md.disable('image');
 
-    if (typeof globalThis.texmath === 'function' && globalThis.katex) {
+    if (typeof globalThis.texmath === 'function' && globalThis.temml) {
         md.use(globalThis.texmath, {
-            engine: globalThis.katex,
+            engine: globalThis.temml,
             delimiters: ['dollars', 'brackets'],
             katexOptions: { throwOnError: false }
         });
@@ -50,6 +52,15 @@ const getMarkdownRenderer = () => {
     md.renderer.rules.fence = (tokens, idx, options) => {
         const token = tokens[idx];
         const lang = normalizeFenceLang(token.info);
+
+        if (mathLangs.has(lang) && globalThis.temml) {
+            try {
+                return `<div class="math-block">${globalThis.temml.renderToString(token.content.trim(), { displayMode: true, throwOnError: false })}</div>\n`;
+            } catch (_) {
+                // fallthrough to code block
+            }
+        }
+
         const highlighted = typeof options.highlight === 'function' ? options.highlight(token.content, lang) : '';
         const codeHtml = highlighted || md.utils.escapeHtml(token.content);
         const codeClass = highlighted
@@ -63,86 +74,128 @@ const getMarkdownRenderer = () => {
     return md;
 };
 
-const formatContentLegacy = (message) => {
-    const escapeMap = {
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#039;'
-    };
-
-    let formattedText = message.replace(/[&<>"']/g, char => escapeMap[char]);
-
-    // Convert newlines to <br> tags since .message-content uses white-space: normal
-    formattedText = formattedText.replace(/\n/g, '<br>\n');
-
-    const codeBlockRegex = /(\n*)```(\w*)\n([\s\S]*?)```(\n+|$)/g;
-    formattedText = formattedText.replace(codeBlockRegex, (match, preNewlines, language, codeContent) => {
-        const lang = normalizeFenceLang(language);
-        const codeElementHtml = `<code${lang ? ` class="language-${lang}"` : ''}>${codeContent}</code>`;
-        const codeStyleDivHtml = `<pre class="code-style">${codeElementHtml}</pre>`;
-        return `\n\n<div class="code-container">${createCopyBtn()}${codeStyleDivHtml}</div>\n`;
-    });
-
-    const markdownLinkRegex = /\[([^\]]+)\]\((https?:\/\/[^\)\s]+)\)/g;
-    formattedText = formattedText.replace(markdownLinkRegex, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-
-    return formattedText;
-};
-
 /**
- * Formats message content for display using markdown-it + KaTeX when available.
+ * Formats message content for display using markdown-it + Temml.
  */
 export function formatContent(message) {
-    initCodeCopy();
-
-    const content = message ?? '';
     const md = getMarkdownRenderer();
-    if (md) {
-        try {
-            return md.render(content);
-        } catch (e) {
-            console.error('Markdown render failed:', e);
-            return formatContentLegacy(String(content));
-        }
-    }
-
-    return formatContentLegacy(String(content));
+    return md.render(String(message ?? ''));
 }
 
-let isCodeCopyInitialized = false;
-/**
- * One-time initialization of global code copy event listener.
- */
-function initCodeCopy() {
-    if (isCodeCopyInitialized) return;
-
-    if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') {
-        return;
+export class IncrementalRenderer {
+    constructor() {
+        this.reset();
     }
-    
+
+    reset() {
+        this.stableHtml = '';
+        this.stableLength = 0;
+    }
+
+    render(fullText) {
+        const text = String(fullText ?? '');
+        const md = getMarkdownRenderer();
+
+        if (this.stableLength > text.length) {
+            this.reset();
+        }
+
+        const splitPoint = this.findLastStableSplit(text);
+        if (splitPoint > this.stableLength) {
+            this.stableHtml = md.render(text.substring(0, splitPoint));
+            this.stableLength = splitPoint;
+        }
+
+        const tail = text.substring(this.stableLength);
+        const tailHtml = tail ? md.render(tail) : '';
+        return this.stableHtml + tailHtml;
+    }
+
+    findLastStableSplit(text) {
+        let inFence = false;
+        let fenceChar = '';
+        let fenceLen = 0;
+        let inDisplayMath = false;
+        let lastSplit = 0;
+        let i = 0;
+
+        while (i < text.length) {
+            if (i === 0 || text[i - 1] === '\n') {
+                let lineStart = i;
+                let spaces = 0;
+                while (spaces < 3 && lineStart < text.length && text[lineStart] === ' ') {
+                    lineStart += 1;
+                    spaces += 1;
+                }
+
+                const ch = text[lineStart];
+
+                // Code fence detection (backtick/tilde, 3+ chars).
+                if (!inDisplayMath && (ch === '`' || ch === '~')) {
+                    let count = 0;
+                    let j = lineStart;
+                    while (j < text.length && text[j] === ch) {
+                        count += 1;
+                        j += 1;
+                    }
+
+                    if (count >= 3) {
+                        if (!inFence) {
+                            inFence = true;
+                            fenceChar = ch;
+                            fenceLen = count;
+                        } else if (ch === fenceChar && count >= fenceLen) {
+                            let k = j;
+                            let onlyWhitespace = true;
+                            while (k < text.length && text[k] !== '\n') {
+                                const c = text[k];
+                                if (c !== ' ' && c !== '\t' && c !== '\r') {
+                                    onlyWhitespace = false;
+                                    break;
+                                }
+                                k += 1;
+                            }
+                            if (onlyWhitespace) {
+                                inFence = false;
+                                fenceChar = '';
+                                fenceLen = 0;
+                            }
+                        }
+                    }
+                }
+
+                // Display math detection ($$ at line start, outside code fences).
+                if (!inFence && ch === '$' && lineStart + 1 < text.length && text[lineStart + 1] === '$') {
+                    inDisplayMath = !inDisplayMath;
+                }
+            }
+
+            // Paragraph boundary (only outside fences and display math).
+            if (!inFence && !inDisplayMath && text[i] === '\n' && i + 1 < text.length && text[i + 1] === '\n') {
+                lastSplit = i + 2;
+            }
+
+            i += 1;
+        }
+
+        return lastSplit;
+    }
+}
+
+// Code copy: single delegated listener, initialized once at module load.
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
     document.addEventListener('click', event => {
         const copyButton = event.target.closest('.copy-code-button');
         if (!copyButton || copyButton.disabled) return;
-        
-        const container = copyButton.closest('.code-container');
-        const codeElement = container?.querySelector('code');
-        const codeText = codeElement?.textContent;
-        
+
+        const codeText = copyButton.closest('.code-container')?.querySelector('code')?.textContent;
         if (codeText && navigator?.clipboard?.writeText) {
             navigator.clipboard.writeText(codeText).then(() => {
                 copyButton.classList.add('copied');
-                
-                const onTransitionEnd = () => {
-                    copyButton.classList.remove('copied');
-                };
-                copyButton.addEventListener('transitionend', onTransitionEnd, { once: true });
+                copyButton.addEventListener('transitionend', () => copyButton.classList.remove('copied'), { once: true });
             });
         }
     });
-    
-    isCodeCopyInitialized = true;
 }
 
 /**
