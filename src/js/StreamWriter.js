@@ -64,6 +64,49 @@ export class StreamWriterSimple {
         });
     }
 
+    _onNonEmptySwitch(isThought, currentPart) {
+        this.nextPart(isThought);
+    }
+
+    _onDiscardReset() {
+        this.bufferedContent = '';
+        this.fullText = '';
+        this.renderer.reset();
+    }
+
+    _handleTransition(content, isThought) {
+        if (!content) return 'none';
+
+        if (isThought !== this.isThoughtEnd) return 'none';
+
+        this.isThoughtEnd = !isThought;
+        const nextType = isThought ? 'thought' : 'text';
+        const currentPart = this.parts.at(-1);
+        const leavingType = isThought ? 'text' : 'thought';
+
+        if (currentPart?.type === leavingType && !hasNonWhitespaceContent(currentPart)) {
+            this.parts.pop();
+            this.contentDiv.textContent = '';
+            this._onDiscardReset();
+            if (isThought) this.contentDiv.classList.add('thoughts');
+            else this.contentDiv.classList.remove('thoughts');
+            this.parts.push({ type: nextType, content: [] });
+            return 'discarded';
+        }
+
+        this._onNonEmptySwitch(isThought, currentPart);
+        if (this.parts.at(-1)?.type !== nextType) {
+            this.parts.push({ type: nextType, content: [] });
+        }
+        return 'switched';
+    }
+
+    _renderToDOM() {
+        if (!canLiveRenderMarkdown()) return;
+        this.contentDiv.innerHTML = this.renderer.render(this.fullText);
+        this.scrollFunc();
+    }
+
     setThinkingModel() {
         this.isThoughtEnd = false;
         this.contentDiv.classList.add('thoughts');
@@ -131,38 +174,7 @@ export class StreamWriterSimple {
     processContent(content, isThought = false) {
         if (!content) return;
 
-        // Handle transitions from thought to text (only when content is non-empty)
-        if (!isThought && !this.isThoughtEnd) {
-            this.isThoughtEnd = true;
-            const currentPart = this.parts.at(-1);
-            if (currentPart.type === 'thought' && !hasNonWhitespaceContent(currentPart)) {
-                this.parts.pop();
-                this.contentDiv.textContent = '';
-                this.bufferedContent = '';
-                this.fullText = '';
-                this.renderer.reset();
-                this.contentDiv.classList.remove('thoughts');
-                this.parts.push({ type: 'text', content: [] });
-            } else {
-                this.nextPart();
-            }
-        }
-        // Handle transition back from text to thought (for interleaved streams)
-        else if (isThought && this.isThoughtEnd) {
-            this.isThoughtEnd = false;
-            const currentPart = this.parts.at(-1);
-            if (currentPart.type === 'text' && !hasNonWhitespaceContent(currentPart)) {
-                this.parts.pop();
-                this.contentDiv.textContent = '';
-                this.bufferedContent = '';
-                this.fullText = '';
-                this.renderer.reset();
-                this.contentDiv.classList.add('thoughts');
-                this.parts.push({ type: 'thought', content: [] });
-            } else {
-                this.nextPart(true);
-            }
-        }
+        this._handleTransition(content, isThought);
 
         this.parts.at(-1).content.push(content);
         this.fullText += content;
@@ -185,8 +197,7 @@ export class StreamWriterSimple {
 
         if (canLiveRenderMarkdown()) {
             this.bufferedContent = '';
-            this.contentDiv.innerHTML = this.renderer.render(this.fullText);
-            this.scrollFunc();
+            this._renderToDOM();
             return;
         }
 
@@ -274,60 +285,32 @@ export class StreamWriter extends StreamWriterSimple {
         this.contentOffset = 0;
     }
 
+    _onNonEmptySwitch(isThought, currentPart) {
+        this.pendingSwitch = true;
+        if (currentPart) {
+            currentPart.content = getPartContentText(currentPart);
+        }
+    }
+
+    _onDiscardReset() {
+        this.fullText = '';
+        this.renderer.reset();
+        if (this.pendingSwitch) {
+            this.pendingQueue = [];
+        } else {
+            this.contentQueue = [];
+            this.contentOffset = 0;
+        }
+    }
+
     processContent(content, isThought = false) {
         if (!content) return;
 
-        // Handle transition from thought to text (only when content is non-empty)
-        if (!isThought && !this.isThoughtEnd) {
-            this.isThoughtEnd = true;
-            const currentPart = this.parts.at(-1);
-            if (hasNonWhitespaceContent(currentPart)) {
-                this.pendingSwitch = true;
-                currentPart.content = getPartContentText(currentPart);
-            } else {
-                this.parts.pop();
-                this.contentDiv.textContent = '';
-                this.fullText = '';
-                this.renderer.reset();
-                if (this.pendingSwitch) {
-                    this.pendingQueue = [];
-                } else {
-                    this.contentQueue = [];
-                    this.contentOffset = 0;
-                }
-                this.contentDiv.classList.remove('thoughts');
-            }
-            this.parts.push({ type: 'text', content: [] });
-        }
-        // Handle transition back from text to thought (for interleaved streams)
-        else if (isThought && this.isThoughtEnd) {
-            this.isThoughtEnd = false;
-            const currentPart = this.parts.at(-1);
-            // Finalize current text part if it has content
-            if (hasNonWhitespaceContent(currentPart)) {
-                this.pendingSwitch = true;
-                currentPart.content = getPartContentText(currentPart);
-            } else {
-                this.parts.pop();
-                this.contentDiv.textContent = '';
-                this.fullText = '';
-                this.renderer.reset();
-                if (this.pendingSwitch) {
-                    this.pendingQueue = [];
-                } else {
-                    this.contentQueue = [];
-                    this.contentOffset = 0;
-                }
-                this.contentDiv.classList.add('thoughts');
-            }
-            this.parts.push({ type: 'thought', content: [] });
-        }
+        this._handleTransition(content, isThought);
 
         this.parts.at(-1).content.push(content);
         const targetQueue = this.pendingSwitch ? this.pendingQueue : this.contentQueue;
-        if (content) {
-            targetQueue.push(content);
-        }
+        targetQueue.push(content);
 
         if (!this.isProcessing) {
             this.isProcessing = true;
@@ -424,8 +407,7 @@ export class StreamWriter extends StreamWriterSimple {
                 if (chunk) {
                     if (canLiveRenderMarkdown()) {
                         this.fullText += chunk;
-                        this.contentDiv.innerHTML = this.renderer.render(this.fullText);
-                        this.scrollFunc();
+                        this._renderToDOM();
                     } else {
                         this.contentDiv.append(chunk);
                         this.scrollFunc();
