@@ -1,4 +1,6 @@
-import { formatContent, highlightCodeBlocks } from './ui_utils.js';
+import { formatContent } from './ui_utils.js';
+
+const canLiveRenderMarkdown = () => typeof globalThis.markdownit === 'function';
 
 const getPartContentText = (part) => {
     const content = part?.content ?? '';
@@ -56,6 +58,7 @@ export class StreamWriterSimple {
             intervalId: null,
             thinkingCounter: null,
             bufferedContent: '',
+            fullText: '',
             renderScheduled: false
         });
     }
@@ -64,6 +67,8 @@ export class StreamWriterSimple {
         this.isThoughtEnd = false;
         this.contentDiv.classList.add('thoughts');
         this.parts = [{ type: 'thought', content: [] }];
+        this.bufferedContent = '';
+        this.fullText = '';
         this.isThinkingModel = true;
     }
 
@@ -132,6 +137,7 @@ export class StreamWriterSimple {
                 this.parts.pop();
                 this.contentDiv.textContent = '';
                 this.bufferedContent = '';
+                this.fullText = '';
                 this.contentDiv.classList.remove('thoughts');
                 this.parts.push({ type: 'text', content: [] });
             } else {
@@ -146,6 +152,7 @@ export class StreamWriterSimple {
                 this.parts.pop();
                 this.contentDiv.textContent = '';
                 this.bufferedContent = '';
+                this.fullText = '';
                 this.contentDiv.classList.add('thoughts');
                 this.parts.push({ type: 'thought', content: [] });
             } else {
@@ -154,6 +161,7 @@ export class StreamWriterSimple {
         }
 
         this.parts.at(-1).content.push(content);
+        this.fullText += content;
         this.bufferedContent += content;
         this.scheduleRender();
     }
@@ -170,6 +178,13 @@ export class StreamWriterSimple {
 
     flushBufferedContent() {
         if (!this.bufferedContent) return;
+
+        if (canLiveRenderMarkdown()) {
+            this.bufferedContent = '';
+            this.contentDiv.innerHTML = formatContent(this.fullText);
+            this.scrollFunc();
+            return;
+        }
 
         this.contentDiv.append(this.bufferedContent);
         this.bufferedContent = '';
@@ -188,6 +203,8 @@ export class StreamWriterSimple {
         
         wrapper.appendChild(nextDiv);
         this.contentDiv = nextDiv;
+        this.bufferedContent = '';
+        this.fullText = '';
     }
 
     finalizeCurrentPart() {
@@ -215,7 +232,6 @@ export class StreamWriterSimple {
 
     updateTextContent(content) {
         this.contentDiv.innerHTML = formatContent(content);
-        highlightCodeBlocks(this.contentDiv);
     }
 
 
@@ -266,6 +282,7 @@ export class StreamWriter extends StreamWriterSimple {
             } else {
                 this.parts.pop();
                 this.contentDiv.textContent = '';
+                this.fullText = '';
                 if (this.pendingSwitch) {
                     this.pendingQueue = [];
                 } else {
@@ -287,6 +304,7 @@ export class StreamWriter extends StreamWriterSimple {
             } else {
                 this.parts.pop();
                 this.contentDiv.textContent = '';
+                this.fullText = '';
                 if (this.pendingSwitch) {
                     this.pendingQueue = [];
                 } else {
@@ -397,8 +415,14 @@ export class StreamWriter extends StreamWriterSimple {
             if (charCount > 0) {
                 const chunk = this.consumeChars(charCount);
                 if (chunk) {
-                    this.contentDiv.append(chunk);
-                    this.scrollFunc();
+                    if (canLiveRenderMarkdown()) {
+                        this.fullText += chunk;
+                        this.contentDiv.innerHTML = formatContent(this.fullText);
+                        this.scrollFunc();
+                    } else {
+                        this.contentDiv.append(chunk);
+                        this.scrollFunc();
+                    }
                 }
             }
 

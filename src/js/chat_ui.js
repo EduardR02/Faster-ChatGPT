@@ -1,4 +1,4 @@
-import { createElementWithClass, formatContent, updateTextfieldHeight, highlightCodeBlocks } from './ui_utils.js';
+import { createElementWithClass, formatContent, updateTextfieldHeight } from './ui_utils.js';
 import { Footer, createRegenerateButton } from './Footer.js';
 
 // UI constants
@@ -43,41 +43,12 @@ class ChatUI {
             system: "System" 
         };
         this._renderTarget = null;
-        this._deferCodeHighlighting = false;
-        this._deferredHighlightTargets = null;
-        this._highlightGeneration = 0;
         this._isBuildingChat = false;
     }
 
     appendConversationNode(node) {
         const target = this._renderTarget || this.conversationDiv;
         target.appendChild(node);
-    }
-
-    queueDeferredHighlight(container) {
-        if (!this._deferCodeHighlighting || !this._deferredHighlightTargets || !container) return false;
-        this._deferredHighlightTargets.push(container);
-        return true;
-    }
-
-    scheduleDeferredHighlights(containers) {
-        if (!containers?.length) return;
-
-        const generation = ++this._highlightGeneration;
-        const runHighlight = () => {
-            if (generation !== this._highlightGeneration) return;
-            containers.forEach(container => highlightCodeBlocks(container));
-            if (typeof this.scrollIntoView === 'function') {
-                this.scrollIntoView();
-            }
-        };
-
-        if (typeof requestIdleCallback === 'function') {
-            requestIdleCallback(runHighlight);
-            return;
-        }
-
-        setTimeout(runHighlight, 0);
     }
 
     addMessage(role, parts = [], options = {}) {
@@ -165,9 +136,6 @@ class ChatUI {
         const bodyDiv = createElementWithClass('div', 'message-content history-system-content');
 
         bodyDiv.innerHTML = formatContent(content);
-        if (!this.queueDeferredHighlight(bodyDiv)) {
-            highlightCodeBlocks(bodyDiv);
-        }
         
         toggleButton.append(toggleIcon, title);
         toggleButton.onclick = () => systemMessageDiv.classList.toggle('collapsed');
@@ -185,10 +153,7 @@ class ChatUI {
         this.clearConversation(options);
 
         const fragment = document.createDocumentFragment();
-        const deferredHighlightTargets = [];
         this._renderTarget = fragment;
-        this._deferCodeHighlighting = true;
-        this._deferredHighlightTargets = deferredHighlightTargets;
         this._isBuildingChat = true;
         
         try {
@@ -269,13 +234,10 @@ class ChatUI {
             }
         } finally {
             this._renderTarget = null;
-            this._deferCodeHighlighting = false;
-            this._deferredHighlightTargets = null;
             this._isBuildingChat = false;
         }
 
         this.conversationDiv.appendChild(fragment);
-        this.scheduleDeferredHighlights(deferredHighlightTargets);
     }
 
     createArenaMessage(messageData, options = {}) {
@@ -595,9 +557,6 @@ class ChatUI {
         const contentDiv = createElementWithClass('div', `message-content ${role}-content`);
         if (content) {
             contentDiv.innerHTML = formatContent(content);
-            if (!this.queueDeferredHighlight(contentDiv)) {
-                highlightCodeBlocks(contentDiv);
-            }
             return contentDiv;
         }
         return contentDiv;

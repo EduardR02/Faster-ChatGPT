@@ -1,156 +1,113 @@
 # Codebase State Assessment (Feb 2026)
 
 ## Codebase Stats
-- 27 files, ~13,238 lines in `src/js/`
-- 293 tests passing
+- ~30 files, ~14,000 lines in `src/js/`
+- 324 tests passing
+- Vendored libs: highlight.js, minisearch, markdown-it, KaTeX, markdown-it-texmath
+
+---
+
+## Recently Completed
+
+### Markdown + LaTeX Rendering (current branch)
+- Replaced hand-rolled `formatContent()` (only code blocks + links) with **markdown-it** + **KaTeX** + **markdown-it-texmath**
+- Full markdown support: bold, italic, headers, tables, lists, blockquotes, inline code, horizontal rules, links
+- LaTeX math: `$...$`, `$$...$$`, `\(...\)`, `\[...\]` rendered via KaTeX
+- Code blocks: syntax highlighting via highlight.js integrated into markdown-it's `highlight` option (no post-processing pass)
+- **Streaming**: `StreamWriter` now re-renders full accumulated text as markdown on each animation frame — formatting appears live during streaming, not just at the end
+- Security: `html: false`, images disabled, links forced to `target="_blank"`
+- Fallback: if markdown-it fails to load, falls back to legacy formatter; `md.render()` wrapped in try/catch
+- Dark-theme CSS for all markdown elements (tables, blockquotes, headers, lists, etc.)
+- Vendored: `vendor/markdown-it/`, `vendor/katex/` (JS + CSS + fonts), `vendor/markdown-it-texmath/`
+- Files modified: `ui_utils.js`, `StreamWriter.js`, `chat_ui.js`, `layout.css`, `sidepanel.html`, `history.html`
+- Removed: `highlightCodeBlocks()` function and all calls to it (highlighting now happens during markdown parsing)
+
+### Live History Updates (commit 4328afe)
+- Serialized queue for history updates, stable message-id targeting, correct append index
+
+### Thinking Block Cleanup (commit 5f4b4a2)
+- Strip empty thinking blocks from UI via CSS `:empty` + whitespace normalization
+
+### Opus 4.6 Thinking Fixes (commits e70ce3a, 10e9dd3, 743f305)
+- Fixed adaptive thinking for Opus 4.6: effort in `output_config`, default to high
+- Added OpenAI reasoning summaries
+- Fixed scroll disengage, stop button swap, stale render buffers
+
+### State Management Flatten (commit 1cc6b32)
+- Flattened state management, deduplicated TabState, unified proxies
+
+### Performance + Dead Code (commit 8c6c5d5)
+- Performance improvements, dead code cleanup, provider simplification
+
+### UX Flow Cleanup (commit 2af0a38)
+- Autoscroll: centralized, 150px grace threshold, reset on new chat
+- Regeneration: latest-only enforcement, completed arena whole-message regen
+- Continue-from: council block-level continue, consolidated logic paths
+- Structural: `initApiCall` split into `runCouncilFlow`/`runArenaFlow`/`runNormalFlow`
+
+### New Models (commit 061e28e)
+- Claude Opus 4.6 with adaptive thinking (`thinking: { type: "adaptive", effort }`)
+- GPT 5.3 Codex (drop-in)
+- Effort level mapping: minimal→low, xhigh→max
+- Opus 4.6 uses reasoning level cycling UI (not toggle)
+
+### Council Refactor (commit f9f01d7)
+- Migrated council responses from `{ messages: [[...parts]] }` to `{ parts: [...parts] }` (flat)
+- Thought content sanitized in `getMessagesForAPI`
+- Collector prompt rewritten with full conversation history
 
 ---
 
 ## Performance Issues (by impact)
 
 ### P0: Streaming Response Performance
-Three compounding issues in `StreamWriter.js`:
+Partially addressed by markdown rendering rewrite. Remaining:
 
-1. **Layout thrashing per token** (`StreamWriter.js:124`, `chat_ui.js:1203-1218`)
-   - `scrollIntoView()` called on every SSE event in `StreamWriterSimple`
-   - Reads `scrollHeight`/`clientHeight`/`scrollTop` then writes `scrollTop` — forces browser reflow per token
-   - Fix: batch scroll calls to rAF, check `shouldScroll` before any DOM read
+1. **Layout thrashing per token** (`StreamWriter.js`, `chat_ui.js`)
+   - Scroll checks still read `scrollHeight`/`clientHeight`/`scrollTop` then write — forces reflow per frame
+   - Mitigated: now batched to rAF (one reflow per frame, not per token)
 
-2. **Character-level queue splitting** (`StreamWriter.js:214,264`)
-   - `content.split("")` explodes every chunk into individual character strings
-   - `splice(0, charCount).join('')` removes from front of array — O(n) per frame
-   - Over ~8000 chars: 8000+ allocations + O(n) splices
-   - Fix: chunk-based queue with read offset instead of char array + front-splice
-
-3. **No DOM write batching** (`StreamWriter.js:122-124`)
-   - `StreamWriterSimple.processContent()` appends text + triggers scroll on every token
-   - Fix: accumulate content, flush on rAF
+2. **Character-level queue splitting** (`StreamWriter.js` arena mode)
+   - `content.split("")` + `splice(0, charCount).join('')` is O(n) per frame
+   - Fix: chunk-based queue with read offset instead of char array
 
 ### P1: `buildChat()` blocks UI on chat load
-- `chat_ui.js:146-222` — synchronous rendering of entire conversation
-- `formatContent` (regex-heavy HTML) + `hljs.highlightElement` on every code block, all synchronous
-- No `DocumentFragment`, no yielding to event loop
-- Impact: 200-500ms+ freeze on conversations with 10+ code blocks
-- Fix: DocumentFragment batching, async/deferred syntax highlighting
+- Synchronous rendering of entire conversation
+- `formatContent` (now markdown-it) + highlight on every message, all synchronous
+- Fix: DocumentFragment batching, async/deferred rendering
 
 ### P2: `updateTextfieldHeight` double reflow
-- `ui_utils.js:97-108` — sets height to `auto` (invalidates layout), reads `scrollHeight` (forces reflow), reads again
-- Called on every input event + multiple places during settings changes
+- Sets height to `auto` (invalidates layout), reads `scrollHeight` (forces reflow)
+- Called on every input event
 - Fix: single reflow read, debounce during batch updates
 
 ### P3: Redundant provider resolution
-- `api_manager.js:41-64` — `resolveProvider()` iterates all providers/models, called 3+ times per API call for same model
+- `resolveProvider()` iterates all providers/models, called 3+ times per API call
 - Fix: memoize or resolve once at call site
-
-### P4: Redundant `chrome.storage.local.get` on startup
-- 3-4 parallel `chrome.storage.local.get` calls reading overlapping data (separate `SettingsManager` instances in `SidepanelStateManager`, `ApiManager`, `RenameManager`)
-- Fix: single shared settings load, or single `SettingsManager` instance
-
-### P5: Image hashing on main thread
-- `chat_storage.js:136-142` — `TextEncoder.encode()` on large base64 strings (1-5MB) is synchronous
-- Fix: offload to worker, or hash in chunks
-
----
-
-## Dead Code (zero-risk removals)
-
-### Dead Files
-- `src/js/PromptStorage.js` (78 lines) — never imported anywhere. Prompt storage uses `chrome.storage.local`.
-
-### Dead Exports in `storage_utils.js`
-- `getStoredModels()` (line 81) — never imported
-- `addModelToStorage()` (line 92) — never imported, settings uses `SettingsStateManager.addModel()`
-- `removeModelFromStorage()` (line 105) — never imported
-
-### Dead Method
-- `ChatStorage.tokenizeForMiniSearch` (`chat_storage.js:655`) — identical copy exists in `history.js:1178`, this one never called
-
-### Dead State Manager Methods (~170 lines)
-- `ArenaStateManager` methods (lines 354-426) — shadowed by `TabState` via Proxy delegation
-- `SidepanelStateManager` toggle/cycling methods (lines 561-699) — same, all shadowed by `TabState`
-- The Proxy in `sidepanel.js:160-185` and `tab_manager.js:128-157` always hits `TabState` first, making these unreachable
-
-### Dead CSS (~60 lines)
-- `.thinking-mode { }` — empty rule (`layout.css:1518`)
-- `.pill-button.is-danger` + `.is-active` — never applied (`layout.css:1718-1726`)
-- `.reindex-busy/success/failure/prompt` — never toggled in JS (`layout.css:1450-1467`)
-- `.history-title` — not in any HTML or JS (`layout.css:754-759`)
-- `.media-panel[data-state="migrating"]` — `migrating` never set as state (`layout.css:1742,1759,1798,1814`)
-- `content:` on `.media-status-title` div — only works on `::before`/`::after` pseudo-elements (`layout.css:1810-1824`)
-- `.clearfix` — no floats exist, layout is flexbox (`layout.css:1620-1622`)
-
-### Dead HTML
-- `<div class="clearfix">` in `popup.html:17` and `settings.html:158` — vestigial
-
-### Dead API Manager Defaults
-- Constructor fallback getters (`api_manager.js:31-36`) — `callApi` always spreads direct values from caller
 
 ---
 
 ## Complexity Issues (by impact)
 
-### C0: State Manager Duplication and Dead Inheritance
-- `TabState` (249 lines) was copy-pasted from `SidepanelStateManager`
-- Both have identical: thinking state, toggles, cycling, arena/council management
-- The Proxy makes `SidepanelStateManager`'s versions unreachable (dead code above)
-- `ArenaStateManager` exists as unnecessary inheritance middle layer
-- `HistoryStateManager` inherits arena/council infrastructure it never uses
-- Fix: extract shared state logic into composable mixin, flatten inheritance, delete shadowed methods
-
 ### C1: God Files
-- `history.js` (2,132 lines) — 4 unrelated classes: `PopupMenu`, `MediaTab`, `ChatSearch`, page init
-- `chat_ui.js` (2,212 lines) — 3 classes: `ChatUI`, `SidepanelChatUI`, `HistoryChatUI`
-- `chat_storage.js` (1,361 lines) — CRUD + blob management + media indexing + thumbnails + search docs + import/export + image repair
+- `history.js` (~2,100 lines) — 4 unrelated classes
+- `chat_ui.js` (~2,200 lines) — 3 classes
+- `chat_storage.js` (~1,400 lines) — CRUD + blob management + media + search + import/export
 - Fix: split into focused modules
 
 ### C2: OpenAI-Compatible Provider Duplication
-- `LLMProviders.js` (1,007 lines) — DeepSeek, Grok, Kimi, LlamaCpp all parse `choices[0].delta.content` and `choices[0].delta.reasoning_content` identically
-- Each has near-identical `formatMessages`, `handleStream`, `handleResponse`
-- Fix: `OpenAICompatibleProvider` base class, providers override only what differs
+- `LLMProviders.js` (~1,000 lines) — DeepSeek, Grok, Kimi, LlamaCpp all parse identically
+- Fix: `OpenAICompatibleProvider` base class
 
-### C3: Duplicate Proxy Implementations
-- `sidepanel.js:160` and `tab_manager.js:128` — two slightly different Proxy implementations for state delegation
-- Fix: single `createStateProxy` factory
-
-### C4: Over-engineered `rename_manager.js`
-- 3-level class hierarchy (176 lines) for what is essentially one function with a config flag
-- Fix: collapse to single class or function
-
-### C5: Duplicate `normaliseForSearch`
-- `ChatStorage.normaliseForSearch` (`chat_storage.js:646`) and `ChatSearch.normaliseForSearch` (`history.js:1577`)
-- Identical logic, both actively used
+### C3: Duplicate `normaliseForSearch`
+- `ChatStorage.normaliseForSearch` and `ChatSearch.normaliseForSearch` — identical logic
 - Fix: shared utility function
 
 ---
 
-## Backwards Compatibility Code (policy decisions needed)
+## Backwards Compatibility Code
 
-- `migrations.js:46-172` — v1 to v3 message format migration. Still runs for users upgrading from very old versions.
-- `chat_storage.js:250-319` — `runPendingMigration()` blob scan on every startup. Could skip with completion flag.
-- `chat_storage.js:1179-1299` — import flow v3 migration for old archives.
-- `ArenaRatingManager.js:142` — `matches_count` to `count` field rename fallback.
-
----
-
-## Recently Completed (this session)
-
-### Council Refactor (commit f9f01d7)
-- Migrated council responses from `{ messages: [[...parts]] }` to `{ parts: [...parts] }` (flat)
-- Thought content sanitized in `getMessagesForAPI`
-- Collector prompt rewritten with full conversation history
-- State key fix: `council_collector` to `council_collector_prompt`
-- `stripEphemeral` fixed for council thoughtSignature stripping
-- Removed dead `ThinkingChat.addCouncilMessage`
-- Null guards on `sanitizePart`, council contents init `[]` not `[[]]`
-
-### New Models (commit 061e28e)
-- Added Claude Opus 4.6 with adaptive thinking (`thinking: { type: "adaptive", effort }`)
-- Added GPT 5.3 Codex (drop-in)
-- Effort level mapping: minimal to low, xhigh to max
-- Opus 4.6 uses reasoning level cycling UI (not toggle)
-
-### UX Flow Cleanup (commit 2af0a38)
-- Autoscroll: centralized, 150px grace threshold, reset on new chat
-- Regeneration: latest-only enforcement, completed arena whole-message regen, council regen on reconstruct
-- Continue-from: council block-level continue, consolidated logic paths
-- Structural: `initApiCall` split into `runCouncilFlow`/`runArenaFlow`/`runNormalFlow`
+- `migrations.js:46-172` — v1 to v3 message format migration
+- `chat_storage.js` — `runPendingMigration()` blob scan on startup
+- Import flow v3 migration for old archives
+- `ArenaRatingManager.js` — `matches_count` to `count` field rename fallback

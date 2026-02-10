@@ -1204,7 +1204,149 @@ p {
 
 .message-content {
   color: #ffffff;
-  white-space: pre-wrap;
+  white-space: normal;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.message-content > :first-child {
+  margin-top: 0;
+}
+
+.message-content > :last-child {
+  margin-bottom: 0;
+}
+
+.message-content p {
+  margin: 0.35em 0;
+}
+
+.message-content h1,
+.message-content h2,
+.message-content h3,
+.message-content h4,
+.message-content h5,
+.message-content h6 {
+  margin: 0.65em 0 0.3em;
+  line-height: 1.25;
+  font-weight: bold;
+  color: #fffafa;
+}
+
+.message-content h1 { font-size: 1.25em; }
+.message-content h2 { font-size: 1.15em; }
+.message-content h3 { font-size: 1.08em; }
+.message-content h4 { font-size: 1.02em; }
+.message-content h5 { font-size: 0.95em; }
+.message-content h6 { font-size: 0.9em; }
+
+.message-content ul,
+.message-content ol {
+  margin: 0.35em 0;
+  padding-left: 1.4em;
+}
+
+.message-content li {
+  margin: 0.15em 0;
+}
+
+.message-content blockquote {
+  margin: 0.5em 0;
+  padding: 0.25em 0.75em;
+  border-left: 3px solid rgba(86, 182, 194, 0.75);
+  background: rgba(171, 178, 191, 0.08);
+  color: #cdd3dd;
+  border-radius: 0.35em;
+}
+
+.message-content hr {
+  border: none;
+  border-top: 1px solid rgba(171, 178, 191, 0.25);
+  margin: 0.75em 0;
+}
+
+.message-content :not(pre) > code {
+  background: rgba(23, 20, 29, 0.65);
+  border: 1px solid rgba(171, 178, 191, 0.25);
+  padding: 0.1em 0.35em;
+  border-radius: 0.35em;
+  font-size: 0.95em;
+}
+
+.message-content pre {
+  margin: 0.5em 0;
+}
+
+.message-content pre code {
+  display: block;
+}
+
+.message-content table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5em 0;
+}
+
+.message-content th,
+.message-content td {
+  border: 1px solid rgba(171, 178, 191, 0.25);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.message-content th {
+  background: rgba(23, 20, 29, 0.65);
+  color: #fffafa;
+}
+
+.message-content tr:nth-child(even) td {
+  background: rgba(171, 178, 191, 0.06);
+}
+
+.message-content .code-container {
+  margin: 0.5em 0;
+}
+
+.message-content .code-container pre {
+  margin: 0;
+}
+
+.message-content .code-style code.hljs {
+  background: transparent;
+}
+
+.message-content .katex {
+  color: inherit;
+}
+
+.message-content .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.message-content eq {
+  display: inline;
+}
+
+.message-content eqn {
+  display: block;
+}
+
+.message-content section {
+  margin: 0.5em 0;
+}
+
+.message-content section.eqno {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.5em;
+}
+
+.message-content section.eqno > span {
+  color: #abb2bf;
+  font-size: 0.9em;
 }
 
 .message-content::selection {

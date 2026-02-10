@@ -1,6 +1,6 @@
 {
 	"name": "Sidekick LLM",
-	"version": "1.22.0",
+	"version": "1.25.0",
 	"manifest_version": 3,
 	"content_scripts": [
 		{
