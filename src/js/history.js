@@ -5,6 +5,7 @@ import { RenameManager } from './rename_manager.js';
 import { ChatCore } from './chat_core.js';
 import { createElementWithClass } from './ui_utils.js';
 import { normaliseForSearch } from './search_utils.js';
+import { getAppendFetchWindow, getMissingMessageRange, takeContiguousMessages } from './history_live_updates.js';
 
 /**
  * timing and duration formatting helpers.
@@ -281,7 +282,7 @@ function initMessageListeners() {
                 chatSearch?.enqueueNewDocument(message.searchDoc);
             }
         } else if (message.type === 'appended_messages_to_saved_chat') {
-            void queueLiveUpdate(() => handleAppended(message.chatId, message.addedCount, message.startIndex, null, message.searchDelta, message.timestamp));
+            void queueLiveUpdate(() => handleAppended(message.chatId, message.addedCount, message.startIndex, message.searchDelta, message.timestamp));
         } else if (message.type === 'message_updated') {
             void queueLiveUpdate(() => handleUpdate(message.chatId, message.messageId, message.timestamp, message.message));
         } else if (message.type === 'chat_renamed') {
@@ -310,7 +311,7 @@ function initMessageListeners() {
     });
 }
 
-async function handleAppended(chatId, addedCount, startIndex, message = null, searchDelta = null, timestamp = null) {
+async function handleAppended(chatId, addedCount, startIndex, searchDelta = null, timestamp = null) {
     await handleHistoryRefresh(chatId, timestamp ? { timestamp: timestamp } : {});
     if (searchDelta) {
         chatSearch?.enqueueAppend({ chatId, delta: searchDelta, timestamp: timestamp });
@@ -322,11 +323,16 @@ async function handleAppended(chatId, addedCount, startIndex, message = null, se
         }
     }
     if (chatCore.getChatId() !== chatId) return;
-    const messages = message ? [message] : await chatStorage.getMessages(chatId, startIndex, addedCount);
-    if (messages) { 
-        chatUI.appendMessages(messages, startIndex); 
-        chatCore.addMultipleFromHistory(messages); 
-    }
+
+    const appendWindow = getAppendFetchWindow(chatCore.getLength(), startIndex, addedCount);
+    if (!appendWindow) return;
+
+    const fetchedMessages = await chatStorage.getMessages(chatId, appendWindow.startIndex);
+    const contiguousMessages = takeContiguousMessages(fetchedMessages, appendWindow.startIndex);
+    if (!contiguousMessages.length) return;
+
+    chatUI.appendMessages(contiguousMessages, appendWindow.startIndex);
+    chatCore.addMultipleFromHistory(contiguousMessages);
 }
 
 async function handleUpdate(chatId, messageId, timestamp = null, messageData = null) {
@@ -335,9 +341,12 @@ async function handleUpdate(chatId, messageId, timestamp = null, messageData = n
     if (!message) return;
     const effectiveTimestamp = getLiveMessageTimestamp(timestamp, message);
     if (!shouldApplyLiveMessage(chatId, messageId, effectiveTimestamp)) return;
-    if (messageId >= chatCore.getLength()) {
-        return handleAppended(chatId, 1, messageId, message, ChatStorage.extractTextFromMessages([message]), effectiveTimestamp);
+
+    const missingRange = getMissingMessageRange(chatCore.getLength(), messageId);
+    if (missingRange) {
+        return handleAppended(chatId, missingRange.count, missingRange.startIndex, null, effectiveTimestamp);
     }
+
     if (mediaTab) {
         mediaTab.deferredForceRefresh = true;
     }

@@ -1460,10 +1460,13 @@ export class SidepanelChatUI extends ChatUI {
         }
     }
 
-    getActiveMessageElement(modelId) {
+    getActiveMessageElement(modelId, options = {}) {
+        const councilTarget = options.councilTarget;
         if (this.stateManager.isCouncilModeActive && this.activeDivs) {
-            // If modelId is the collector model, we stream to the collector area
-            if (modelId === this.stateManager.getCouncilCollectorModel()) {
+            const shouldUseCollector = councilTarget === 'collector'
+                || (councilTarget !== 'row' && modelId === this.stateManager.getCouncilCollectorModel());
+
+            if (shouldUseCollector) {
                 const collector = this.activeDivs.querySelector('.council-collector .assistant-message');
                 if (collector) return collector;
                 
@@ -1481,8 +1484,8 @@ export class SidepanelChatUI extends ChatUI {
         return (index !== -1 && Array.isArray(this.activeDivs)) ? this.activeDivs[index] : null;
     }
 
-    getActiveMessagePrefixElement(modelId) {
-        const element = this.getActiveMessageElement(modelId);
+    getActiveMessagePrefixElement(modelId, options = {}) {
+        const element = this.getActiveMessageElement(modelId, options);
         if (!element) return null;
         
         const wrappers = element.querySelectorAll('.history-prefix-wrapper');
@@ -1494,8 +1497,8 @@ export class SidepanelChatUI extends ChatUI {
         if (element) element.dataset.displayName = name;
     }
 
-    addManualAbortButton(modelId, onAbort) {
-        const element = this.getActiveMessagePrefixElement(modelId);
+    addManualAbortButton(modelId, onAbort, options = {}) {
+        const element = this.getActiveMessagePrefixElement(modelId, options);
         if (!element) return;
         
         const button = this.createRemoveButton(onAbort);
@@ -1504,8 +1507,8 @@ export class SidepanelChatUI extends ChatUI {
         element.appendChild(button);
     }
 
-    removeManualAbortButton(modelId) {
-        const button = this.getActiveMessagePrefixElement(modelId)?.querySelector('.manual-abort-button');
+    removeManualAbortButton(modelId, options = {}) {
+        const button = this.getActiveMessagePrefixElement(modelId, options)?.querySelector('.manual-abort-button');
         if (button) button.remove();
     }
 }

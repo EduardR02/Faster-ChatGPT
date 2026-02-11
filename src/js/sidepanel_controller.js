@@ -55,12 +55,15 @@ export class SidepanelController {
         let displayModelName = modelId;
         let apiOptions = this.getApiOptions();
         let wasManuallyAborted = false;
+        const abortButtonOptions = mode === 'collector'
+            ? { councilTarget: 'collector' }
+            : (mode === 'council' ? { councilTarget: 'row' } : {});
 
         this.chatCore.initThinkingChat();
         this.chatUI.addManualAbortButton(modelId, () => {
             wasManuallyAborted = true;
             abortController.abort();
-        });
+        }, abortButtonOptions);
 
         // Handle local model specific configuration
         if (this.api.getProviderName(modelId) === 'llamacpp') {
@@ -103,7 +106,7 @@ export class SidepanelController {
             }
         } finally {
             tokenCounter.updateLifetimeTokens();
-            this.chatUI.removeManualAbortButton(modelId);
+            this.chatUI.removeManualAbortButton(modelId, abortButtonOptions);
             
             if (mode === 'collector') {
                 streamWriter.finalizeCurrentPart();
@@ -618,7 +621,7 @@ export class SidepanelController {
         this.chatUI.setTextareaText('');
         this.handleDefaultArenaChoice();
 
-        this.chatCore.addUserMessage(userInputText);
+        const saveUserMessagePromise = this.chatCore.addUserMessage(userInputText);
         
         const messageIndex = this.chatCore.getLength() - 1;
         const latestUserMessage = this.chatCore.getLatestMessage();
@@ -630,8 +633,11 @@ export class SidepanelController {
 
         this.chatUI.removeRegenerateButtons(); 
         this.chatUI.removeCurrentRemoveMediaButtons();
-        
-        this.initApiCall();
+
+        void saveUserMessagePromise;
+        queueMicrotask(() => {
+            void this.initApiCall();
+        });
     }
 
     collectPendingUserMessage() {
