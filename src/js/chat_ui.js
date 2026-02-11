@@ -25,8 +25,7 @@ const UNICODE = {
     TRIANGLE: '\u{25B6}',        // ▶ Collapsible toggle
     CONTINUE: '\u{2197}',        // ↗ Continue conversation
     REMOVE: '\u{2715}',          // ✕ Remove/close button
-    ELLIPSIS: '\u{22EF}',        // ⋯ Horizontal ellipsis
-    HOOK_ARROW: '\u{21AA}'       // ↪ Linked chat indicator
+    ELLIPSIS: '\u{22EF}'         // ⋯ Horizontal ellipsis
 };
 
 /**
@@ -448,26 +447,8 @@ class ChatUI {
                                    (this.activeDivs?.dataset?.messageIndex === String(index));
 
         if (isCurrentlyStreaming && !document.hidden) {
-            const collectorStatus = message.council?.collector_status;
             const meta = oldBlock.querySelector('.council-meta');
             const responseKeys = Object.keys(message.council?.responses || {});
-
-            // Update row content (status pills removed as per new design)
-            responseKeys.forEach(modelId => {
-                const row = oldBlock.querySelector(`.council-row[data-model-id="${modelId}"]`);
-                if (row) {
-                    const assistantMessage = row.querySelector('.assistant-message');
-                    if (assistantMessage) {
-                        const parts = message.council.responses[modelId].parts || [];
-                        const messageWrapper = assistantMessage.querySelector('.message-wrapper');
-                        if (messageWrapper) {
-                            // Simple update: if content changed, we might need more complex diffing, 
-                            // but usually council responses are small and updated once.
-                            // For now, let's just ensure the model name is correct.
-                        }
-                    }
-                }
-            });
 
             // Update meta counter
             if (meta) {
@@ -775,7 +756,6 @@ export class SidepanelChatUI extends ChatUI {
             shouldScroll: true,
             isScrollActive: false,
             lastScrollTop: 0,
-            inputWrapper: document.querySelector(options.inputWrapperId || '.textarea-wrapper'),
             textarea: document.querySelector('.textarea-wrapper textarea'),
             _settingCallbacks: []
         });
@@ -1548,8 +1528,7 @@ export class HistoryChatUI extends ChatUI {
             requestMoreSearch: null,
             paginator: this.createPaginator(),
             renderedIds: new Set(),
-            resultCategories: new Map(),
-            activeHighlights: []
+            resultCategories: new Map()
         });
 
         this.historyList.onscroll = () => {

@@ -8,6 +8,8 @@ const importFreshUiUtils = async (tag) => {
 };
 
 const originalMarkdownIt = globalThis.markdownit;
+const originalTemml = globalThis.temml;
+const originalTexmath = globalThis.texmath;
 
 const ensureRealMarkdownIt = async () => {
     if (typeof globalThis.markdownit === 'function') return;
@@ -19,6 +21,8 @@ const normalizeHtml = (html) => String(html).replace(/\s+/g, ' ').trim();
 
 afterAll(() => {
     globalThis.markdownit = originalMarkdownIt;
+    globalThis.temml = originalTemml;
+    globalThis.texmath = originalTexmath;
 });
 
 describe('updateTextfieldHeight', () => {
@@ -65,6 +69,25 @@ describe('updateTextfieldHeight', () => {
 });
 
 describe('formatContent', () => {
+    test('fallback: renders safe plain text when markdown-it is unavailable', async () => {
+        const previousMarkdownIt = globalThis.markdownit;
+        globalThis.markdownit = undefined;
+
+        try {
+            const { formatContent } = await importFreshUiUtils('formatContent-fallback-no-markdownit');
+            const html = formatContent('<b>unsafe</b>\nline 2\n\nhttps://example.com?q=1&x=2');
+
+            expect(html).toContain('<p>');
+            expect(html).toContain('&lt;b&gt;unsafe&lt;/b&gt;');
+            expect(html).toContain('<br>');
+            expect(html).toContain('target="_blank"');
+            expect(html).toContain('rel="noopener noreferrer"');
+            expect(html).not.toContain('<b>unsafe</b>');
+        } finally {
+            globalThis.markdownit = previousMarkdownIt;
+        }
+    });
+
     test('security: HTML disabled', async () => {
         await ensureRealMarkdownIt();
         const { formatContent } = await importFreshUiUtils('formatContent-html-disabled');
@@ -108,6 +131,52 @@ describe('formatContent', () => {
         const html = formatContent('**bold** *italic*');
         expect(html).toContain('<strong>');
         expect(html).toContain('<em>');
+    });
+
+    test('math fences include copyable source and pass trust=false to Temml', async () => {
+        await ensureRealMarkdownIt();
+
+        const previousTemml = globalThis.temml;
+        const previousTexmath = globalThis.texmath;
+        let texmathOptions = null;
+        const texmathSpy = (md, options) => {
+            texmathOptions = options;
+        };
+        const temmlSpy = {
+            renderToString: (source, options) => {
+                temmlSpy.lastCall = { source, options };
+                return `<math>${source}</math>`;
+            },
+            lastCall: null
+        };
+
+        globalThis.texmath = texmathSpy;
+        globalThis.temml = temmlSpy;
+
+        try {
+            const { formatContent } = await importFreshUiUtils('formatContent-math-fence-copy-source');
+            const html = formatContent(['```latex', 'a^2 + b^2 = c^2', '```'].join('\n'));
+
+            expect(html).toContain('<div class="code-container">');
+            expect(html).toContain('class="copy-source"');
+            expect(html).toContain('a^2 + b^2 = c^2');
+            expect(temmlSpy.lastCall?.options?.trust).toBe(false);
+            expect(texmathOptions?.katexOptions?.trust).toBe(false);
+        } finally {
+            globalThis.temml = previousTemml;
+            globalThis.texmath = previousTexmath;
+        }
+    });
+
+    test('preserves multiple spaces within paragraph output', async () => {
+        await ensureRealMarkdownIt();
+        const { formatContent } = await importFreshUiUtils('formatContent-preserves-multi-space');
+
+        const paragraphHtml = formatContent('alpha  beta');
+        const listHtml = formatContent('- item  value');
+
+        expect(paragraphHtml).toContain('<p>alpha  beta</p>');
+        expect(listHtml).toContain('item  value');
     });
 });
 
@@ -231,5 +300,20 @@ describe('IncrementalRenderer', () => {
         const full = formatContent(text);
 
         expect(normalizeHtml(inc)).toBe(normalizeHtml(full));
+    });
+
+    test('single-line \\[..\\] display math closes and allows stable split', async () => {
+        await ensureRealMarkdownIt();
+        const { IncrementalRenderer } = await importFreshUiUtils('incremental-display-math-single-line-close');
+
+        const renderer = new IncrementalRenderer();
+        const text = '\\[ E=mc^2 \\]\n\nNext paragraph';
+        const expectedSplit = text.indexOf('\n\n') + 2;
+
+        renderer.render(text);
+
+        expect(expectedSplit).toBeGreaterThan(1);
+        expect(renderer.stableLength).toBe(expectedSplit);
+        expect(renderer.stableHtml).not.toBe('');
     });
 });

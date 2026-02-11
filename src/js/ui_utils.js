@@ -1,6 +1,48 @@
 const copyIconSvg = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" class="icon-xs"><path fill-rule="evenodd" clip-rule="evenodd" d="M7 5C7 3.34315 8.34315 2 10 2H19C20.6569 2 22 3.34315 22 5V14C22 15.6569 20.6569 17 19 17H17V19C17 20.6569 15.6569 22 14 22H5C3.34315 22 2 20.6569 2 19V10C2 8.34315 3.34315 7 5 7H7V5ZM9 7H14C15.6569 7 17 8.34315 17 10V15H19C19.5523 15 20 14.5523 20 14V5C20 4.44772 19.5523 4 19 4H10C9.44772 4 9 4.44772 9 5V7ZM5 9C4.44772 9 4 9.44772 4 10V19C4 19.5523 4.44772 20 5 20H14C14.5523 20 15 19.5523 15 19V10C15 9.44772 14.5523 9 14 9H5Z" fill="currentColor"></path></svg>`;
 const createCopyBtn = () => `<button class="unset-button copy-code-button" aria-label="Copy" title="Copy">${copyIconSvg}</button>`;
 
+const escapeHtml = (text) => String(text)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+
+const linkifyEscapedText = (escapedText) => escapedText.replace(/https?:\/\/[^\s<]+/g, url => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`);
+
+const formatPlainParagraph = (text) => {
+    const escaped = escapeHtml(text);
+    const linked = linkifyEscapedText(escaped);
+    return `<p>${linked.replaceAll('\n', '<br>')}</p>`;
+};
+
+const formatPlainTextFallback = (message) => {
+    const text = String(message ?? '');
+    if (!text) return '<p></p>';
+
+    const segments = text.split('```');
+    const html = [];
+
+    for (let i = 0; i < segments.length; i += 1) {
+        const segment = segments[i];
+        const isCode = i % 2 === 1;
+
+        if (isCode) {
+            const escapedCode = escapeHtml(segment.trim());
+            html.push(`<div class="code-container">${createCopyBtn()}<pre class="code-style"><code>${escapedCode}</code></pre></div>`);
+            continue;
+        }
+
+        const paragraphs = segment.split(/\n{2,}/);
+        for (const paragraph of paragraphs) {
+            if (!paragraph) continue;
+            html.push(formatPlainParagraph(paragraph));
+        }
+    }
+
+    return html.length ? html.join('\n') : '<p></p>';
+};
+
 const normalizeFenceLang = (info) => {
     const lang = (info || '').trim().split(/\s+/)[0] || '';
     return lang.replace(/[^A-Za-z0-9_-]/g, '');
@@ -38,7 +80,10 @@ const getMarkdownRenderer = () => {
         md.use(globalThis.texmath, {
             engine: globalThis.temml,
             delimiters: ['dollars', 'brackets'],
-            katexOptions: { throwOnError: false }
+            katexOptions: {
+                throwOnError: false,
+                trust: false
+            }
         });
     }
 
@@ -55,7 +100,10 @@ const getMarkdownRenderer = () => {
 
         if (mathLangs.has(lang) && globalThis.temml) {
             try {
-                return `<div class="math-block">${globalThis.temml.renderToString(token.content.trim(), { displayMode: true, throwOnError: false })}</div>\n`;
+                const source = token.content.trim();
+                const escapedSource = md.utils.escapeHtml(source);
+                const mathHtml = globalThis.temml.renderToString(source, { displayMode: true, throwOnError: false, trust: false });
+                return `<div class="code-container">${createCopyBtn()}<div class="math-block">${mathHtml}</div><pre class="math-copy-source" hidden><code class="copy-source">${escapedSource}</code></pre></div>\n`;
             } catch (_) {
                 // fallthrough to code block
             }
@@ -79,6 +127,7 @@ const getMarkdownRenderer = () => {
  */
 export function formatContent(message) {
     const md = getMarkdownRenderer();
+    if (!md) return formatPlainTextFallback(message);
     return md.render(String(message ?? ''));
 }
 
@@ -95,6 +144,11 @@ export class IncrementalRenderer {
     render(fullText) {
         const text = String(fullText ?? '');
         const md = getMarkdownRenderer();
+
+        if (!md) {
+            this.reset();
+            return formatPlainTextFallback(text);
+        }
 
         if (this.stableLength > text.length) {
             this.reset();
@@ -118,8 +172,13 @@ export class IncrementalRenderer {
         let inDisplayMath = false;
         let lastSplit = 0;
         let i = 0;
+        let justOpenedDisplayMathAt = -1;
 
         while (i < text.length) {
+            if (justOpenedDisplayMathAt >= 0 && i > justOpenedDisplayMathAt) {
+                justOpenedDisplayMathAt = -1;
+            }
+
             if (i === 0 || text[i - 1] === '\n') {
                 let lineStart = i;
                 let spaces = 0;
@@ -164,15 +223,32 @@ export class IncrementalRenderer {
                     }
                 }
 
-                // Display math detection ($$ and \[ / \] at line start, outside code fences).
+                // Display math opening detection ($$ and \[ at line start, outside code fences).
                 if (!inFence) {
-                    if (ch === '$' && lineStart + 1 < text.length && text[lineStart + 1] === '$') {
-                        inDisplayMath = !inDisplayMath;
-                    } else if (ch === '\\' && lineStart + 1 < text.length) {
+                    if (!inDisplayMath && ch === '$' && lineStart + 1 < text.length && text[lineStart + 1] === '$') {
+                        inDisplayMath = true;
+                        justOpenedDisplayMathAt = lineStart;
+                    } else if (!inDisplayMath && ch === '\\' && lineStart + 1 < text.length) {
                         const next = text[lineStart + 1];
-                        if (next === '[') inDisplayMath = true;
-                        else if (next === ']') inDisplayMath = false;
+                        if (next === '[') {
+                            inDisplayMath = true;
+                            justOpenedDisplayMathAt = lineStart;
+                        }
                     }
+                }
+            }
+
+            if (!inFence && inDisplayMath && i !== justOpenedDisplayMathAt) {
+                if (text[i] === '\\' && i + 1 < text.length && text[i + 1] === ']') {
+                    inDisplayMath = false;
+                    i += 1;
+                    continue;
+                }
+
+                if (text[i] === '$' && i + 1 < text.length && text[i + 1] === '$') {
+                    inDisplayMath = false;
+                    i += 1;
+                    continue;
                 }
             }
 
@@ -194,7 +270,8 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
         const copyButton = event.target.closest('.copy-code-button');
         if (!copyButton || copyButton.disabled) return;
 
-        const codeText = copyButton.closest('.code-container')?.querySelector('code')?.textContent;
+        const codeContainer = copyButton.closest('.code-container');
+        const codeText = codeContainer?.querySelector('.copy-source')?.textContent ?? codeContainer?.querySelector('code')?.textContent;
         if (codeText && navigator?.clipboard?.writeText) {
             navigator.clipboard.writeText(codeText).then(() => {
                 copyButton.classList.add('copied');

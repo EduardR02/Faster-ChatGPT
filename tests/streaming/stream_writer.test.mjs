@@ -1,4 +1,4 @@
-import { describe, test, expect, spyOn, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, spyOn } from 'bun:test';
 import { StreamWriterSimple, StreamWriter } from '../../src/js/StreamWriter.js';
 
 // Mock DOM environment minimally
@@ -338,17 +338,23 @@ describe('StreamWriter (Smooth)', () => {
         expect(writer.contentQueue).toEqual(['chunk-one', 'chunk-two']);
     });
 
-    test('queues post-thought content in chunk queue during pending switch', () => {
+    test('keeps thought and answer content separated across transition', async () => {
         const div = createMockDiv();
         const nextDiv = createMockDiv();
-        const writer = new TestStreamWriter(div, () => nextDiv, () => {}, 120000);
+        const writer = new TestStreamWriter(div, () => nextDiv, () => {}, 1000000);
 
         writer.setThinkingModel();
         writer.processContent('thought', true);
         writer.processContent('result', false);
 
-        expect(writer.pendingSwitch).toBe(true);
-        expect(writer.pendingQueue).toEqual(['result']);
+        await waitForProcessing(writer);
+
+        expect(writer.parts).toHaveLength(2);
+        expect(writer.parts[0].type).toBe('thought');
+        expect(writer.parts[1].type).toBe('text');
+        expect(div.textContent).toContain('thought');
+        expect(div.textContent).not.toContain('result');
+        expect(nextDiv.textContent).toContain('result');
     });
 
     test('animates content over time', async () => {
@@ -514,5 +520,38 @@ describe('StreamWriter (Smooth)', () => {
         expect(writer.parts[1].content).toBe('answer 1');
         expect(writer.parts[2].content).toBe('thinking 2');
         expect(writer.parts[3].content).toBe('answer 2');
+    });
+
+    test('preserves all content across multiple queued transitions', async () => {
+        const firstDiv = createMockDiv();
+        const renderedDivs = [firstDiv];
+        const produceNext = () => {
+            const next = createMockDiv();
+            renderedDivs.push(next);
+            return next;
+        };
+        const writer = new TestStreamWriter(firstDiv, produceNext, () => {}, 1);
+
+        writer.setThinkingModel();
+        writer.processContent('thought 1', true);
+        writer.processContent('text 1', false);
+        writer.processContent('thought 2', true);
+        writer.processContent('text 2', false);
+
+        writer.charDelay = 0.01;
+        await waitForProcessing(writer, 2000);
+        writer.finalizeCurrentPart();
+
+        expect(writer.parts).toHaveLength(4);
+        expect(writer.parts[0].content).toBe('thought 1');
+        expect(writer.parts[1].content).toBe('text 1');
+        expect(writer.parts[2].content).toBe('thought 2');
+        expect(writer.parts[3].content).toBe('text 2');
+
+        expect(renderedDivs).toHaveLength(4);
+        expect(renderedDivs[0].textContent).toContain('thought 1');
+        expect(renderedDivs[1].textContent).toContain('text 1');
+        expect(renderedDivs[2].textContent).toContain('thought 2');
+        expect(renderedDivs[3].textContent).toContain('text 2');
     });
 });

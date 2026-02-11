@@ -1122,14 +1122,6 @@ p {
   align-items: center;
 }
 
-.council-collector [data-council-collector-status="pending"] .message-content {
-  opacity: 0.6;
-}
-
-.council-collector [data-council-collector-status="error"] .message-content {
-  color: #ef596f;
-}
-
 /* Council status pill - shared styles */
 .council-status {
   text-transform: uppercase;
@@ -1223,6 +1215,7 @@ p {
 
 .message-content p {
   margin: 0;
+  white-space: pre-wrap;
 }
 
 .message-content p + p {
@@ -1256,6 +1249,7 @@ p {
 
 .message-content li {
   margin: 0.15em 0;
+  white-space: pre-wrap;
 }
 
 .message-content blockquote {

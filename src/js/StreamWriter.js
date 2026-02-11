@@ -60,7 +60,8 @@ export class StreamWriterSimple {
             bufferedContent: '',
             fullText: '',
             renderer: new IncrementalRenderer(),
-            renderScheduled: false
+            renderScheduled: false,
+            useMarkdown: canLiveRenderMarkdown()
         });
     }
 
@@ -75,9 +76,9 @@ export class StreamWriterSimple {
     }
 
     _handleTransition(content, isThought) {
-        if (!content) return 'none';
+        if (!content) return;
 
-        if (isThought !== this.isThoughtEnd) return 'none';
+        if (isThought !== this.isThoughtEnd) return;
 
         this.isThoughtEnd = !isThought;
         const nextType = isThought ? 'thought' : 'text';
@@ -91,18 +92,17 @@ export class StreamWriterSimple {
             if (isThought) this.contentDiv.classList.add('thoughts');
             else this.contentDiv.classList.remove('thoughts');
             this.parts.push({ type: nextType, content: [] });
-            return 'discarded';
+            return;
         }
 
         this._onNonEmptySwitch(isThought, currentPart);
         if (this.parts.at(-1)?.type !== nextType) {
             this.parts.push({ type: nextType, content: [] });
         }
-        return 'switched';
     }
 
     _renderToDOM() {
-        if (!canLiveRenderMarkdown()) return;
+        if (!this.useMarkdown) return;
         this.contentDiv.innerHTML = this.renderer.render(this.fullText);
         this.scrollFunc();
     }
@@ -195,7 +195,7 @@ export class StreamWriterSimple {
     flushBufferedContent() {
         if (!this.bufferedContent) return;
 
-        if (canLiveRenderMarkdown()) {
+        if (this.useMarkdown) {
             this.bufferedContent = '';
             this._renderToDOM();
             return;
@@ -268,39 +268,43 @@ export class StreamWriter extends StreamWriterSimple {
         Object.assign(this, {
             contentQueue: [],
             contentOffset: 0,
+            consumedChunkCount: 0,
             isProcessing: false,
             charDelay: 12000 / wordsPerMinute,
             accumulatedChars: 0,
             lastFrameTime: 0,
             pendingFooter: null,
-            pendingSwitch: false,
-            pendingQueue: []
+            transitionQueue: []
         });
     }
 
     setThinkingModel() {
         super.setThinkingModel();
-        this.pendingSwitch = false;
-        this.pendingQueue = [];
+        this.transitionQueue = [];
+        this.contentQueue = [];
         this.contentOffset = 0;
+        this.consumedChunkCount = 0;
     }
 
     _onNonEmptySwitch(isThought, currentPart) {
-        this.pendingSwitch = true;
         if (currentPart) {
             currentPart.content = getPartContentText(currentPart);
         }
+
+        this.transitionQueue.push({
+            boundaryIndex: this.consumedChunkCount + this.contentQueue.length,
+            isThought,
+            nextPartIndex: this.parts.length
+        });
     }
 
     _onDiscardReset() {
         this.fullText = '';
         this.renderer.reset();
-        if (this.pendingSwitch) {
-            this.pendingQueue = [];
-        } else {
-            this.contentQueue = [];
-            this.contentOffset = 0;
-        }
+        this.contentQueue = [];
+        this.contentOffset = 0;
+        this.consumedChunkCount = 0;
+        this.transitionQueue = [];
     }
 
     processContent(content, isThought = false) {
@@ -309,8 +313,7 @@ export class StreamWriter extends StreamWriterSimple {
         this._handleTransition(content, isThought);
 
         this.parts.at(-1).content.push(content);
-        const targetQueue = this.pendingSwitch ? this.pendingQueue : this.contentQueue;
-        targetQueue.push(content);
+        this.contentQueue.push(content);
 
         if (!this.isProcessing) {
             this.isProcessing = true;
@@ -328,6 +331,7 @@ export class StreamWriter extends StreamWriterSimple {
         while (this.contentQueue.length && this.contentOffset >= this.contentQueue[0].length) {
             this.contentQueue.shift();
             this.contentOffset = 0;
+            this.consumedChunkCount += 1;
         }
     }
 
@@ -341,6 +345,11 @@ export class StreamWriter extends StreamWriterSimple {
             this.normalizeActiveQueue();
             if (!this.contentQueue.length) break;
 
+            const nextTransition = this.transitionQueue[0];
+            if (nextTransition && this.contentOffset === 0 && this.consumedChunkCount === nextTransition.boundaryIndex) {
+                break;
+            }
+
             const current = this.contentQueue[0];
             const available = current.length - this.contentOffset;
 
@@ -349,6 +358,7 @@ export class StreamWriter extends StreamWriterSimple {
                 remaining -= available;
                 this.contentQueue.shift();
                 this.contentOffset = 0;
+                this.consumedChunkCount += 1;
                 continue;
             }
 
@@ -361,38 +371,46 @@ export class StreamWriter extends StreamWriterSimple {
         return chunks.join('');
     }
 
+    switchAtBoundaries(timestamp) {
+        let switched = false;
+
+        while (this.transitionQueue.length) {
+            this.normalizeActiveQueue();
+
+            const transition = this.transitionQueue[0];
+            if (this.contentOffset !== 0 || this.consumedChunkCount !== transition.boundaryIndex) break;
+
+            const previousPart = this.parts[transition.nextPartIndex - 1];
+            if (previousPart) this.updateTextContent(previousPart.content);
+
+            this.switchDiv(transition.isThought);
+            this.transitionQueue.shift();
+            switched = true;
+        }
+
+        if (switched) {
+            this.accumulatedChars = 0;
+            this.lastFrameTime = timestamp;
+        }
+    }
+
+    finalizeIfIdle() {
+        if (this.hasActiveQueueContent()) return false;
+
+        this.isProcessing = false;
+        if (this.pendingFooter) {
+            const { footer, resolve } = this.pendingFooter;
+            this.pendingFooter = null;
+            super.addFooter(footer).then(resolve);
+        }
+
+        return true;
+    }
+
     runAnimationLoop() {
         requestAnimationFrame(timestamp => {
-            // Handle switching to text div after thought queue is empty - must check BEFORE early exit
-            if (this.pendingSwitch && !this.hasActiveQueueContent()) {
-                this.pendingSwitch = false;
-                this.contentQueue = this.pendingQueue;
-                this.pendingQueue = [];
-                this.contentOffset = 0;
-
-                // Finalize previous thought part
-                const previousPart = this.parts.length >= 2 ? this.parts.at(-2) : null;
-                if (previousPart) {
-                    this.updateTextContent(previousPart.content);
-                }
-
-                this.switchDiv(this.parts.at(-1).type === 'thought');
-                
-                // Reset accumulated chars to prevent "clumped" start on new div
-                this.accumulatedChars = 0;
-                this.lastFrameTime = timestamp;
-            }
-
-            if (!this.hasActiveQueueContent()) {
-                this.isProcessing = false;
-                if (this.pendingFooter) {
-                    const { footer, resolve } = this.pendingFooter;
-                    this.pendingFooter = null;
-                    super.addFooter(footer).then(resolve);
-                }
-                
-                return;
-            }
+            this.switchAtBoundaries(timestamp);
+            if (this.finalizeIfIdle()) return;
 
             if (!this.lastFrameTime) this.lastFrameTime = timestamp;
 
@@ -404,8 +422,9 @@ export class StreamWriter extends StreamWriterSimple {
 
             if (charCount > 0) {
                 const chunk = this.consumeChars(charCount);
+                this.accumulatedChars += charCount - chunk.length;
                 if (chunk) {
-                    if (canLiveRenderMarkdown()) {
+                    if (this.useMarkdown) {
                         this.fullText += chunk;
                         this._renderToDOM();
                     } else {
@@ -414,6 +433,9 @@ export class StreamWriter extends StreamWriterSimple {
                     }
                 }
             }
+
+            this.switchAtBoundaries(timestamp);
+            if (this.finalizeIfIdle()) return;
 
             this.lastFrameTime = timestamp;
             this.runAnimationLoop();
