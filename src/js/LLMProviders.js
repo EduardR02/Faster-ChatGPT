@@ -544,6 +544,9 @@ export class GeminiProvider extends BaseProvider {
         if (feature === 'thinking_toggle') {
             return model.includes('gemini-2.5') && model.includes('flash') && !model.includes('image');
         }
+        if (feature === 'web_search') {
+            return /gemini-[2-9]\.?\d*|gemini-\d{2,}/.test(model) && !model.includes('image');
+        }
         return super.supports(feature, model);
     }
 
@@ -598,6 +601,8 @@ export class GeminiProvider extends BaseProvider {
         const canToggle = this.supports('thinking_toggle', model);
         const isThinking = isGemini3 || isGemini25Pro || 
             (canToggle && (options.shouldThink ?? options.getShouldThink?.() ?? false));
+        const shouldWebSearch = (options.webSearch ?? options.getWebSearch?.() ?? false) &&
+            this.supports('web_search', model);
         
         if (isThinking && options.streamWriter) {
             options.streamWriter.setThinkingModel();
@@ -644,6 +649,10 @@ export class GeminiProvider extends BaseProvider {
 
         if (hasSystem) {
             body.systemInstruction = { parts: formatted[0].parts };
+        }
+
+        if (shouldWebSearch) {
+            body.tools = [{ google_search: {} }];
         }
 
         return this.buildApiRequest(url, body);

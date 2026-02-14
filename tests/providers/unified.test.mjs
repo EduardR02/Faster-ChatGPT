@@ -543,6 +543,42 @@ describe('GeminiProvider - Specifics', () => {
         expect(body.contents[0].role).toBe('user');
         expect(body.contents[0].parts[0].text).toBe('hello');
     });
+
+    test('web search support excludes image models', () => {
+        expect(provider.supports('web_search', 'gemini-3-pro-preview')).toBe(true);
+        expect(provider.supports('web_search', 'gemini-3-flash-preview')).toBe(true);
+        expect(provider.supports('web_search', 'gemini-2.5-flash-lite')).toBe(true);
+        expect(provider.supports('web_search', 'gemini-2.5-flash-image-preview')).toBe(false);
+        expect(provider.supports('web_search', 'gemini-3-pro-image-preview')).toBe(false);
+        expect(provider.supports('web_search', 'gemini-1.5-pro')).toBe(false);
+    });
+
+    test('createRequest adds google search tool when enabled', () => {
+        const messages = [
+            { role: RoleEnum.user, parts: [{ type: 'text', content: 'latest news' }] }
+        ];
+        const [_, withSearchReq] = provider.createRequest({
+            model: 'gemini-3-flash-preview',
+            messages,
+            stream: false,
+            options: { webSearch: true },
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 1000 }
+        });
+        const withSearchBody = JSON.parse(withSearchReq.body);
+        expect(withSearchBody.tools).toEqual([{ google_search: {} }]);
+
+        const [__, imageReq] = provider.createRequest({
+            model: 'gemini-2.5-flash-image-preview',
+            messages,
+            stream: false,
+            options: { webSearch: true },
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 1000 }
+        });
+        const imageBody = JSON.parse(imageReq.body);
+        expect(imageBody.tools).toBeUndefined();
+    });
 });
 
 describe('DeepSeekProvider - Specifics', () => {
