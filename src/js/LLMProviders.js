@@ -31,7 +31,7 @@ export const MaxTokens = {
 export const DEFAULT_MODELS = {
     openai: { "gpt-5.2": "GPT-5.2", "gpt-5.3-codex": "GPT-5.3 Codex", "gpt-5.2-mini": "GPT-5.2 mini" },
     anthropic: { "claude-opus-4-6": "Claude Opus 4.6", "claude-4.5-opus": "Claude 4.5 Opus", "claude-sonnet-4-5": "Claude 4.5 Sonnet", "claude-4.5-haiku": "Claude 4.5 Haiku" },
-    gemini: { "gemini-3-pro-preview": "Gemini 3 Pro", "gemini-3-flash-preview": "Gemini 3 Flash", "gemini-3-pro-image-preview": "Nano Banana Pro", "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite", "gemini-2.5-flash-image-preview": "Nano Banana" },
+    gemini: { "gemini-3-pro-preview": "Gemini 3 Pro", "gemini-3-flash-preview": "Gemini 3 Flash", "gemini-3-pro-image-preview": "Nano Banana Pro", "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite", "gemini-3.1-flash-image-preview": "Nano Banana 2" },
     deepseek: { "deepseek-chat": "DeepSeek V3.2", "deepseek-reasoner": "DeepSeek V3.2 thinking" },
     mistral: { "mistral-large-latest": "Mistral Large", "mistral-small-latest": "Mistral Small" },
     grok: { "grok-4": "Grok 4", "grok-4.1-fast-reasoning": "Grok 4.1 Fast Reasoning" },
@@ -682,6 +682,7 @@ export class GeminiProvider extends BaseProvider {
             generationConfig: { 
                 temperature: Math.min(settings.temperature, this.maxTemp), 
                 maxOutputTokens: Math.min(settings.max_tokens, this.getGeminiMaxTokens(model)), 
+                responseModalities: ["IMAGE"],
                 ...(Object.keys(imageConfig).length && { imageConfig }) 
             } 
         };

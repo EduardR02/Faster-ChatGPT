@@ -1,5 +1,5 @@
 import { describe, test, expect, mock } from 'bun:test';
-import { Providers, RoleEnum } from '../../src/js/LLMProviders.js';
+import { Providers, RoleEnum, DEFAULT_MODELS } from '../../src/js/LLMProviders.js';
 
 // Helper to create a standard conversation
 const createConversation = () => [
@@ -469,6 +469,11 @@ describe('GeminiProvider - Specifics', () => {
     const provider = Providers.gemini;
     const model = 'gemini-1.5-pro';
 
+    test('default image model list includes Nano Banana 2', () => {
+        expect(DEFAULT_MODELS.gemini['gemini-3.1-flash-image-preview']).toBe('Nano Banana 2');
+        expect(DEFAULT_MODELS.gemini['gemini-2.5-flash-image-preview']).toBeUndefined();
+    });
+
     test('image handling - inlineData', () => {
         const messages = [
             { 
@@ -578,6 +583,22 @@ describe('GeminiProvider - Specifics', () => {
         });
         const imageBody = JSON.parse(imageReq.body);
         expect(imageBody.tools).toBeUndefined();
+    });
+
+    test('image request always sets IMAGE response modality', () => {
+        const [_, options] = provider.createImageRequest({
+            model: 'gemini-3-pro-image-preview',
+            messages: [{ role: RoleEnum.user, parts: [{ type: 'text', content: 'draw a cat' }] }],
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 1000 },
+            options: {
+                getImageAspectRatio: () => '16:9',
+                getImageResolution: () => '2K'
+            }
+        });
+        const body = JSON.parse(options.body);
+
+        expect(body.generationConfig.responseModalities).toEqual(['IMAGE']);
     });
 });
 
