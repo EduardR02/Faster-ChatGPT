@@ -131,10 +131,13 @@ export class SidepanelChatCore extends ChatCore {
 
         const images = [];
         const files = [];
+        const audio = [];
         
         Object.values(this.pendingMedia).forEach(item => {
             if (item.type === 'image') {
                 images.push(item.media);
+            } else if (item.type === 'audio') {
+                audio.push(item.media);
             } else {
                 files.push(item.media);
             }
@@ -145,6 +148,9 @@ export class SidepanelChatCore extends ChatCore {
         }
         if (files.length > 0) {
             message.files = files;
+        }
+        if (audio.length > 0) {
+            message.audio = audio;
         }
         
         this.pendingMedia = {};
@@ -443,6 +449,9 @@ export class SidepanelChatCore extends ChatCore {
                 if (message.files) {
                     normalized.files = message.files;
                 }
+                if (message.audio) {
+                    normalized.audio = message.audio;
+                }
                 return normalized;
             }
             
@@ -545,6 +554,7 @@ export class SidepanelChatCore extends ChatCore {
 
         if (msgA.files?.length !== msgB.files?.length) return false;
         if (msgA.images?.length !== msgB.images?.length) return false;
+        if (msgA.audio?.length !== msgB.audio?.length) return false;
 
         if (msgA.files) {
             for (let i = 0; i < msgA.files.length; i++) {
@@ -557,6 +567,16 @@ export class SidepanelChatCore extends ChatCore {
         if (msgA.images) {
             for (let i = 0; i < msgA.images.length; i++) {
                 if (msgA.images[i] !== msgB.images[i]) return false;
+            }
+        }
+
+        if (msgA.audio) {
+            for (let i = 0; i < msgA.audio.length; i++) {
+                const audioA = typeof msgA.audio[i] === 'string' ? { name: '', data: msgA.audio[i] } : (msgA.audio[i] || {});
+                const audioB = typeof msgB.audio[i] === 'string' ? { name: '', data: msgB.audio[i] } : (msgB.audio[i] || {});
+                if (audioA.name !== audioB.name || audioA.data !== audioB.data) {
+                    return false;
+                }
             }
         }
 
@@ -593,7 +613,7 @@ export class SidepanelChatCore extends ChatCore {
         };
         this.realizeMedia(message);
         
-        const hasMedia = message.images?.length || message.files?.length;
+        const hasMedia = message.images?.length || message.files?.length || message.audio?.length;
         return (text || hasMedia) ? message : null;
     }
 }

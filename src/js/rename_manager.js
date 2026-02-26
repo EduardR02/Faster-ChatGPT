@@ -86,7 +86,8 @@ export class RenameManager {
             {
                 role: 'user',
                 parts: [{ type: 'text', content: body }],
-                ...(userMessage.files?.length && { files: userMessage.files })
+                ...(userMessage.files?.length && { files: userMessage.files }),
+                ...(userMessage.audio?.length && { audio: userMessage.audio })
             }
         ];
     }

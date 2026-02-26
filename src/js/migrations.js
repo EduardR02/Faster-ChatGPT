@@ -167,6 +167,7 @@ export class Migrations {
             contents: [[{ type: 'text', content: message.content }]],
             ...(message.images && { images: message.images }),
             ...(message.files && { files: message.files }),
+            ...(message.audio && { audio: message.audio }),
             timestamp: message.timestamp
         };
     }

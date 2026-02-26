@@ -620,6 +620,9 @@ class SidepanelApp {
             if (message.images) {
                 controller.appendPendingMedia(message.images, 'image');
             }
+            if (message.audio) {
+                controller.appendPendingMedia(message.audio, 'audio');
+            }
             if (message.files) {
                 controller.appendPendingMedia(message.files, 'file');
             }
@@ -740,6 +743,7 @@ class SidepanelApp {
     initTextareaImageHandling() {
         this.dragDropManager = new DragDropManager(this.textInput, {
             onImage: base64String => this.getActiveController()?.appendPendingMedia([base64String], 'image'),
+            onAudio: (base64String, fileName) => this.getActiveController()?.appendPendingMedia([{ data: base64String, name: fileName }], 'audio'),
             onFile: fileObject => this.getActiveController()?.appendPendingMedia([fileObject], 'file'),
             onText: droppedText => this.getActiveChatUI()?.setTextareaText(droppedText),
             onError: errorMessage => this.getActiveChatUI()?.addErrorMessage(this.apiManager.getUiErrorMessage(errorMessage))

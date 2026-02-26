@@ -67,6 +67,10 @@ export class DragDropManager {
             if (file.type.startsWith('image/')) { 
                 fileReader.onload = event => this.onImage(event.target.result); 
                 fileReader.readAsDataURL(file); 
+            } else if (file.type.startsWith('audio/')) {
+                fileReader.onload = event => this.onAudio(event.target.result, file.name);
+                fileReader.onerror = event => this.onError(event);
+                fileReader.readAsDataURL(file);
             } else if (!file.type.startsWith('video/')) { 
                 fileReader.onload = event => this.onFile({ name: file.name, content: event.target.result }); 
                 fileReader.onerror = event => this.onError(event); 

@@ -560,7 +560,7 @@ export class GeminiProvider extends BaseProvider {
         return messages.map(message => {
             const parts = [];
             (message.parts || []).forEach(part => {
-                if (part.type === 'image' && part.content) {
+                if ((part.type === 'image' || part.type === 'audio') && part.content) {
                     const entry = { 
                         inline_data: { 
                             mime_type: this.getBase64MediaType(part.content), 
@@ -584,6 +584,20 @@ export class GeminiProvider extends BaseProvider {
                                 mime_type: this.getBase64MediaType(imageUrl), 
                                 data: this.simpleBase64Splitter(imageUrl) 
                             } 
+                        });
+                    }
+                });
+            }
+
+            if (message.audio) {
+                message.audio.forEach(audioItem => {
+                    const audioData = typeof audioItem === 'string' ? audioItem : audioItem?.data;
+                    if (audioData) {
+                        parts.push({
+                            inline_data: {
+                                mime_type: this.getBase64MediaType(audioData),
+                                data: this.simpleBase64Splitter(audioData)
+                            }
                         });
                     }
                 });

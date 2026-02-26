@@ -486,6 +486,42 @@ describe('GeminiProvider - Specifics', () => {
         });
     });
 
+    test('audio handling from top-level message.audio', () => {
+        const messages = [
+            {
+                role: RoleEnum.user,
+                parts: [{ type: 'text', content: 'Transcribe this.' }],
+                audio: [{ name: 'clip.mp3', data: 'data:audio/mp3;base64,QUJDRA==' }]
+            }
+        ];
+        const formatted = provider.formatMessages(messages);
+        expect(formatted[0].parts).toContainEqual({
+            inline_data: {
+                mime_type: 'audio/mp3',
+                data: 'QUJDRA=='
+            }
+        });
+    });
+
+    test('audio handling from parts with type audio', () => {
+        const messages = [
+            {
+                role: RoleEnum.user,
+                parts: [
+                    { type: 'audio', content: 'data:audio/wav;base64,VEVTVA==', thoughtSignature: 'sig-audio' }
+                ]
+            }
+        ];
+        const formatted = provider.formatMessages(messages);
+        expect(formatted[0].parts).toContainEqual({
+            inline_data: {
+                mime_type: 'audio/wav',
+                data: 'VEVTVA=='
+            },
+            thoughtSignature: 'sig-audio'
+        });
+    });
+
     test('thoughts excluded from formatted payloads', () => {
         const messages = [
             { 

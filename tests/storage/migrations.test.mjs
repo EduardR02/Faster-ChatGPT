@@ -76,6 +76,19 @@ describe('Migrations.transformMessages', () => {
     expect(transformed.files).toEqual([{ name: 'test.txt', content: 'hello' }]);
   });
 
+  test('preserves audio attachments', () => {
+    const v1Message = {
+      chatId: 1,
+      role: 'user',
+      content: 'Transcribe this',
+      audio: [{ name: 'note.wav', data: 'data:audio/wav;base64,QUJD' }]
+    };
+
+    const transformed = Migrations.transformNormalMessage(v1Message);
+
+    expect(transformed.audio).toEqual([{ name: 'note.wav', data: 'data:audio/wav;base64,QUJD' }]);
+  });
+
   test('empty array returns empty array', () => {
     expect(Migrations.transformMessages([])).toEqual([]);
   });

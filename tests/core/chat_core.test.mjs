@@ -116,6 +116,20 @@ describe('SidepanelChatCore Integration', () => {
         expect(apiMessages[0].images).toEqual([imageData]);
     });
 
+    test('audio handling and persistence', async () => {
+        const audioData = { name: 'sample.mp3', data: 'data:audio/mp3;base64,QUJDRA==' };
+        core.appendMedia(audioData, 'audio');
+        await core.addUserMessage('Listen to this');
+
+        const chatId = core.getChatId();
+        const loaded = await storage.loadChat(chatId);
+
+        expect(loaded.messages[0].audio).toEqual([audioData]);
+
+        const apiMessages = core.getMessagesForAPI();
+        expect(apiMessages[0].audio).toEqual([audioData]);
+    });
+
     test('thinking mode state transitions and prompt injection', async () => {
         // Toggle thinking mode on
         state.toggleThinkingMode();
@@ -276,6 +290,34 @@ describe('SidepanelChatCore Integration', () => {
                 role: 'user',
                 contents: [[{ content: 'Hello' }]]
                 // files missing
+            };
+            expect(core.isUserMessageEqual(msgA, msgB)).toBe(false);
+        });
+
+        test('compares messages with same audio metadata', () => {
+            const msgA = {
+                role: 'user',
+                contents: [[{ content: 'Hello' }]],
+                audio: [{ name: 'clip.mp3', data: 'data:audio/mp3;base64,AAAA' }]
+            };
+            const msgB = {
+                role: 'user',
+                contents: [[{ content: 'Hello' }]],
+                audio: [{ name: 'clip.mp3', data: 'data:audio/mp3;base64,AAAA' }]
+            };
+            expect(core.isUserMessageEqual(msgA, msgB)).toBe(true);
+        });
+
+        test('detects different audio payloads', () => {
+            const msgA = {
+                role: 'user',
+                contents: [[{ content: 'Hello' }]],
+                audio: [{ name: 'clip.mp3', data: 'data:audio/mp3;base64,AAAA' }]
+            };
+            const msgB = {
+                role: 'user',
+                contents: [[{ content: 'Hello' }]],
+                audio: [{ name: 'clip.mp3', data: 'data:audio/mp3;base64,BBBB' }]
             };
             expect(core.isUserMessageEqual(msgA, msgB)).toBe(false);
         });

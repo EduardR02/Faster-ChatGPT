@@ -650,6 +650,8 @@ export class SidepanelController {
             const mediaId = this.chatCore.appendMedia(mediaItem, type);
             if (type === 'image') {
                 this.chatUI.appendImage(mediaItem, () => this.chatCore.removeMedia(mediaId));
+            } else if (type === 'audio') {
+                this.chatUI.appendAudio(mediaItem, () => this.chatCore.removeMedia(mediaId));
             } else {
                 this.chatUI.appendFile(mediaItem, () => this.chatCore.removeMedia(mediaId));
             }

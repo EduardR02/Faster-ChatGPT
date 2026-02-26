@@ -1493,6 +1493,176 @@ p {
   display: block;
 }
 
+.audio-content {
+  position: relative;
+  width: fit-content;
+  min-width: 300px;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4em;
+  background: #17141D;
+  border-radius: 1em;
+  padding: 0.7em 1em;
+}
+
+.audio-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1em;
+}
+
+.audio-bottom-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+}
+
+.audio-play-btn {
+  border: none;
+  background: #282c34;
+  color: #d4d4d4;
+  cursor: pointer;
+  font-size: 1em;
+  width: 1.8em;
+  height: 1.8em;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: color 0.2s ease-out, background 0.2s ease-out;
+}
+
+.audio-play-btn:hover {
+  color: #61afef;
+  background: #4b5363;
+}
+
+.audio-play-btn:active {
+  color: #56b6c2;
+}
+
+.audio-time {
+  font-size: 0.8em;
+  color: #abb2bf;
+  white-space: nowrap;
+}
+
+.audio-track {
+  flex: 1;
+  min-width: 100px;
+  height: 7px;
+  background: #4b5363;
+  border-radius: 4px;
+  cursor: pointer;
+  position: relative;
+}
+
+.audio-track-fill {
+  width: 0%;
+  height: 100%;
+  background: #61afef;
+  border-radius: 4px;
+  transition: width 0.1s linear;
+  pointer-events: none;
+  position: relative;
+}
+
+.audio-track-fill::after {
+  content: '';
+  position: absolute;
+  right: -6px;
+  top: -2.5px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #61afef;
+  opacity: 0;
+  transition: opacity 0.15s ease-out;
+  box-shadow: 0 0 4px rgba(97, 175, 239, 0.5);
+}
+
+.audio-content:hover .audio-track-fill::after {
+  opacity: 1;
+}
+
+.audio-name {
+  font-size: 0.8em;
+  color: #61afef;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.audio-vol {
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+  flex-shrink: 0;
+}
+
+.audio-vol-btn {
+  border: none;
+  background: none;
+  color: #d4d4d4;
+  cursor: pointer;
+  font-size: 0.85em;
+  padding: 0;
+  line-height: 1;
+  transition: color 0.2s ease-out;
+}
+
+.audio-vol-btn:hover {
+  color: #61afef;
+}
+
+.audio-vol-track {
+  width: 60px;
+  height: 4px;
+  background: #4b5363;
+  border-radius: 2px;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.audio-vol-fill {
+  width: 100%;
+  height: 100%;
+  background: #61afef;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.audio-content .remove-file-button {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  opacity: 0;
+  background: rgba(239, 89, 111, 0.7);
+  color: #d4d4d4;
+  transition: opacity 0.2s ease-out, color 0.1s ease-out;
+  z-index: 1;
+  border-radius: 0.5rem;
+  padding: 1px 5px;
+  width: fit-content;
+  height: fit-content;
+}
+
+.audio-content:hover .remove-file-button {
+  opacity: 1;
+}
+
+.audio-content .remove-file-button:hover {
+  color: #ffffff;
+  background: rgba(239, 89, 111, 0.9);
+}
+
 .std-input {
   padding: 0.5rem;
   border-radius: 1rem;

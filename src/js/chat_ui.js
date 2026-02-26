@@ -19,6 +19,26 @@ export const isWithinBottomGrace = (element, thresholdPx = SCROLL_REENGAGE_PX) =
     return getDistanceFromBottom(element) <= thresholdPx;
 };
 
+export const normalizeAudioItem = (audioItem) => {
+    if (typeof audioItem === 'string') {
+        return { data: audioItem, name: 'Audio attachment' };
+    }
+    if (!audioItem || typeof audioItem !== 'object') {
+        return { data: '', name: 'Audio attachment' };
+    }
+    return {
+        data: audioItem.data || '',
+        name: audioItem.name || 'Audio attachment'
+    };
+};
+
+export const formatAudioTime = (seconds) => {
+    const safeSeconds = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
+    const minutes = Math.floor(safeSeconds / 60);
+    const remainder = safeSeconds % 60;
+    return `${minutes}:${String(remainder).padStart(2, '0')}`;
+};
+
 // Unicode character constants (for readability)
 const UNICODE = {
     REGEN_ARROW: '\u{27F3}',    // ↻ Regeneration indicator
@@ -60,7 +80,7 @@ class ChatUI {
     }
 
     createMessage(role, parts = [], options = {}) {
-        const { files, images, messageId, allowContinue = true, ...prefixOptions } = options;
+        const { files, images, audio, messageId, allowContinue = true, ...prefixOptions } = options;
         
         // Attach model info from the last part if available
         if (parts.length > 0 && parts.at(-1).model) {
@@ -94,6 +114,13 @@ class ChatUI {
         if (files) {
             files.forEach(file => {
                 messageWrapper.appendChild(this.createFileDisplay(file));
+            });
+        }
+
+        // Render audio
+        if (audio) {
+            audio.forEach(audioItem => {
+                messageWrapper.appendChild(this.createAudioDisplay(audioItem));
             });
         }
 
@@ -624,6 +651,189 @@ class ChatUI {
         return fileDiv;
     }
 
+    createAudioDisplay(audioItem, onRemove = null) {
+        const { data, name } = normalizeAudioItem(audioItem);
+        const audioDiv = createElementWithClass('div', 'audio-content');
+        const playButton = createElementWithClass('button', 'audio-play-btn', '\u{25B6}');
+        const timeLabel = createElementWithClass('span', 'audio-time', `${formatAudioTime(0)} / ${formatAudioTime(0)}`);
+        const track = createElementWithClass('div', 'audio-track');
+        const trackFill = createElementWithClass('div', 'audio-track-fill');
+        const nameLabel = createElementWithClass('span', 'audio-name', name);
+        const topRow = createElementWithClass('div', 'audio-top-row');
+        const bottomRow = createElementWithClass('div', 'audio-bottom-row');
+        const volSection = createElementWithClass('div', 'audio-vol');
+        const volButton = createElementWithClass('button', 'audio-vol-btn', '\u{1F50A}');
+        const volTrack = createElementWithClass('div', 'audio-vol-track');
+        const volFill = createElementWithClass('div', 'audio-vol-fill');
+        const audioElement = document.createElement('audio');
+
+        audioElement.preload = 'metadata';
+        audioElement.hidden = true;
+        if (data) {
+            audioElement.src = data;
+        }
+
+        playButton.type = 'button';
+        playButton.setAttribute('aria-label', 'Toggle audio playback');
+        volButton.type = 'button';
+        volButton.setAttribute('aria-label', 'Toggle audio mute');
+        track.appendChild(trackFill);
+        volTrack.appendChild(volFill);
+
+        const updatePlayIcon = () => {
+            playButton.textContent = audioElement.paused ? '\u{25B6}' : '\u{23F8}';
+        };
+
+        const updateTimeDisplay = () => {
+            const duration = Number.isFinite(audioElement.duration) && audioElement.duration > 0 ? audioElement.duration : 0;
+            const current = Number.isFinite(audioElement.currentTime) && audioElement.currentTime > 0 ? audioElement.currentTime : 0;
+            const progress = duration > 0 ? Math.min(current / duration, 1) * 100 : 0;
+
+            timeLabel.textContent = `${formatAudioTime(current)} / ${formatAudioTime(duration)}`;
+            trackFill.style.width = `${progress}%`;
+        };
+
+        const seekFromEvent = (event) => {
+            const duration = audioElement.duration;
+            if (!Number.isFinite(duration) || duration <= 0) return;
+
+            const rect = track.getBoundingClientRect();
+            if (!rect.width) return;
+
+            const pointerX = event.clientX ?? rect.left;
+            const clampedX = Math.min(Math.max(pointerX - rect.left, 0), rect.width);
+            audioElement.currentTime = (clampedX / rect.width) * duration;
+            updateTimeDisplay();
+        };
+
+        let isSeeking = false;
+        track.addEventListener('pointerdown', (event) => {
+            if (event.button !== undefined && event.button !== 0) return;
+            isSeeking = true;
+            if (track.setPointerCapture && event.pointerId !== undefined) {
+                track.setPointerCapture(event.pointerId);
+            }
+            seekFromEvent(event);
+        });
+
+        track.addEventListener('pointermove', (event) => {
+            if (!isSeeking) return;
+            seekFromEvent(event);
+        });
+
+        const stopSeeking = (event) => {
+            if (!isSeeking) return;
+            isSeeking = false;
+            if (track.releasePointerCapture && event.pointerId !== undefined) {
+                track.releasePointerCapture(event.pointerId);
+            }
+        };
+
+        track.addEventListener('pointerup', stopSeeking);
+        track.addEventListener('pointercancel', stopSeeking);
+        track.addEventListener('click', seekFromEvent);
+
+        let savedVolume = 1;
+
+        const updateVolumeDisplay = () => {
+            const volume = audioElement.muted ? 0 : audioElement.volume;
+            volFill.style.width = `${volume * 100}%`;
+            volButton.textContent = (audioElement.muted || audioElement.volume === 0) ? '\u{1F507}' : '\u{1F50A}';
+        };
+
+        volButton.addEventListener('click', () => {
+            if (audioElement.muted) {
+                audioElement.muted = false;
+                if (audioElement.volume === 0) {
+                    audioElement.volume = savedVolume || 0.5;
+                }
+            } else {
+                savedVolume = audioElement.volume;
+                audioElement.muted = true;
+            }
+            updateVolumeDisplay();
+        });
+
+        const seekVolume = (event) => {
+            const rect = volTrack.getBoundingClientRect();
+            if (!rect.width) return;
+
+            const pointerX = event.clientX ?? rect.left;
+            const clampedX = Math.min(Math.max(pointerX - rect.left, 0), rect.width);
+            audioElement.volume = clampedX / rect.width;
+            audioElement.muted = false;
+            savedVolume = audioElement.volume;
+            updateVolumeDisplay();
+        };
+
+        let isVolSeeking = false;
+        volTrack.addEventListener('pointerdown', (event) => {
+            if (event.button !== undefined && event.button !== 0) return;
+            isVolSeeking = true;
+            if (volTrack.setPointerCapture && event.pointerId !== undefined) {
+                volTrack.setPointerCapture(event.pointerId);
+            }
+            seekVolume(event);
+        });
+
+        volTrack.addEventListener('pointermove', (event) => {
+            if (!isVolSeeking) return;
+            seekVolume(event);
+        });
+
+        const stopVolSeeking = (event) => {
+            if (!isVolSeeking) return;
+            isVolSeeking = false;
+            if (volTrack.releasePointerCapture && event.pointerId !== undefined) {
+                volTrack.releasePointerCapture(event.pointerId);
+            }
+        };
+
+        volTrack.addEventListener('pointerup', stopVolSeeking);
+        volTrack.addEventListener('pointercancel', stopVolSeeking);
+        volTrack.addEventListener('click', seekVolume);
+
+        playButton.addEventListener('click', async () => {
+            if (audioElement.paused) {
+                try {
+                    await audioElement.play();
+                } catch {
+                    updatePlayIcon();
+                }
+                return;
+            }
+            audioElement.pause();
+        });
+
+        audioElement.addEventListener('play', updatePlayIcon);
+        audioElement.addEventListener('pause', updatePlayIcon);
+        audioElement.addEventListener('timeupdate', updateTimeDisplay);
+        audioElement.addEventListener('durationchange', updateTimeDisplay);
+        audioElement.addEventListener('loadedmetadata', updateTimeDisplay);
+        audioElement.addEventListener('ended', updatePlayIcon);
+        audioElement.addEventListener('volumechange', updateVolumeDisplay);
+
+        updatePlayIcon();
+        updateTimeDisplay();
+        updateVolumeDisplay();
+
+        volSection.append(volButton, volTrack);
+        topRow.append(nameLabel, timeLabel);
+        bottomRow.append(playButton, track, volSection);
+
+        audioDiv.append(topRow, bottomRow, audioElement);
+
+        if (onRemove) {
+            audioDiv.appendChild(this.createRemoveButton(() => {
+                audioElement.pause();
+                audioDiv.remove();
+                onRemove();
+            }));
+        }
+
+        return audioDiv;
+    }
+
     initPendingMediaDiv() {
         if (this.pendingMediaDiv) return;
         this.pendingMediaDiv = this.createMessage('user');
@@ -642,6 +852,13 @@ class ChatUI {
         this.initPendingMediaDiv();
         const messageWrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
         messageWrapper.appendChild(this.createFileDisplay(file, onRemove));
+        this.scrollIntoView?.();
+    }
+
+    appendAudio(audioItem, onRemove) {
+        this.initPendingMediaDiv();
+        const messageWrapper = this.pendingMediaDiv.querySelector('.message-wrapper');
+        messageWrapper.appendChild(this.createAudioDisplay(audioItem, onRemove));
         this.scrollIntoView?.();
     }
 
@@ -682,6 +899,9 @@ class ChatUI {
     produceNextContentDiv(role, isThought, content = '', type = 'text') {
         if (type === 'image') {
             return this.createImageContent(content, role);
+        }
+        if (type === 'audio') {
+            return this.createAudioDisplay({ data: content });
         }
         const contentDiv = this.createContentDiv(role, content);
         if (isThought) {
