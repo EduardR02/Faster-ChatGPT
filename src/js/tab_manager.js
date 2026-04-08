@@ -39,7 +39,14 @@ export class TabManager {
         this.tabBar = createElementWithClass('div', 'tab-bar');
         const addButton = createElementWithClass('button', 'tab-new-button', '+');
         addButton.title = 'New tab';
-        addButton.onclick = () => this.createTab();
+        addButton.onclick = () => {
+            if (typeof this.onNewTabRequested === 'function') {
+                this.onNewTabRequested();
+                return;
+            }
+
+            this.createTab();
+        };
         
         this.tabBar.appendChild(addButton);
         this.tabBarContainer.appendChild(this.tabBar);
@@ -232,12 +239,12 @@ export class TabManager {
         const hasInputText = activeTab.chatUI.getTextareaText().trim().length > 0;
         const hasPendingMedia = Object.keys(chatCore.pendingMedia).length > 0;
         const hasChatId = chatCore.getChatId() || activeTab.tabState.chatId;
-        const hasWebpageContext = chatCore.hasWebpageContext();
 
-        return !(hasStarted || hasInputText || hasPendingMedia || hasChatId || hasWebpageContext);
+        return !(hasStarted || hasInputText || hasPendingMedia || hasChatId);
     }
 
     getActiveTab() { return this.tabs.get(this.activeTabId); }
+    getTab(id) { return this.tabs.get(id); }
     getActiveController() { return this.getActiveTab()?.controller; }
     getActiveChatUI() { return this.getActiveTab()?.chatUI; }
     getActiveTabState() { return this.getActiveTab()?.tabState; }

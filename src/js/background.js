@@ -1,10 +1,38 @@
 import { getMode, isOn, setDefaults } from "./storage_utils.js";
 
 const PANEL_PATH = chrome.runtime.getURL("src/html/sidepanel.html");
-const getPageContextStorageKey = (windowId) => `page_context_window_${windowId}`;
 const getPageContextRequestKey = (windowId) => `page_context_request_window_${windowId}`;
 const PAGE_CONTEXT_REQUEST_NONCE_KEY = 'page_context_request_nonce';
 const PAGE_CONTEXT_REQUEST_TTL_MS = 10000;
+const PAGE_CONTEXT_RESPONSE_TIMEOUT_MS = 4000;
+
+const pendingPageContextRequests = new Map();
+
+const getPendingPageContextToken = (windowId, requestId) => `${windowId}:${requestId}`;
+
+const resolvePendingPageContextRequest = (windowId, requestId, context) => {
+    const token = getPendingPageContextToken(windowId, requestId);
+    const pending = pendingPageContextRequests.get(token);
+    if (!pending) {
+        return false;
+    }
+
+    clearTimeout(pending.timeoutId);
+    pendingPageContextRequests.delete(token);
+    pending.sendResponse({ ok: true, context: context || null });
+    return true;
+};
+
+const createPendingPageContextRequest = (windowId, requestId, sendResponse) => {
+    const token = getPendingPageContextToken(windowId, requestId);
+    const timeoutId = setTimeout(() => {
+        pendingPageContextRequests.delete(token);
+        chrome.storage.session.remove(getPageContextRequestKey(windowId)).catch(() => {});
+        sendResponse({ ok: false, timedOut: true });
+    }, PAGE_CONTEXT_RESPONSE_TIMEOUT_MS);
+
+    pendingPageContextRequests.set(token, { sendResponse, timeoutId });
+};
 
 let lifetimeTokensUpdate = Promise.resolve();
 const applyLifetimeTokensDelta = (inputDelta = 0, outputDelta = 0) => {
@@ -79,7 +107,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
 
             const requestKey = getPageContextRequestKey(windowId);
-            const contextKey = getPageContextStorageKey(windowId);
 
             chrome.storage.session.get(requestKey)
                 .then(result => {
@@ -89,17 +116,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                         return null;
                     }
 
-                    return chrome.storage.session.remove(requestKey)
-                        .then(() => chrome.storage.session.set({ [contextKey]: message.context || null }))
-                        .then(() => {
-                            chrome.runtime.sendMessage({
-                                type: 'page_context_updated',
-                                windowId,
-                                context: message.context || null
-                            }).catch(() => {});
-
-                            sendResponse({ ok: true });
-                        });
+                    return chrome.storage.session.remove(requestKey).then(() => {
+                        resolvePendingPageContextRequest(windowId, message.requestId, message.context || null);
+                        sendResponse({ ok: true });
+                    });
                 })
                 .catch(() => sendResponse({ ok: false }));
             return true;
@@ -114,14 +134,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
 
             chrome.storage.session.set({
-                [getPageContextStorageKey(windowId)]: null,
                 [getPageContextRequestKey(windowId)]: {
                     id: requestId,
                     expiresAt: Date.now() + PAGE_CONTEXT_REQUEST_TTL_MS
                 }
             }).then(() => chrome.storage.local.set({
                 [PAGE_CONTEXT_REQUEST_NONCE_KEY]: Date.now()
-            })).then(() => sendResponse({ ok: true, requestId }))
+            })).then(() => createPendingPageContextRequest(windowId, requestId, sendResponse))
                 .catch(() => sendResponse({ ok: false }));
             return true;
         }
@@ -154,8 +173,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.windows.onRemoved.addListener(windowId => {
+    Array.from(pendingPageContextRequests.keys())
+        .filter(token => token.startsWith(`${windowId}:`))
+        .forEach(token => {
+            const pending = pendingPageContextRequests.get(token);
+            if (!pending) return;
+            clearTimeout(pending.timeoutId);
+            pendingPageContextRequests.delete(token);
+            pending.sendResponse({ ok: false, cancelled: true });
+        });
+
     chrome.storage.session.remove([
-        getPageContextStorageKey(windowId),
         getPageContextRequestKey(windowId)
     ]).catch(() => {});
 });

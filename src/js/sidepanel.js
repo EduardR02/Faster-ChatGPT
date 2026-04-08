@@ -34,13 +34,6 @@ class SidepanelApp {
         this.startupAt = Date.now();
         this.startupNewTabId = null;
         this._markNextTabAsStartupNew = false;
-        this.currentWindowId = null;
-        this.currentWindowIdPromise = chrome.windows.getCurrent()
-            .then(window => {
-                this.currentWindowId = window?.id ?? null;
-                return this.currentWindowId;
-            })
-            .catch(() => null);
 
         // Cached DOM elements (reduces repeated queries)
         this.textInput = document.getElementById('textInput');
@@ -54,7 +47,8 @@ class SidepanelApp {
             tabBarContainer: document.getElementById('tab-bar-container'),
             tabContentContainer: document.getElementById('tab-content-area'),
             onTabSwitch: (newTab, oldTabId) => this.handleTabSwitch(newTab, oldTabId),
-            onTabClose: (tabId) => this.handleTabClose(tabId)
+            onTabClose: (tabId) => this.handleTabClose(tabId),
+            onNewTabRequested: () => { void this.handleNewChat({ forceNewTab: true }); }
         });
 
         // Set default continueFunc for tabs created via + button
@@ -69,11 +63,18 @@ class SidepanelApp {
                 activeTabState.setCurrentModel(model);
             }
         });
+        this.stateManager.subscribeToSetting('auto_page_context', (enabled) => {
+            if (enabled) {
+                void this.attachPageContextToTab(this.getActiveTab()?.id);
+            }
+        });
         this.initManagers();
         this.initEventListeners();
 
-        this.stateManager.runOnReady(() => {
-            void this.bootstrapTabs();
+        this.readyPromise = new Promise(resolve => {
+            this.stateManager.runOnReady(() => {
+                void this.bootstrapTabs().finally(resolve);
+            });
         });
     }
 
@@ -101,35 +102,44 @@ class SidepanelApp {
             this.ensureSharedUIInitialized();
             return;
         }
-
-        const tab = this.tabManager.createTab({ 
-            continueFunc: (i, s, m) => this.continueFromCurrent(i, s, m) 
-        });
-        if (tab) {
-            if (this._markNextTabAsStartupNew) this.startupNewTabId = tab.id;
-            this.ensureSharedUIInitialized();
-        }
     }
 
     async bootstrapTabs() {
-        await this.currentWindowIdPromise;
         await this.tabManager.restorePersistedTabs();
         // Wait for next frame to ensure UI/state is stable
         await new Promise(resolve => requestAnimationFrame(resolve));
-        
+
+        if (this.tabManager.getAllTabs().length > 0) {
+            this.ensureActiveTab();
+            return;
+        }
+
         this._markNextTabAsStartupNew = !this.openedForReconstruct;
-        this.ensureActiveTab();
+        const tab = this.tabManager.createTab({
+            continueFunc: (i, s, m) => this.continueFromCurrent(i, s, m)
+        });
         this._markNextTabAsStartupNew = false;
 
-        await this.attachPageContextToActiveEmptyChat();
+        if (!tab) return;
+        if (this.startupNewTabId == null && !this.openedForReconstruct) {
+            this.startupNewTabId = tab.id;
+        }
+
+        this.ensureSharedUIInitialized();
+        await this.initializeFreshChatTab(tab.id, { loadPrompt: false });
     }
 
-    async attachPageContextToActiveEmptyChat(webpageContext = undefined) {
-        const controller = this.getActiveController();
-        if (!controller) return;
+    async attachPageContextToTab(tabId, webpageContext = undefined) {
+        if (!tabId) return;
 
-        const chatCore = controller.chatCore;
-        const hasTypedText = !!this.textInput?.value?.trim();
+        const tab = this.tabManager.getTab(tabId);
+        if (!tab?.controller) return;
+
+        const chatCore = tab.controller.chatCore;
+        const currentText = this.getActiveTab()?.id === tabId
+            ? this.textInput?.value
+            : this.tabTextareaContent.get(tabId);
+        const hasTypedText = !!currentText?.trim();
         const hasPendingMedia = Object.keys(chatCore.pendingMedia || {}).length > 0;
         const hasStarted = chatCore.hasChatStarted();
         const hasContext = chatCore.hasWebpageContext();
@@ -138,7 +148,31 @@ class SidepanelApp {
             return;
         }
 
-        await controller.maybeAttachCurrentPageContext('chat', webpageContext);
+        await tab.controller.maybeAttachCurrentPageContext('chat', webpageContext);
+    }
+
+    async initializeFreshChatTab(tabId, options = {}) {
+        const tab = this.tabManager.getTab(tabId);
+        if (!tab) return false;
+
+        const { controller, chatUI, tabState } = tab;
+        if (!controller || !chatUI || !tabState) return false;
+
+        const title = options.title || 'New Chat';
+        tabState.chatId = null;
+        controller.initStates(title);
+        chatUI.clearConversation();
+        this.tabManager.updateTabTitle(tab.id, title);
+
+        if (options.attachPageContext !== false) {
+            await this.attachPageContextToTab(tab.id);
+        }
+
+        if (options.loadPrompt) {
+            await controller.initPrompt({ mode: 'chat' });
+        }
+
+        return true;
     }
 
     isTabReallyEmpty(tabId) {
@@ -161,9 +195,8 @@ class SidepanelApp {
         const hasPendingMedia = Object.keys(chatCore?.pendingMedia || {}).length > 0;
         const hasChatId = chatCore?.getChatId() || tab.tabState?.chatId;
         const hasInputText = trimmedText.trim().length > 0;
-        const hasWebpageContext = chatCore?.hasWebpageContext?.() ?? false;
 
-        return !(hasStarted || hasPendingMedia || hasChatId || hasInputText || hasWebpageContext);
+        return !(hasStarted || hasPendingMedia || hasChatId || hasInputText);
     }
 
     initSharedUI() {
@@ -474,20 +507,6 @@ class SidepanelApp {
                 return this.handleChatRenamed(message.chatId, message.title);
             }
 
-            if (message.type === 'page_context_updated') {
-                if (document.visibilityState === 'hidden') {
-                    return;
-                }
-                if (this.currentWindowId == null || message.windowId !== this.currentWindowId) {
-                    return;
-                }
-                if (!this.stateManager.getSetting('auto_page_context')) {
-                    return;
-                }
-                void this.attachPageContextToActiveEmptyChat(message.context || null);
-                return;
-            }
-            
             if (!this.stateManager.isOn()) return;
             
             if (message.type === 'new_selection') {
@@ -540,25 +559,31 @@ class SidepanelApp {
         }
     }
 
-    handleNewChat() {
+    async handleNewChat(options = {}) {
         this.ensureActiveTab(); 
-        if (!this.createTabIfNeeded()) return;
-        
-        const activeController = this.getActiveController();
-        const activeChatUI = this.getActiveChatUI();
-        const activeTabState = this.getActiveTabState();
-        
-        if (!activeController || !activeChatUI || !activeTabState) return;
         this.stateManager.subscribeToChatReset("chat", () => this.handleNewChat());
-        
-        activeTabState.chatId = null; 
-        activeController.initStates("New Chat"); 
-        activeChatUI.clearConversation();
+
+        let targetTab = this.getActiveTab();
+        if (!targetTab) {
+            targetTab = this.tabManager.createTab({
+                continueFunc: (i, s, m) => this.continueFromCurrent(i, s, m)
+            });
+        } else if (options.forceNewTab || !this.tabManager.isCurrentTabEmpty()) {
+            targetTab = this.tabManager.createTab({
+                continueFunc: (i, s, m) => this.continueFromCurrent(i, s, m)
+            });
+        }
+
+        if (!targetTab) {
+            this.getActiveChatUI()?.addErrorMessage("Maximum tabs reached. Close a tab first.");
+            return;
+        }
+
+        await this.initializeFreshChatTab(targetTab.id, { loadPrompt: true });
         
         if (this.stateManager.isInstantPromptMode()) { 
-            activeChatUI.addWarningMessage("Warning: Instant prompt mode does not make sense in chat mode and will be ignored."); 
+            this.getActiveChatUI()?.addWarningMessage("Warning: Instant prompt mode does not make sense in chat mode and will be ignored."); 
         }
-        activeController.initPrompt({ mode: "chat" });
     }
 
     async handleReconstructChat(reconstructOptions) {
@@ -820,7 +845,8 @@ class SidepanelApp {
 
 
 // Initialize the application when the DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-    new SidepanelApp();
+document.addEventListener('DOMContentLoaded', async () => {
+    const app = new SidepanelApp();
+    await app.readyPromise;
     chrome.runtime.sendMessage({ type: "sidepanel_ready" });
 });

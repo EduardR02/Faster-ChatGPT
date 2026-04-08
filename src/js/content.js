@@ -69,9 +69,6 @@ const reportRequestedPageContext = async () => {
 const initAutoPageContextSetting = () => {
     chrome.storage.local.get('auto_page_context', result => {
         shouldAutoPageContext = !!result.auto_page_context;
-        if (shouldAutoPageContext) {
-            void reportRequestedPageContext();
-        }
     });
 };
 
@@ -129,10 +126,6 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 
     if (changes.auto_page_context) {
         shouldAutoPageContext = !!changes.auto_page_context.newValue;
-        if (shouldAutoPageContext) {
-            void reportRequestedPageContext();
-        }
-
         return;
     }
 

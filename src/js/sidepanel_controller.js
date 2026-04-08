@@ -67,12 +67,16 @@ export class SidepanelController {
         const currentWindow = await chrome.windows.getCurrent().catch(() => null);
         if (!currentWindow?.id) return null;
 
-        await chrome.runtime.sendMessage({
+        const response = await chrome.runtime.sendMessage({
             type: 'request_page_context_for_window',
             windowId: currentWindow.id
         }).catch(() => null);
 
-        return null;
+        if (!response?.ok) {
+            return undefined;
+        }
+
+        return response?.context || null;
     }
 
     applyWebpageContext(webpageContext) {
@@ -85,12 +89,21 @@ export class SidepanelController {
     }
 
     async maybeAttachCurrentPageContext(mode, providedContext = undefined) {
-        if (mode !== 'chat' || !this.state.getSetting('auto_page_context') || this.chatCore.isWebpageContextDismissed()) {
+        if (
+            mode !== 'chat'
+            || !this.state.getSetting('auto_page_context')
+            || this.chatCore.isWebpageContextDismissed()
+            || this.chatCore.hasWebpageContext()
+        ) {
             return;
         }
 
         if (providedContext === undefined) {
-            await this.requestCurrentPageContext();
+            const webpageContext = await this.requestCurrentPageContext();
+            if (webpageContext === undefined) {
+                return;
+            }
+            this.applyWebpageContext(webpageContext);
             return;
         }
 
@@ -592,7 +605,6 @@ export class SidepanelController {
                 }
                 
                 this.chatCore.insertSystemMessage(systemPromptText);
-                await this.maybeAttachCurrentPageContext(context.mode);
             } catch (error) { 
                 this.chatUI.addErrorMessage(`Error loading prompt: ${error.message}`); 
                 throw error; 
