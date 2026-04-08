@@ -34,7 +34,7 @@ const EXCLUDED_CONTAINER_SELECTOR = [
 const NOISE_HINT_PATTERN = /(cookie|consent|banner|popup|modal|tooltip|drawer|sidebar|footer|header|masthead|navbar|menu|breadcrumb|share|social|promo|advert|sponsor|newsletter|subscribe|signin|login|comment|related|recommend|upsell|toolbar)/i;
 const LOW_SIGNAL_TEXT_PATTERN = /(all rights reserved|privacy policy|terms of service|accept cookies|sign in|log in|subscribe now|advertisement)/i;
 const MAX_SCAN_BLOCKS = 700;
-const MAX_CONTEXT_WORDS = 1200;
+const MAX_CONTEXT_WORDS = 5000;
 const MIN_CONTEXT_WORDS = 20;
 const MAX_LIST_ITEMS_PER_LIST = 8;
 
