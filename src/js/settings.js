@@ -31,6 +31,7 @@ class SettingsUI {
             checkboxes: [
                 'show_model_name', 
                 'close_on_deselect', 
+                'auto_page_context',
                 'stream_response', 
                 'arena_mode', 
                 'auto_rename', 

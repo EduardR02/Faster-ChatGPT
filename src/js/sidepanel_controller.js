@@ -14,7 +14,8 @@ export class SidepanelController {
             chatUI: options.chatUI, 
             api: options.apiManager, 
             storage: options.chatStorage, 
-            arenaRating: new ArenaRatingManager() 
+            arenaRating: new ArenaRatingManager(),
+            promptInitPromise: null
         });
         
         this.arenaRating.initDB();
@@ -39,6 +40,61 @@ export class SidepanelController {
         this.state.resetChatState();
         this.chatUI.updateIncognito();
         this.chatCore.reset(chatTitle);
+        this.syncWebpageContextUI();
+    }
+
+    awaitPromptReady() {
+        return this.promptInitPromise || Promise.resolve();
+    }
+
+    syncWebpageContextUI() {
+        this.chatUI.setWebpageContext(
+            this.chatCore.getWebpageContext(),
+            () => { void this.removeWebpageContext(); }
+        );
+    }
+
+    async removeWebpageContext() {
+        if (!this.chatCore.dismissWebpageContext()) return;
+
+        this.syncWebpageContextUI();
+        if (this.chatCore.getChatId() && !this.chatCore.hasPendingContinuation()) {
+            await this.chatCore.persistWebpageContext();
+        }
+    }
+
+    async requestCurrentPageContext() {
+        const currentWindow = await chrome.windows.getCurrent().catch(() => null);
+        if (!currentWindow?.id) return null;
+
+        await chrome.runtime.sendMessage({
+            type: 'request_page_context_for_window',
+            windowId: currentWindow.id
+        }).catch(() => null);
+
+        return null;
+    }
+
+    applyWebpageContext(webpageContext) {
+        if (!this.chatCore.setWebpageContext(webpageContext)) {
+            return false;
+        }
+
+        this.syncWebpageContextUI();
+        return true;
+    }
+
+    async maybeAttachCurrentPageContext(mode, providedContext = undefined) {
+        if (mode !== 'chat' || !this.state.getSetting('auto_page_context') || this.chatCore.isWebpageContextDismissed()) {
+            return;
+        }
+
+        if (providedContext === undefined) {
+            await this.requestCurrentPageContext();
+            return;
+        }
+
+        this.applyWebpageContext(providedContext);
     }
 
     async makeApiCall(modelId, isRegeneration = false, options = {}) {
@@ -525,20 +581,32 @@ export class SidepanelController {
     }
 
     async initPrompt(context) {
-        try {
-            const promptKey = context.mode + "_prompt";
-            await this.state.loadPrompt(promptKey);
-            
-            let systemPromptText = this.state.getPrompt('active_prompt');
-            if (context.mode === "selection") {
-                systemPromptText += `\n"""[${context.url}]"""\n"""[${context.text}]"""`;
+        const promptTask = (async () => {
+            try {
+                const promptKey = context.mode + "_prompt";
+                await this.state.loadPrompt(promptKey);
+                
+                let systemPromptText = this.state.getPrompt('active_prompt');
+                if (context.mode === "selection") {
+                    systemPromptText += `\n"""[${context.url}]"""\n"""[${context.text}]"""`;
+                }
+                
+                this.chatCore.insertSystemMessage(systemPromptText);
+                await this.maybeAttachCurrentPageContext(context.mode);
+            } catch (error) { 
+                this.chatUI.addErrorMessage(`Error loading prompt: ${error.message}`); 
+                throw error; 
             }
-            
-            this.chatCore.insertSystemMessage(systemPromptText);
-        } catch (error) { 
-            this.chatUI.addErrorMessage(`Error loading prompt: ${error.message}`); 
-            throw error; 
-        } 
+        })();
+
+        this.promptInitPromise = promptTask;
+        try {
+            await promptTask;
+        } finally {
+            if (this.promptInitPromise === promptTask) {
+                this.promptInitPromise = null;
+            }
+        }
     }
 
     buildCollectorPrompt(councilModels) {

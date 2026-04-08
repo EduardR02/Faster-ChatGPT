@@ -34,6 +34,13 @@ class SidepanelApp {
         this.startupAt = Date.now();
         this.startupNewTabId = null;
         this._markNextTabAsStartupNew = false;
+        this.currentWindowId = null;
+        this.currentWindowIdPromise = chrome.windows.getCurrent()
+            .then(window => {
+                this.currentWindowId = window?.id ?? null;
+                return this.currentWindowId;
+            })
+            .catch(() => null);
 
         // Cached DOM elements (reduces repeated queries)
         this.textInput = document.getElementById('textInput');
@@ -62,7 +69,6 @@ class SidepanelApp {
                 activeTabState.setCurrentModel(model);
             }
         });
-
         this.initManagers();
         this.initEventListeners();
 
@@ -106,6 +112,7 @@ class SidepanelApp {
     }
 
     async bootstrapTabs() {
+        await this.currentWindowIdPromise;
         await this.tabManager.restorePersistedTabs();
         // Wait for next frame to ensure UI/state is stable
         await new Promise(resolve => requestAnimationFrame(resolve));
@@ -113,6 +120,25 @@ class SidepanelApp {
         this._markNextTabAsStartupNew = !this.openedForReconstruct;
         this.ensureActiveTab();
         this._markNextTabAsStartupNew = false;
+
+        await this.attachPageContextToActiveEmptyChat();
+    }
+
+    async attachPageContextToActiveEmptyChat(webpageContext = undefined) {
+        const controller = this.getActiveController();
+        if (!controller) return;
+
+        const chatCore = controller.chatCore;
+        const hasTypedText = !!this.textInput?.value?.trim();
+        const hasPendingMedia = Object.keys(chatCore.pendingMedia || {}).length > 0;
+        const hasStarted = chatCore.hasChatStarted();
+        const hasContext = chatCore.hasWebpageContext();
+
+        if (hasTypedText || hasPendingMedia || hasStarted || hasContext) {
+            return;
+        }
+
+        await controller.maybeAttachCurrentPageContext('chat', webpageContext);
     }
 
     isTabReallyEmpty(tabId) {
@@ -135,8 +161,9 @@ class SidepanelApp {
         const hasPendingMedia = Object.keys(chatCore?.pendingMedia || {}).length > 0;
         const hasChatId = chatCore?.getChatId() || tab.tabState?.chatId;
         const hasInputText = trimmedText.trim().length > 0;
+        const hasWebpageContext = chatCore?.hasWebpageContext?.() ?? false;
 
-        return !(hasStarted || hasPendingMedia || hasChatId || hasInputText);
+        return !(hasStarted || hasPendingMedia || hasChatId || hasInputText || hasWebpageContext);
     }
 
     initSharedUI() {
@@ -233,6 +260,8 @@ class SidepanelApp {
             return;
         }
         
+        await activeController.awaitPromptReady();
+
         if (activeController.chatCore.getSystemPrompt() === undefined) {
             await activeController.initPrompt({ mode: "chat" });
         }
@@ -248,7 +277,9 @@ class SidepanelApp {
             index,
             secondaryIndex,
             modelChoice,
-            pendingUserMessage: activeController.collectPendingUserMessage()
+            pendingUserMessage: activeController.collectPendingUserMessage(),
+            webpageContext: activeController.chatCore.getWebpageContext(),
+            webpageContextDismissed: activeController.chatCore.isWebpageContextDismissed()
         };
         
         if (!reconstructOptions.chatId) {
@@ -442,6 +473,20 @@ class SidepanelApp {
             if (message.type === 'chat_renamed') {
                 return this.handleChatRenamed(message.chatId, message.title);
             }
+
+            if (message.type === 'page_context_updated') {
+                if (document.visibilityState === 'hidden') {
+                    return;
+                }
+                if (this.currentWindowId == null || message.windowId !== this.currentWindowId) {
+                    return;
+                }
+                if (!this.stateManager.getSetting('auto_page_context')) {
+                    return;
+                }
+                void this.attachPageContextToActiveEmptyChat(message.context || null);
+                return;
+            }
             
             if (!this.stateManager.isOn()) return;
             
@@ -550,7 +595,15 @@ class SidepanelApp {
             if (reconstructOptions.systemPrompt) {
                 activeController.chatCore.insertSystemMessage(reconstructOptions.systemPrompt);
             }
-            return activeChatUI.clearConversation();
+            if (reconstructOptions.webpageContext !== undefined) {
+                activeController.chatCore.setWebpageContext(reconstructOptions.webpageContext);
+            }
+            if (reconstructOptions.webpageContextDismissed !== undefined) {
+                activeController.chatCore.setWebpageContextDismissed(reconstructOptions.webpageContextDismissed);
+            }
+            activeChatUI.clearConversation();
+            activeController.syncWebpageContextUI();
+            return;
         }
 
         let lastHistoryMessage = null;
@@ -578,9 +631,16 @@ class SidepanelApp {
                 : lastHistoryMessage?.responses?.[reconstructOptions.modelChoice || 'model_a']?.messages?.length;
             
             activeController.chatCore.buildFromDB(loadedChat, null, reconstructOptions.secondaryIndex, reconstructOptions.modelChoice);
+            if (reconstructOptions.webpageContext !== undefined) {
+                activeController.chatCore.setWebpageContext(reconstructOptions.webpageContext);
+            }
+            if (reconstructOptions.webpageContextDismissed !== undefined) {
+                activeController.chatCore.setWebpageContextDismissed(reconstructOptions.webpageContextDismissed);
+            }
             
             activeChatUI.updateIncognito(activeController.chatCore.hasChatStarted()); 
             activeChatUI.buildChat(activeController.chatCore.getChat());
+            activeController.syncWebpageContextUI();
             
             activeController.chatCore.continuedChatOptions = { 
                 fullChatLength: await this.chatStorage.getChatLength(numericChatId), 
@@ -600,6 +660,11 @@ class SidepanelApp {
         
         if (reconstructOptions.systemPrompt) {
             activeController.chatCore.insertSystemMessage(reconstructOptions.systemPrompt);
+        }
+        if (!reconstructOptions.chatId && reconstructOptions.webpageContext !== undefined) {
+            activeController.chatCore.setWebpageContext(reconstructOptions.webpageContext);
+            activeController.chatCore.setWebpageContextDismissed(reconstructOptions.webpageContextDismissed);
+            activeController.syncWebpageContextUI();
         }
         
         this.handleLastUserMsg(lastHistoryMessage?.role === 'user' ? lastHistoryMessage : reconstructOptions.pendingUserMessage);
@@ -673,7 +738,9 @@ class SidepanelApp {
             chatId: activeController.chatCore.getChatId(), 
             isSidePanel: !activeTabState.isSidePanel, 
             index: Math.max(activeController.chatCore.getLength() - 1, 0), 
-            pendingUserMessage: activeController.collectPendingUserMessage() 
+            pendingUserMessage: activeController.collectPendingUserMessage(),
+            webpageContext: activeController.chatCore.getWebpageContext(),
+            webpageContextDismissed: activeController.chatCore.isWebpageContextDismissed()
         };
         
         // Determine indices for continuation

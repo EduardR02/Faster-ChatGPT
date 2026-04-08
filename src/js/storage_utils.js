@@ -106,6 +106,7 @@ export const setDefaults = async () => {
         models,
         api_keys: {},
         close_on_deselect: false,
+        auto_page_context: false,
         stream_response: true,
         arena_mode: false,
         council_mode: false,

@@ -102,6 +102,38 @@ describe('SidepanelChatCore Integration', () => {
         ]);
     });
 
+    test('webpage context is appended to system prompt for API calls', async () => {
+        core.insertSystemMessage('System prompt');
+        core.setWebpageContext({
+            title: 'Example article',
+            url: 'https://example.com/article',
+            siteName: 'example.com',
+            content: 'Useful extracted page text.',
+            wordCount: 4
+        });
+        await core.addUserMessage('Hello');
+
+        const messages = core.getMessagesForAPI();
+        expect(messages[0].role).toBe('system');
+        expect(messages[0].parts[0].content).toContain('System prompt');
+        expect(messages[0].parts[0].content).toContain('untrusted reference material');
+        expect(messages[1].role).toBe('user');
+        expect(messages[1].parts[0].content).toContain('[WEBPAGE CONTEXT DATA]');
+        expect(messages[1].parts[0].content).toContain('Useful extracted page text.');
+    });
+
+    test('dismissing webpage context marks draft as dismissed', () => {
+        core.setWebpageContext({
+            title: 'Example article',
+            content: 'Useful extracted page text.',
+            wordCount: 4
+        });
+
+        expect(core.dismissWebpageContext()).toBe(true);
+        expect(core.getWebpageContext()).toBeNull();
+        expect(core.isWebpageContextDismissed()).toBe(true);
+    });
+
     test('image handling and persistence', async () => {
         const imageData = 'data:image/png;base64,abc';
         core.appendMedia(imageData, 'image');

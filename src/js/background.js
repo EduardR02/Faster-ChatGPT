@@ -1,6 +1,10 @@
 import { getMode, isOn, setDefaults } from "./storage_utils.js";
 
 const PANEL_PATH = chrome.runtime.getURL("src/html/sidepanel.html");
+const getPageContextStorageKey = (windowId) => `page_context_window_${windowId}`;
+const getPageContextRequestKey = (windowId) => `page_context_request_window_${windowId}`;
+const PAGE_CONTEXT_REQUEST_NONCE_KEY = 'page_context_request_nonce';
+const PAGE_CONTEXT_REQUEST_TTL_MS = 10000;
 
 let lifetimeTokensUpdate = Promise.resolve();
 const applyLifetimeTokensDelta = (inputDelta = 0, outputDelta = 0) => {
@@ -66,7 +70,94 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 sendResponse({ is_mode_on: isOn(mode) });
             });
             return true;
+
+        case "report_page_context": {
+            const windowId = sender?.tab?.windowId;
+            if (windowId == null) {
+                sendResponse({ ok: false });
+                return false;
+            }
+
+            const requestKey = getPageContextRequestKey(windowId);
+            const contextKey = getPageContextStorageKey(windowId);
+
+            chrome.storage.session.get(requestKey)
+                .then(result => {
+                    const request = result[requestKey];
+                    if (!request || request.id !== message.requestId || request.expiresAt < Date.now()) {
+                        sendResponse({ ok: false, ignored: true });
+                        return null;
+                    }
+
+                    return chrome.storage.session.remove(requestKey)
+                        .then(() => chrome.storage.session.set({ [contextKey]: message.context || null }))
+                        .then(() => {
+                            chrome.runtime.sendMessage({
+                                type: 'page_context_updated',
+                                windowId,
+                                context: message.context || null
+                            }).catch(() => {});
+
+                            sendResponse({ ok: true });
+                        });
+                })
+                .catch(() => sendResponse({ ok: false }));
+            return true;
+        }
+
+        case 'request_page_context_for_window': {
+            const requestId = `${Date.now()}_${Math.random()}`;
+            const windowId = message.windowId;
+            if (windowId == null) {
+                sendResponse({ ok: false });
+                return false;
+            }
+
+            chrome.storage.session.set({
+                [getPageContextStorageKey(windowId)]: null,
+                [getPageContextRequestKey(windowId)]: {
+                    id: requestId,
+                    expiresAt: Date.now() + PAGE_CONTEXT_REQUEST_TTL_MS
+                }
+            }).then(() => chrome.storage.local.set({
+                [PAGE_CONTEXT_REQUEST_NONCE_KEY]: Date.now()
+            })).then(() => sendResponse({ ok: true, requestId }))
+                .catch(() => sendResponse({ ok: false }));
+            return true;
+        }
+
+        case 'should_collect_page_context': {
+            const windowId = sender?.tab?.windowId;
+            if (windowId == null) {
+                sendResponse({ requestId: null });
+                return false;
+            }
+
+            const requestKey = getPageContextRequestKey(windowId);
+            chrome.storage.session.get(requestKey)
+                .then(result => {
+                    const request = result[requestKey];
+                    if (!request || request.expiresAt < Date.now()) {
+                        if (request) {
+                            chrome.storage.session.remove(requestKey).catch(() => {});
+                        }
+                        sendResponse({ requestId: null });
+                        return;
+                    }
+
+                    sendResponse({ requestId: request.id });
+                })
+                .catch(() => sendResponse({ requestId: null }));
+            return true;
+        }
     }
+});
+
+chrome.windows.onRemoved.addListener(windowId => {
+    chrome.storage.session.remove([
+        getPageContextStorageKey(windowId),
+        getPageContextRequestKey(windowId)
+    ]).catch(() => {});
 });
 
 async function openPanel(tab) {

@@ -70,6 +70,82 @@ class ChatUI {
         target.appendChild(node);
     }
 
+    getWebpageContextContainer() {
+        return this.conversationDiv;
+    }
+
+    createWebpageContextBanner(context, onRemove) {
+        const banner = createElementWithClass('div', 'webpage-context-banner');
+        const copy = createElementWithClass('div', 'webpage-context-copy');
+        const topRow = createElementWithClass('div', 'webpage-context-top-row');
+        const badge = createElementWithClass('span', 'webpage-context-badge', 'page');
+        const summary = createElementWithClass(
+            'span',
+            'webpage-context-summary',
+            `${(context.wordCount || 0).toLocaleString()} words of context added`
+        );
+        const sourceTitle = createElementWithClass(
+            'div',
+            'webpage-context-title',
+            context.title || context.siteName || 'Current webpage'
+        );
+        const sourceMeta = createElementWithClass(
+            'div',
+            'webpage-context-source',
+            context.siteName || context.url || ''
+        );
+        const details = createElementWithClass('details', 'webpage-context-details');
+        const summaryButton = createElementWithClass('summary', 'webpage-context-toggle', 'View context');
+        const content = createElementWithClass('div', 'webpage-context-content', context.content || '');
+
+        topRow.append(badge, summary);
+        copy.append(topRow, sourceTitle);
+        if (sourceMeta.textContent) {
+            copy.appendChild(sourceMeta);
+        }
+
+        details.append(summaryButton, content);
+        details.ontoggle = () => {
+            summaryButton.textContent = details.open ? 'Hide context' : 'View context';
+        };
+        copy.appendChild(details);
+
+        banner.appendChild(copy);
+
+        if (typeof onRemove === 'function') {
+            const removeButton = createElementWithClass('button', 'unset-button webpage-context-remove', UNICODE.REMOVE);
+            removeButton.title = 'Remove webpage context';
+            removeButton.onclick = () => onRemove();
+            banner.appendChild(removeButton);
+        }
+
+        return banner;
+    }
+
+    setWebpageContext(context = null, onRemove = null) {
+        const container = this.getWebpageContextContainer();
+        container?.querySelectorAll('.webpage-context-banner').forEach(banner => banner.remove());
+        if (!context?.content) return;
+
+        const banner = this.createWebpageContextBanner(context, onRemove);
+        if (!container) return;
+
+        const children = Array.from(container.children);
+        const insertBeforeNode = children.find(child => {
+            if (child.classList?.contains('title-wrapper')) {
+                return false;
+            }
+
+            return !child.classList?.contains('history-system-message');
+        });
+
+        if (insertBeforeNode) {
+            container.insertBefore(banner, insertBeforeNode);
+        } else {
+            container.appendChild(banner);
+        }
+    }
+
     addMessage(role, parts = [], options = {}) {
         if (role === 'user' && this.pendingMediaDiv) {
             this.appendToExistingPendingMessage(parts);
@@ -913,6 +989,7 @@ class ChatUI {
     clearConversation(options = {}) {
         this.conversationDiv.innerHTML = '';
         this.pendingMediaDiv = null;
+        this.setWebpageContext(null);
     }
 
     createArenaWrapper(message, options = {}) {
@@ -2298,6 +2375,7 @@ export class HistoryChatUI extends ChatUI {
             addSystemMsg: true, 
             continueFunc: this.continueFunc 
         });
+        this.setWebpageContext(fullChatData.webpage_context || null);
         
         this.updateChatHeader(fullChatData.title);
         this.addLinkedChat(fullChatData.continued_from_chat_id);

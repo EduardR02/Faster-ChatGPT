@@ -232,8 +232,9 @@ export class TabManager {
         const hasInputText = activeTab.chatUI.getTextareaText().trim().length > 0;
         const hasPendingMedia = Object.keys(chatCore.pendingMedia).length > 0;
         const hasChatId = chatCore.getChatId() || activeTab.tabState.chatId;
+        const hasWebpageContext = chatCore.hasWebpageContext();
 
-        return !(hasStarted || hasInputText || hasPendingMedia || hasChatId);
+        return !(hasStarted || hasInputText || hasPendingMedia || hasChatId || hasWebpageContext);
     }
 
     getActiveTab() { return this.tabs.get(this.activeTabId); }
@@ -343,6 +344,7 @@ export class TabManager {
             
             tab.chatUI.updateIncognito(tab.controller.chatCore.hasChatStarted());
             tab.chatUI.buildChat(tab.controller.chatCore.getChat());
+            tab.controller.syncWebpageContextUI();
             tab.controller.restoreLatestAssistantActions();
             
             tab.tabState.chatId = chatData.chatId;

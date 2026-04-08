@@ -326,7 +326,8 @@ export class ChatStorage {
             title,
             timestamp: Date.now(),
             renamed: !!options.renamed,
-            continued_from_chat_id: options.continued_from_chat_id || null
+            continued_from_chat_id: options.continued_from_chat_id || null,
+            webpage_context: options.webpage_context || null
         };
 
         const hashCache = new Map();
@@ -638,6 +639,17 @@ export class ChatStorage {
             if (announce) {
                 this.announce('chat_renamed', { chatId: id, title });
             }
+            return metadata;
+        });
+    }
+
+    async updateChatMetadata(chatId, updates = {}) {
+        return this.dbOp(['chatMeta'], 'readwrite', async (transaction) => {
+            const metadata = await this.req(transaction.objectStore('chatMeta').get(chatId));
+            if (!metadata) return null;
+
+            Object.assign(metadata, updates);
+            transaction.objectStore('chatMeta').put(metadata);
             return metadata;
         });
     }
@@ -1328,7 +1340,7 @@ export class ChatStorage {
         setTimeout(() => URL.revokeObjectURL(url), 100);
     }
 
-    createNewChatTracking(title) { return { chatId: null, title, messages: [] }; }
+    createNewChatTracking(title) { return { chatId: null, title, messages: [], webpage_context: null }; }
     initArenaMessage(modelA, modelB) {
         return {
             role: 'assistant', choice: 'ignored', continued_with: '',
