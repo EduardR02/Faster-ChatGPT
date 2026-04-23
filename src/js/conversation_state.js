@@ -244,7 +244,8 @@ const interactiveStateMixin = {
         if (sessionEffort) return sessionEffort;
 
         const model = this.getCurrentModel?.() || '';
-        if (model.includes('opus-4-6')) return 'high';
+        const opusMatch = model.match(/opus-4-(\d+)/);
+        if (opusMatch && parseInt(opusMatch[1], 10) >= 6) return 'high';
 
         return this.getSetting('reasoning_effort') || 'high';
     },

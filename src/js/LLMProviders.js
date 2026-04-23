@@ -363,7 +363,8 @@ export class AnthropicProvider extends BaseProvider {
         const thinkingModels = ['3-7-sonnet', 'sonnet-4', 'opus-4'];
 
         if (feature === 'reasoning') {
-            return model.includes('opus-4-6');
+            const match = model.match(/opus-4-(\d+)/);
+            return !!match && parseInt(match[1], 10) >= 6;
         }
         
         if (feature === 'thinking') {
@@ -441,7 +442,7 @@ export class AnthropicProvider extends BaseProvider {
             if (hasReasoningLevels) {
                 const effort = options.reasoningEffort ?? options.getOpenAIReasoningEffort?.() ?? 'high';
                 const effortMap = { minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'max' };
-                body.thinking = { type: 'adaptive' };
+                body.thinking = { type: 'adaptive', display: 'summarized' };
                 body.output_config = { effort: effortMap[effort] || 'high' };
             } else {
                 body.thinking = {

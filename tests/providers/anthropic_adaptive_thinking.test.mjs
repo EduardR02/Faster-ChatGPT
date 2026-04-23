@@ -11,6 +11,31 @@ describe('AnthropicProvider adaptive thinking', () => {
         expect(provider.supports('reasoning', 'claude-opus-4-6')).toBe(true);
     });
 
+    test('supports reasoning for Opus 4.7 and later', () => {
+        expect(provider.supports('reasoning', 'claude-opus-4-7')).toBe(true);
+        expect(provider.supports('reasoning', 'claude-opus-4-12')).toBe(true);
+    });
+
+    test('does not enable reasoning levels for Opus 4.5 and earlier', () => {
+        expect(provider.supports('reasoning', 'claude-opus-4-5')).toBe(false);
+        expect(provider.supports('reasoning', 'claude-opus-4-0')).toBe(false);
+    });
+
+    test('uses adaptive thinking with summarized display for Opus 4.7', () => {
+        const [_, request] = provider.createRequest({
+            model: 'claude-opus-4-7',
+            messages,
+            stream: false,
+            options: { reasoningEffort: 'medium' },
+            apiKey: 'key',
+            settings: { temperature: 0.5, max_tokens: 12000 }
+        });
+
+        const body = JSON.parse(request.body);
+        expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+        expect(body.output_config).toEqual({ effort: 'medium' });
+    });
+
     test('keeps thinking support for Opus 4.6', () => {
         expect(provider.supports('thinking', 'claude-opus-4-6')).toBe(true);
     });
@@ -40,7 +65,7 @@ describe('AnthropicProvider adaptive thinking', () => {
 
         const body = JSON.parse(request.body);
 
-        expect(body.thinking).toEqual({ type: 'adaptive' });
+        expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
         expect(body.output_config).toEqual({ effort: 'high' });
         expect(body.max_tokens).toBe(MaxTokens.anthropic_thinking);
         expect(body.temperature).toBeUndefined();
@@ -69,7 +94,7 @@ describe('AnthropicProvider adaptive thinking', () => {
             });
 
             const body = JSON.parse(request.body);
-            expect(body.thinking).toEqual({ type: 'adaptive' });
+            expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
             expect(body.output_config).toEqual({ effort: expectedEffort });
             expect(body.temperature).toBeUndefined();
         });
