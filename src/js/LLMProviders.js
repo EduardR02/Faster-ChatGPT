@@ -765,8 +765,27 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
     }
 
     beforeCreateRequest({ model, options }) {
-        if (model.includes('reasoner') && options.streamWriter) {
+        const isThinking = model.includes('reasoner') || (options.shouldThink ?? options.getShouldThink?.() ?? false);
+        if (isThinking && options.streamWriter) {
             options.streamWriter.setThinkingModel();
+        }
+    }
+
+    supports(feature, _model) {
+        if (feature === 'thinking_toggle') return true;
+        return super.supports(feature, _model);
+    }
+
+    getDeepSeekReasoningEffort({ options }) {
+        const effort = options.reasoningEffort ?? options.getOpenAIReasoningEffort?.() ?? 'high';
+        return effort === 'xhigh' || effort === 'max' ? 'max' : 'high';
+    }
+
+    extendRequestBody(body, { model, options }) {
+        const isThinking = model.includes('reasoner') || (options.shouldThink ?? options.getShouldThink?.() ?? false);
+        body.thinking = { type: isThinking ? 'enabled' : 'disabled' };
+        if (isThinking) {
+            body.reasoning_effort = this.getDeepSeekReasoningEffort({ options });
         }
     }
 

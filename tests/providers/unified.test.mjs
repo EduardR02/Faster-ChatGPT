@@ -66,7 +66,7 @@ const PROVIDER_CONFIGS = [
         getUsageFromChunk: (chunk) => chunk.usage,
         supportsThinking: true,
         thinkingModel: 'deepseek-reasoner',
-        getThinkingConfigFromBody: (body) => null, // DeepSeek uses model name for thinking
+        getThinkingConfigFromBody: (body) => body.thinking,
         getThinkingFromChunk: (chunk) => chunk.choices?.[0]?.delta?.reasoning_content,
     },
     {
@@ -398,6 +398,56 @@ describe('OpenAIProvider - Specifics', () => {
             { type: 'thought', content: 'Thinking about hello' },
             { type: 'text', content: 'Hello!' }
         ]);
+    });
+});
+
+describe('DeepSeekProvider - Specifics', () => {
+    const provider = Providers.deepseek;
+
+    test('thinking toggle emits enabled and defaults effort to high', () => {
+        const streamWriter = { setThinkingModel: mock() };
+        const [_, request] = provider.createRequest({
+            model: 'deepseek-chat',
+            messages: createConversation(),
+            stream: true,
+            options: { shouldThink: true, streamWriter },
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 10000 }
+        });
+
+        const body = JSON.parse(request.body);
+        expect(body.thinking).toEqual({ type: 'enabled' });
+        expect(body.reasoning_effort).toBe('high');
+        expect(streamWriter.setThinkingModel).toHaveBeenCalledTimes(1);
+    });
+
+    test('thinking toggle emits disabled when not thinking', () => {
+        const [_, request] = provider.createRequest({
+            model: 'deepseek-chat',
+            messages: createConversation(),
+            stream: true,
+            options: { shouldThink: false, reasoningEffort: 'xhigh' },
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 10000 }
+        });
+
+        const body = JSON.parse(request.body);
+        expect(body.thinking).toEqual({ type: 'disabled' });
+        expect(body.reasoning_effort).toBeUndefined();
+    });
+
+    test('thinking effort clamps xhigh to max', () => {
+        const [_, request] = provider.createRequest({
+            model: 'deepseek-chat',
+            messages: createConversation(),
+            stream: true,
+            options: { shouldThink: true, reasoningEffort: 'xhigh' },
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 10000 }
+        });
+
+        const body = JSON.parse(request.body);
+        expect(body.reasoning_effort).toBe('max');
     });
 });
 
