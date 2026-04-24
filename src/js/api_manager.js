@@ -105,6 +105,14 @@ export class ApiManager {
                provider.supports('thinking', modelId); 
     }
 
+    canToggleThinking(modelId) {
+        return this.getProvider(modelId).supports('thinking_toggle', modelId);
+    }
+
+    isThinkingDefaultOn(modelId) {
+        return this.getProvider(modelId).isThinkingDefaultOn(modelId);
+    }
+
     async transcribeAudio(modelId, audioBlob, options = {}) {
         const provider = this.getProvider(modelId);
         const providerName = this.getProviderName(modelId);

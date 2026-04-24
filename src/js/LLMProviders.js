@@ -35,7 +35,7 @@ export const DEFAULT_MODELS = {
     deepseek: { "deepseek-chat": "DeepSeek V3.2", "deepseek-reasoner": "DeepSeek V3.2 thinking" },
     mistral: { "mistral-large-latest": "Mistral Large", "mistral-small-latest": "Mistral Small" },
     grok: { "grok-4": "Grok 4", "grok-4.1-fast-reasoning": "Grok 4.1 Fast Reasoning" },
-    kimi: { "kimi-k2-turbo-preview": "Kimi 2 Turbo", "kimi-k2-thinking-turbo": "Kimi 2 Turbo thinking" },
+    kimi: { "kimi-k2.6": "Kimi 2.6", "kimi-k2-thinking": "Kimi 2 Thinking" },
     llamacpp: { "local-model": "Local Model" }
 };
 
@@ -44,6 +44,8 @@ export class BaseProvider {
         this.maxTemp = 1.0;
         this.maxTokens = 8192;
     }
+
+    isThinkingDefaultOn(model) { return false; }
 
     supports(feature, model) {
         if (feature === 'image') {
@@ -771,9 +773,12 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
         }
     }
 
-    supports(feature, _model) {
-        if (feature === 'thinking_toggle') return true;
-        return super.supports(feature, _model);
+    isThinkingDefaultOn(model) { return model.includes('reasoner'); }
+
+    supports(feature, model) {
+        if (feature === 'thinking_toggle') return !model.includes('reasoner');
+        if (feature === 'thinking') return true;
+        return super.supports(feature, model);
     }
 
     getDeepSeekReasoningEffort({ options }) {
@@ -869,8 +874,36 @@ export class KimiProvider extends OpenAICompatibleProvider {
         return 'https://api.moonshot.ai/v1/chat/completions';
     }
 
+    supportsImageMessages() {
+        return true;
+    }
+
+    isThinkingDefaultOn(model) { return model === 'kimi-k2.6'; }
+
+    supports(feature, model) {
+        if (feature === 'thinking_toggle') return model === 'kimi-k2.6';
+        return super.supports(feature, model);
+    }
+
+    shouldIncludeTemperature({ model }) {
+        return model !== 'kimi-k2.6';
+    }
+
+    extendRequestBody(body, { model, options }) {
+        if (model === 'kimi-k2.6') {
+            const shouldThink = options.shouldThink ?? options.getShouldThink?.() ?? true;
+            if (!shouldThink) {
+                body.thinking = { type: "disabled" };
+            }
+            // When shouldThink is true: don't send anything (thinking enabled by default)
+        }
+        // kimi-k2-thinking: no thinking param needed (always on)
+    }
+
     beforeCreateRequest({ model, options }) {
-        if (model.includes('thinking') && options.streamWriter) {
+        const isThinking = model === 'kimi-k2-thinking' ||
+            (model === 'kimi-k2.6' && (options.shouldThink ?? options.getShouldThink?.() ?? true));
+        if (isThinking && options.streamWriter) {
             options.streamWriter.setThinkingModel();
         }
     }

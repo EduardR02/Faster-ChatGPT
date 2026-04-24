@@ -56,11 +56,30 @@ export class TabState {
     }
 
     setCurrentModel(modelId) {
+        if (modelId === this._currentModel) return;
         this._currentModel = modelId;
+        // Sync shouldThink default when the model actually changes
+        if (modelId && this.globalState.apiManager) {
+            const am = this.globalState.apiManager;
+            if (am.canToggleThinking(modelId)) {
+                this.setShouldThink(am.isThinkingDefaultOn(modelId));
+            } else if (!am.hasToggleThinking(modelId)) {
+                this.setShouldThink(false);
+            }
+            // Non-toggle thinkers (always-on): leave shouldThink alone
+        }
     }
 
     initializeModel() {
         this._currentModel = this.globalState.getSetting('current_model');
+        // Sync shouldThink default for toggle-thinking models on tab creation
+        if (this._currentModel && this.globalState.apiManager) {
+            const canToggle = this.globalState.apiManager.canToggleThinking(this._currentModel);
+            if (canToggle) {
+                const defaultOn = this.globalState.apiManager.isThinkingDefaultOn(this._currentModel);
+                this.setShouldThink(defaultOn);
+            }
+        }
     }
 
     getSetting(key) {

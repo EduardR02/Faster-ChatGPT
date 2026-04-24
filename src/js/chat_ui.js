@@ -1079,20 +1079,24 @@ export class SidepanelChatUI extends ChatUI {
             const canThink = this.stateManager.apiManager.hasToggleThinking(currentModel) || 
                              this.stateManager.apiManager.hasReasoningLevels(currentModel);
             const hasLevels = this.stateManager.apiManager.hasReasoningLevels(currentModel);
+            const canToggle = this.stateManager.apiManager.canToggleThinking(currentModel);
             
+            // shouldThink defaults are set by TabState.setCurrentModel on actual model changes.
+            // updateVisuals is read-only for state; it only updates UI visibility/styling.
+
             button.style.display = canThink ? 'flex' : 'none';
             
             if (canThink) {
                 const effort = this.stateManager.getReasoningEffort();
                 button.title = hasLevels ? `Reasoning: ${effort}` : 'Reasoning';
-                button.classList.toggle('active', hasLevels || this.stateManager.getShouldThink());
+                // Active for: reasoning-level models, toggle models with shouldThink on, or non-toggle thinkers
+                const isActive = hasLevels || (canToggle ? this.stateManager.getShouldThink() : true);
+                button.classList.toggle('active', isActive);
                 
                 const label = button.querySelector('.reasoning-label');
                 if (label) {
                     label.textContent = hasLevels ? effort : 'reason';
                 }
-            } else {
-                this.stateManager.setShouldThink(false);
             }
             updateTextfieldHeight(this.textarea);
         };
@@ -1101,9 +1105,10 @@ export class SidepanelChatUI extends ChatUI {
             const model = this.stateManager.getSetting('current_model') || '';
             if (this.stateManager.apiManager.hasReasoningLevels(model)) {
                 this.stateManager.cycleReasoningEffort();
-            } else {
+            } else if (this.stateManager.apiManager.canToggleThinking(model)) {
                 this.stateManager.toggleShouldThink();
             }
+            // Non-toggle thinking models: clicking does nothing (reasoning is always on)
             updateVisuals();
         };
 

@@ -87,15 +87,21 @@ const PROVIDER_CONFIGS = [
     {
         name: 'Kimi',
         provider: Providers.kimi,
-        model: 'kimi-k2-turbo-preview',
+        model: 'kimi-k2.6',
         getSystemFromBody: (body) => body.messages?.find(m => m.role === 'system')?.content,
         getUserMessages: (body) => body.messages?.filter(m => m.role !== 'system'),
         assistantRole: 'assistant',
-        supportsImages: false,
+        supportsImages: true,
+        imageModel: 'kimi-k2.6',
+        getImageFromBody: (body) => body.messages[0].content.find(p => p.type === 'image_url'),
         getUsageFromChunk: (chunk) => chunk.usage,
         supportsThinking: true,
-        thinkingModel: 'kimi-k2-thinking-turbo',
-        getThinkingConfigFromBody: (body) => null,
+        thinkingModel: 'kimi-k2-thinking',
+        getThinkingConfigFromBody: (body) => {
+            if (body.thinking) return body.thinking;
+            if (body.model === 'kimi-k2-thinking') return { type: 'always_on' };
+            return undefined;
+        },
         getThinkingFromChunk: (chunk) => chunk.choices?.[0]?.delta?.reasoning_content,
     },
     {
@@ -449,6 +455,35 @@ describe('DeepSeekProvider - Specifics', () => {
         const body = JSON.parse(request.body);
         expect(body.reasoning_effort).toBe('max');
     });
+    test('isThinkingDefaultOn returns true for reasoner, false for chat', () => {
+        expect(Providers.deepseek.isThinkingDefaultOn('deepseek-reasoner')).toBe(true);
+        expect(Providers.deepseek.isThinkingDefaultOn('deepseek-chat')).toBe(false);
+    });
+
+    test('supports thinking_toggle returns false for reasoner, true for chat', () => {
+        expect(Providers.deepseek.supports('thinking_toggle', 'deepseek-reasoner')).toBe(false);
+        expect(Providers.deepseek.supports('thinking_toggle', 'deepseek-chat')).toBe(true);
+    });
+
+    test('supports thinking returns true for all deepseek models', () => {
+        expect(Providers.deepseek.supports('thinking', 'deepseek-reasoner')).toBe(true);
+        expect(Providers.deepseek.supports('thinking', 'deepseek-chat')).toBe(true);
+    });
+
+    test('reasoner always enables thinking regardless of shouldThink', () => {
+        const streamWriter = { setThinkingModel: mock() };
+        const [_, request] = provider.createRequest({
+            model: 'deepseek-reasoner',
+            messages: createConversation(),
+            stream: true,
+            options: { shouldThink: false, streamWriter },
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 10000 }
+        });
+        const body = JSON.parse(request.body);
+        expect(body.thinking).toEqual({ type: 'enabled' });
+        expect(streamWriter.setThinkingModel).toHaveBeenCalledTimes(1);
+    });
 });
 
 describe('AnthropicProvider - Specifics', () => {
@@ -739,5 +774,94 @@ describe('GrokProvider - Specifics', () => {
         expect(content).toContain('According to source');
         expect(content).toContain('[example.com](https://example.com/1)');
         expect(content).toContain('[example.com](https://example.com/2)');
+    });
+});
+
+describe('KimiProvider - Specifics', () => {
+    const provider = Providers.kimi;
+
+    test('kimi-k2.6 defaults - thinking on by default, fixed temperature, uses max_tokens', () => {
+        const messages = [
+            { role: RoleEnum.user, parts: [{ type: 'text', content: 'hello' }] }
+        ];
+        const [_, request] = provider.createRequest({
+            model: 'kimi-k2.6',
+            messages,
+            stream: true,
+            options: {},
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 5000 }
+        });
+        const body = JSON.parse(request.body);
+        expect(body.max_tokens).toBe(5000);
+        expect(body.max_completion_tokens).toBeUndefined();
+        expect(body.temperature).toBeUndefined();
+        expect(body.thinking).toBeUndefined();
+    });
+
+    test('kimi-k2.6 disabled thinking sends type disabled', () => {
+        const messages = [
+            { role: RoleEnum.user, parts: [{ type: 'text', content: 'hello' }] }
+        ];
+        const [_, request] = provider.createRequest({
+            model: 'kimi-k2.6',
+            messages,
+            stream: true,
+            options: { shouldThink: false },
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 5000 }
+        });
+        const body = JSON.parse(request.body);
+        expect(body.thinking).toEqual({ type: 'disabled' });
+        expect(body.max_tokens).toBe(5000);
+        expect(body.max_completion_tokens).toBeUndefined();
+    });
+
+    test('kimi-k2-thinking model - always thinking, uses temperature, uses max_tokens', () => {
+        const messages = [
+            { role: RoleEnum.user, parts: [{ type: 'text', content: 'think deeply' }] }
+        ];
+        const streamWriter = { setThinkingModel: mock() };
+        const [_, request] = provider.createRequest({
+            model: 'kimi-k2-thinking',
+            messages,
+            stream: true,
+            options: { shouldThink: true, streamWriter },
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 10000 }
+        });
+        const body = JSON.parse(request.body);
+        expect(body.max_tokens).toBe(10000);
+        expect(body.max_completion_tokens).toBeUndefined();
+        expect(body.temperature).toBe(0.7);
+        expect(body.thinking).toBeUndefined();
+        expect(streamWriter.setThinkingModel).toHaveBeenCalledTimes(1);
+    });
+
+    test('max_tokens respects provider cap', () => {
+        const messages = [
+            { role: RoleEnum.user, parts: [{ type: 'text', content: 'hello' }] }
+        ];
+        const [_, request] = provider.createRequest({
+            model: 'kimi-k2.6',
+            messages,
+            stream: true,
+            options: {},
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 999999 }
+        });
+        const body = JSON.parse(request.body);
+        expect(body.max_tokens).toBe(262144);
+        expect(body.max_completion_tokens).toBeUndefined();
+    });
+
+    test('isThinkingDefaultOn returns true for kimi-k2.6, false for kimi-k2-thinking', () => {
+        expect(Providers.kimi.isThinkingDefaultOn('kimi-k2.6')).toBe(true);
+        expect(Providers.kimi.isThinkingDefaultOn('kimi-k2-thinking')).toBe(false);
+    });
+
+    test('supports thinking_toggle returns true for kimi-k2.6, false for kimi-k2-thinking', () => {
+        expect(Providers.kimi.supports('thinking_toggle', 'kimi-k2.6')).toBe(true);
+        expect(Providers.kimi.supports('thinking_toggle', 'kimi-k2-thinking')).toBe(false);
     });
 });

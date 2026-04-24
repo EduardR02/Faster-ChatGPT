@@ -370,15 +370,20 @@ class SidepanelApp {
         if (reasoningToggleButton) {
             const currentModelId = tabState.getCurrentModel() || '';
             const hasReasoningEffortLevels = this.apiManager.hasReasoningLevels(currentModelId);
+            const canThink = this.apiManager.hasToggleThinking(currentModelId) || hasReasoningEffortLevels;
             const labelSpan = reasoningToggleButton.querySelector('.reasoning-label');
             
+            reasoningToggleButton.style.display = canThink ? 'flex' : 'none';
+
             if (hasReasoningEffortLevels) {
                 const effortLevel = tabState.getReasoningEffort();
                 reasoningToggleButton.classList.add('active');
                 reasoningToggleButton.title = `Reasoning: ${effortLevel}`;
                 if (labelSpan) labelSpan.textContent = effortLevel;
             } else {
-                reasoningToggleButton.classList.toggle('active', tabState.getShouldThink());
+                const canToggle = this.apiManager.canToggleThinking(currentModelId);
+                const isActive = canToggle ? tabState.getShouldThink() : true;
+                reasoningToggleButton.classList.toggle('active', isActive);
                 reasoningToggleButton.title = 'Reasoning';
                 if (labelSpan) labelSpan.textContent = 'reason';
             }
