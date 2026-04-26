@@ -506,6 +506,32 @@ class MediaTab {
         }
     }
 
+    _resetMediaState() {
+        this.deferredForceRefresh = true;
+        this.mediaEntries = [];
+        this.mediaEntryMap.clear();
+        this.mediaItemElements.clear();
+        this.invalidMediaIds = new Set();
+        this.mediaLoadContext = null;
+        this.isLoading = false;
+        this.pendingRefresh = false;
+        if (this.mediaObserver) {
+            this.mediaObserver.disconnect();
+        }
+    }
+
+    _filterAndSortMedia(entries) {
+        const filtered = entries
+            .filter(entry => this.currentFilter === 'all' || entry.source === this.currentFilter)
+            .filter(entry => !this.invalidMediaIds?.has(entry.id));
+        return filtered.sort((a, b) => {
+            if (this.currentSort === 'asc') {
+                return (a.timestamp ?? 0) - (b.timestamp ?? 0);
+            }
+            return (b.timestamp ?? 0) - (a.timestamp ?? 0);
+        });
+    }
+
     ensureMediaObserver() {
         const panel = document.getElementById('media-panel');
         const root = panel ?? null;
@@ -691,18 +717,8 @@ class MediaTab {
             const grid = document.getElementById('media-grid');
             if (!panel || !grid) return;
 
-            const filtered = newEntries
-                .filter(entry => this.currentFilter === 'all' || entry.source === this.currentFilter)
-                .filter(entry => !this.invalidMediaIds?.has(entry.id));
-
-            if (!filtered.length) return;
-
-            const sorted = [...filtered].sort((a, b) => {
-                if (this.currentSort === 'asc') {
-                    return (a.timestamp ?? 0) - (b.timestamp ?? 0);
-                }
-                return (b.timestamp ?? 0) - (a.timestamp ?? 0);
-            });
+            const sorted = this._filterAndSortMedia(newEntries);
+            if (!sorted.length) return;
 
             this.setMediaState(panel, MEDIA_STATE.ready);
             await this.renderNewMediaEntries(sorted, grid);
@@ -721,17 +737,7 @@ class MediaTab {
                 this.deferredForceRefresh = false;
                 await this.refreshMedia({ force: true });
             } else {
-                this.deferredForceRefresh = true;
-                this.mediaEntries = [];
-                this.mediaEntryMap.clear();
-                this.mediaItemElements.clear();
-                this.invalidMediaIds = new Set();
-                this.mediaLoadContext = null;
-                this.isLoading = false;
-                this.pendingRefresh = false;
-                if (this.mediaObserver) {
-                    this.mediaObserver.disconnect();
-                }
+                this._resetMediaState();
             }
             return 0;
         }
@@ -752,17 +758,7 @@ class MediaTab {
                 this.deferredForceRefresh = false;
                 await this.refreshMedia({ force: true });
             } else {
-                this.deferredForceRefresh = true;
-                this.mediaEntries = [];
-                this.mediaEntryMap.clear();
-                this.mediaItemElements.clear();
-                this.invalidMediaIds = new Set();
-                this.mediaLoadContext = null;
-                this.isLoading = false;
-                this.pendingRefresh = false;
-                if (this.mediaObserver) {
-                    this.mediaObserver.disconnect();
-                }
+                this._resetMediaState();
             }
             return indexedCount;
         } catch (error) {
@@ -836,16 +832,7 @@ class MediaTab {
         }
         this.ensureMediaObserver();
 
-        const filteredEntries = this.mediaEntries
-            .filter(entry => this.currentFilter === 'all' || entry.source === this.currentFilter)
-            .filter(entry => !this.invalidMediaIds?.has(entry.id));
-
-        const sortedEntries = [...filteredEntries].sort((a, b) => {
-            if (this.currentSort === 'asc') {
-                return (a.timestamp ?? 0) - (b.timestamp ?? 0);
-            }
-            return (b.timestamp ?? 0) - (a.timestamp ?? 0);
-        });
+        const sortedEntries = this._filterAndSortMedia(this.mediaEntries);
 
         grid.replaceChildren();
 

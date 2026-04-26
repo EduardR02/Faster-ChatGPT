@@ -34,7 +34,6 @@ class SidepanelApp {
         this.openedForReconstruct = false;
         this.startupAt = Date.now();
         this.startupNewTabId = null;
-        this._markNextTabAsStartupNew = false;
 
         // Cached DOM elements (reduces repeated queries)
         this.textInput = document.getElementById('textInput');
@@ -115,11 +114,9 @@ class SidepanelApp {
             return;
         }
 
-        this._markNextTabAsStartupNew = !this.openedForReconstruct;
         const tab = this.tabManager.createTab({
             continueFunc: (i, s, m) => this.continueFromCurrent(i, s, m)
         });
-        this._markNextTabAsStartupNew = false;
 
         if (!tab) return;
         if (this.startupNewTabId == null && !this.openedForReconstruct) {
@@ -341,7 +338,7 @@ class SidepanelApp {
         if (activeTab.tabState) {
             this.updateHeaderControls(activeTab.tabState);
             const currentModelId = activeTab.tabState.getCurrentModel();
-            if (currentModelId && currentModelId !== this.stateManager.getSetting('current_model')) {
+            if (currentModelId) {
                 this.stateManager.updateSettingsLocal({ current_model: currentModelId });
             }
         }
@@ -350,7 +347,7 @@ class SidepanelApp {
     updateHeaderControls(tabState) {
         const thinkingModeButton = document.querySelector('.thinking-mode');
         if (thinkingModeButton) {
-            thinkingModeButton.classList.toggle('thinking-mode-on', tabState.pendingThinkingMode);
+            thinkingModeButton.classList.toggle('thinking-mode-on', tabState?.pendingThinkingMode);
         }
         
         const arenaToggleButton = document.querySelector('.arena-toggle-button--arena');
@@ -367,38 +364,15 @@ class SidepanelApp {
             councilToggleButton.textContent = isCouncilModeActive ? ICON.COUNCIL_ON : ICON.COUNCIL_OFF;
         }
 
-        const reasoningToggleButton = document.getElementById('sonnet-thinking-toggle');
-        if (reasoningToggleButton) {
-            const currentModelId = tabState.getCurrentModel() || '';
-            const hasReasoningEffortLevels = this.apiManager.hasReasoningLevels(currentModelId);
-            const canThink = this.apiManager.hasToggleThinking(currentModelId) || hasReasoningEffortLevels;
-            const labelSpan = reasoningToggleButton.querySelector('.reasoning-label');
-            
-            reasoningToggleButton.style.display = canThink ? 'flex' : 'none';
-
-            if (hasReasoningEffortLevels) {
-                const effortLevel = tabState.getReasoningEffort();
-                reasoningToggleButton.classList.add('active');
-                reasoningToggleButton.title = `Reasoning: ${effortLevel}`;
-                if (labelSpan) labelSpan.textContent = effortLevel;
-            } else {
-                const canToggle = this.apiManager.canToggleThinking(currentModelId);
-                const isActive = canToggle ? tabState.getShouldThink() : true;
-                reasoningToggleButton.classList.toggle('active', isActive);
-                reasoningToggleButton.title = 'Reasoning';
-                if (labelSpan) labelSpan.textContent = 'reason';
-            }
-        }
-        
         const webSearchToggle = document.getElementById('web-search-toggle');
         if (webSearchToggle) {
-            webSearchToggle.classList.toggle('active', tabState.getShouldWebSearch());
+            webSearchToggle.classList.toggle('active', tabState?.getShouldWebSearch());
         }
         
         const aspectLabel = document.querySelector('#image-aspect-toggle .reasoning-label');
         const resolutionLabel = document.querySelector('#image-res-toggle .reasoning-label');
-        if (aspectLabel) aspectLabel.textContent = tabState.getImageAspectRatio();
-        if (resolutionLabel) resolutionLabel.textContent = tabState.getImageResolution();
+        if (aspectLabel && tabState) aspectLabel.textContent = tabState.getImageAspectRatio();
+        if (resolutionLabel && tabState) resolutionLabel.textContent = tabState.getImageResolution();
     }
 
     handleTabClose(tabId) { 
@@ -411,18 +385,7 @@ class SidepanelApp {
         const councilToggleButton = document.querySelector('.council-toggle-button');
 
         const updateButtonState = () => {
-            const tabState = this.getActiveTabState();
-            const isCouncilModeActive = tabState?.isCouncilModeActive ?? this.stateManager.getSetting('council_mode');
-            const isArenaModeActive = tabState?.isArenaModeActive ?? this.stateManager.getSetting('arena_mode');
-            
-            if (arenaToggleButton) {
-                arenaToggleButton.classList.toggle('arena-mode-on', isArenaModeActive);
-                arenaToggleButton.textContent = isArenaModeActive ? ICON.ARENA : ICON.CHAT;
-            }
-            if (councilToggleButton) {
-                councilToggleButton.classList.toggle('council-mode-on', isCouncilModeActive);
-                councilToggleButton.textContent = isCouncilModeActive ? ICON.COUNCIL_ON : ICON.COUNCIL_OFF;
-            }
+            this.updateHeaderControls(this.getActiveTabState());
         };
         
         this.stateManager.runOnReady(updateButtonState);

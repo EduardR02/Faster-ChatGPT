@@ -287,22 +287,10 @@ class ChatUI {
                             isRegeneration
                         });
                     } else {
-                        const capturedIndex = i;
-                        message.contents.forEach((parts, subIndex) => {
-                            const runOptions = { 
-                                ...message, 
-                                hideModels: options.hideModels,
-                                isRegeneration: isRegeneration || subIndex !== 0
-                            };
-                            
-                            if (options.continueFunc) {
-                                runOptions.continueFunc = () => options.continueFunc(capturedIndex, subIndex);
-                            }
-                            
-                            const messageBlock = this.createMessageFromParts(parts, runOptions);
-                            if (messageBlock) {
-                                this.appendConversationNode(messageBlock);
-                            }
+                        this._renderMessageContents(message, i, {
+                            isRegenerationBase: isRegeneration,
+                            hideModels: options.hideModels,
+                            continueFunc: options.continueFunc
                         });
                     }
                     assistantCount++;
@@ -311,22 +299,10 @@ class ChatUI {
                     // User or System
                     assistantCount = 0; // Reset assistant count on user message
                     if (options.addSystemMsg || message.role !== 'system') {
-                        const capturedIndex = i;
-                        message.contents.forEach((parts, subIndex) => {
-                            const runOptions = { 
-                                ...message, 
-                                hideModels: options.hideModels, 
-                                isRegeneration: subIndex !== 0 
-                            };
-                            
-                            if (options.continueFunc) {
-                                runOptions.continueFunc = () => options.continueFunc(capturedIndex, subIndex);
-                            }
-                            
-                            const messageBlock = this.createMessageFromParts(parts, runOptions);
-                            if (messageBlock) {
-                                this.appendConversationNode(messageBlock);
-                            }
+                        this._renderMessageContents(message, i, {
+                            isRegenerationBase: false,
+                            hideModels: options.hideModels,
+                            continueFunc: options.continueFunc
                         });
                     }
                     i++;
@@ -342,6 +318,23 @@ class ChatUI {
         }
 
         this.conversationDiv.appendChild(fragment);
+    }
+
+    _renderMessageContents(message, index, { isRegenerationBase = false, hideModels, continueFunc } = {}) {
+        message.contents.forEach((parts, subIndex) => {
+            const runOptions = {
+                ...message,
+                hideModels,
+                isRegeneration: isRegenerationBase || subIndex !== 0
+            };
+            if (continueFunc) {
+                runOptions.continueFunc = () => continueFunc(index, subIndex);
+            }
+            const messageBlock = this.createMessageFromParts(parts, runOptions);
+            if (messageBlock) {
+                this.appendConversationNode(messageBlock);
+            }
+        });
     }
 
     createArenaMessage(messageData, options = {}) {
