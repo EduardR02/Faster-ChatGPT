@@ -76,12 +76,25 @@ export class BaseProvider {
             .join('\n');
     }
 
+    parseBase64DataUrl(mediaData) {
+        if (typeof mediaData !== 'string') {
+            throw new Error('Invalid media data URL: expected a string in data:<mime>;base64,<data> format');
+        }
+
+        const match = mediaData.match(/^data:([^;,]+);base64,(.+)$/s);
+        if (!match || !match[1] || !match[2]) {
+            throw new Error('Invalid media data URL: expected data:<mime>;base64,<data> format');
+        }
+
+        return { mimeType: match[1], data: match[2] };
+    }
+
     getBase64MediaType(base64String) { 
-        return base64String.split(':')[1].split(';')[0]; 
+        return this.parseBase64DataUrl(base64String).mimeType;
     }
 
     simpleBase64Splitter(base64String) { 
-        return base64String.split('base64,')[1]; 
+        return this.parseBase64DataUrl(base64String).data;
     }
 
     extractBaseDomain(url) {

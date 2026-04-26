@@ -161,7 +161,14 @@ class PopupMenu {
                 const headerTitle = this.chatUI?.autoUpdateHeader?.(chatId);
                 chatCore.miscUpdate({ title: headerTitle || newTitle });
             }
-            this.chatStorage.renameChat(chatId, newTitle);
+            const cachedMeta = chatMetaCache.get(chatId);
+            if (cachedMeta) {
+                cacheMeta({ ...cachedMeta, title: newTitle, renamed: true }, chatMetaComplete.has(chatId));
+            }
+            chatSearch?.updateInIndex(chatId, newTitle);
+            this.chatStorage.renameChat(chatId, newTitle).catch(error => {
+                console.error('Failed to rename chat:', error);
+            });
         }
         this.hide();
     }
@@ -1789,7 +1796,7 @@ class ChatSearch {
         const metaList = metadata || await chatStorage.getChatMetadata(Infinity, 0);
 
         const documents = await Promise.all(metaList.map(async meta => {
-            const chat = await chatStorage.loadChat(meta.chatId);
+            const chat = await chatStorage.loadChat(meta.chatId, null, { resolveBlobs: false });
             const document = {
                 id: this.normaliseId(meta.chatId),
                 title: meta.title ?? '',
@@ -1849,7 +1856,8 @@ class ChatSearch {
 
     async updateInIndex(chatId, newTitle) {
         if (!this.miniSearch) return;
-        const doc = this.docIndex.get(chatId);
+        const normalisedId = this.normaliseId(chatId);
+        const doc = this.docIndex.get(normalisedId);
         if (!doc) return;
 
         doc.title = newTitle;

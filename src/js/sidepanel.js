@@ -11,6 +11,7 @@ import { createStateProxy } from './state_proxy.js';
 // Configuration constants
 const STARTUP_WINDOW_MS = 2000;  // Time window to consider closing empty startup tabs
 const NEW_TAB_URL = 'chrome://newtab';
+const POPOUT_READY_TIMEOUT_MS = 3000;
 
 // Arena and Council mode toggle icons
 const ICON = {
@@ -798,13 +799,19 @@ class SidepanelApp {
             
             // Wait for new sidepanel instance to signal ready
             await new Promise(resolve => {
+                let timeoutId;
+                const cleanup = () => {
+                    chrome.runtime.onMessage.removeListener(readyMessageListener);
+                    clearTimeout(timeoutId);
+                    resolve();
+                };
                 const readyMessageListener = (message) => { 
                     if (message.type === "sidepanel_ready") { 
-                        chrome.runtime.onMessage.removeListener(readyMessageListener); 
-                        resolve(); 
+                        cleanup();
                     } 
                 };
                 chrome.runtime.onMessage.addListener(readyMessageListener);
+                timeoutId = setTimeout(cleanup, POPOUT_READY_TIMEOUT_MS);
             });
             
             chrome.runtime.sendMessage({ 

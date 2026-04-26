@@ -1,5 +1,5 @@
 import { describe, test, expect, mock } from 'bun:test';
-import { Providers, RoleEnum, DEFAULT_MODELS } from '../../src/js/LLMProviders.js';
+import { BaseProvider, Providers, RoleEnum, DEFAULT_MODELS } from '../../src/js/LLMProviders.js';
 
 // Helper to create a standard conversation
 const createConversation = () => [
@@ -131,6 +131,24 @@ const PROVIDER_CONFIGS = [
         getThinkingFromChunk: (chunk) => chunk.choices?.[0]?.delta?.reasoning_content,
     },
 ];
+
+describe('BaseProvider media data URL parsing', () => {
+    test('extracts media type and base64 data from valid data URLs', () => {
+        const provider = new BaseProvider();
+        const dataUrl = 'data:image/png;base64,QUJD';
+
+        expect(provider.getBase64MediaType(dataUrl)).toBe('image/png');
+        expect(provider.simpleBase64Splitter(dataUrl)).toBe('QUJD');
+    });
+
+    test('throws clear errors for malformed media input', () => {
+        const provider = new BaseProvider();
+
+        expect(() => provider.getBase64MediaType(null)).toThrow('Invalid media data URL');
+        expect(() => provider.simpleBase64Splitter('not-a-data-url')).toThrow('Invalid media data URL');
+        expect(() => provider.getBase64MediaType('data:image/png,QUJD')).toThrow('Invalid media data URL');
+    });
+});
 
 PROVIDER_CONFIGS.forEach(config => {
     describe(`${config.name}Provider`, () => {

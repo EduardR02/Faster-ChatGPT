@@ -248,58 +248,60 @@ export class ChatStorage {
         return false;
     }
 
+    async getInlineImageMigrationBatch(db, batchSize, startAfterKey = null) {
+        return new Promise(resolve => {
+            const messages = [];
+            let lastKey = startAfterKey;
+            const tx = db.transaction('messages', 'readonly');
+            const store = tx.objectStore('messages');
+            const range = startAfterKey == null ? null : IDBKeyRange.lowerBound(startAfterKey, true);
+            const cursor = store.openCursor(range);
+
+            cursor.onsuccess = (event) => {
+                const entry = event.target.result;
+                if (!entry) {
+                    resolve({ messages, lastKey, complete: true });
+                    return;
+                }
+
+                lastKey = entry.key;
+                if (this.messageHasInlineImages(entry.value)) {
+                    messages.push(entry.value);
+                }
+
+                if (messages.length >= batchSize) {
+                    resolve({ messages, lastKey, complete: false });
+                    return;
+                }
+
+                entry.continue();
+            };
+            cursor.onerror = () => resolve({ messages: [], lastKey, complete: true });
+        });
+    }
+
     async runPendingMigration() {
         const db = await this.getDB();
         if (!db.objectStoreNames.contains('blobs')) return;
 
-        const needsMigration = await new Promise(resolve => {
-            const tx = db.transaction('messages', 'readonly');
-            const store = tx.objectStore('messages');
-            const cursor = store.openCursor();
-            cursor.onsuccess = (event) => {
-                const entry = event.target.result;
-                if (!entry) {
-                    resolve(false);
-                    return;
-                }
-                if (this.messageHasInlineImages(entry.value)) {
-                    resolve(true);
-                    return;
-                }
-                entry.continue();
-            };
-            cursor.onerror = () => resolve(false);
-        });
-
-        if (!needsMigration) return;
-
-        console.log('Migrating images to blob storage...');
-
         const batchSize = 50;
         let processed = 0;
+        let started = false;
+        let lastKey = null;
+        let complete = false;
         const hashCache = new Map();
 
-        while (true) {
-            const batch = await new Promise(resolve => {
-                const messages = [];
-                const tx = db.transaction('messages', 'readonly');
-                const store = tx.objectStore('messages');
-                const cursor = store.openCursor();
-                cursor.onsuccess = (event) => {
-                    const entry = event.target.result;
-                    if (!entry || messages.length >= batchSize) {
-                        resolve(messages);
-                        return;
-                    }
-                    if (this.messageHasInlineImages(entry.value)) {
-                        messages.push(entry.value);
-                    }
-                    entry.continue();
-                };
-                cursor.onerror = () => resolve([]);
-            });
+        while (!complete) {
+            const batchResult = await this.getInlineImageMigrationBatch(db, batchSize, lastKey);
+            const batch = batchResult.messages;
+            lastKey = batchResult.lastKey;
+            complete = batchResult.complete;
 
-            if (batch.length === 0) break;
+            if (batch.length === 0) continue;
+            if (!started) {
+                started = true;
+                console.log('Migrating images to blob storage...');
+            }
 
             const blobEntries = new Map();
             const preparedBatch = await Promise.all(
@@ -316,7 +318,9 @@ export class ChatStorage {
             });
         }
 
-        console.log(`Blob migration complete. Processed ${processed} messages.`);
+        if (started) {
+            console.log(`Blob migration complete. Processed ${processed} messages.`);
+        }
     }
 
     // ==================== CORE CRUD API ====================
@@ -466,12 +470,19 @@ export class ChatStorage {
         });
     }
 
-    async loadChat(chatId, messageLimit = null) {
-        return this.dbOp(['messages', 'chatMeta', 'blobs'], 'readonly', async (transaction) => {
+    async loadChat(chatId, messageLimit = null, options = {}) {
+        const shouldResolveBlobs = options.resolveBlobs !== false;
+        const storeNames = shouldResolveBlobs ? ['messages', 'chatMeta', 'blobs'] : ['messages', 'chatMeta'];
+
+        return this.dbOp(storeNames, 'readonly', async (transaction) => {
             const metadata = await this.req(transaction.objectStore('chatMeta').get(chatId));
             if (!metadata) return null;
 
             const messages = await this.req(transaction.objectStore('messages').index('chatId').getAll(IDBKeyRange.only(chatId), messageLimit));
+            if (!shouldResolveBlobs) {
+                return { ...metadata, messages };
+            }
+
             const resolvedMessages = await Promise.all(
                 messages.map(message => this.resolveBlobs(message, transaction))
             );

@@ -68,6 +68,72 @@ describe('ChatStorage', () => {
     expect(allBlobs[0].chatIds).toContain(chat2.chatId);
   });
 
+  test('loadChat can skip blob resolution while default loadChat resolves images', async () => {
+    const imageData = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwIB/AL+X1EAAAAASUVORK5CYII=';
+
+    const result = await storage.createChatWithMessages('Image Chat', [
+      {
+        role: 'user',
+        contents: [[
+          { type: 'text', content: 'Describe this' },
+          { type: 'image', content: imageData }
+        ]],
+        images: [imageData]
+      }
+    ]);
+
+    const normalLoad = await storage.loadChat(result.chatId);
+    expect(normalLoad.messages[0].images[0]).toBe(imageData);
+    expect(normalLoad.messages[0].contents[0][1].content).toBe(imageData);
+
+    const noBlobLoad = await storage.loadChat(result.chatId, null, { resolveBlobs: false });
+    expect(noBlobLoad.messages[0].images[0]).not.toBe(imageData);
+    expect(noBlobLoad.messages[0].images[0].startsWith('data:')).toBe(false);
+    expect(noBlobLoad.messages[0].contents[0][1].content).not.toBe(imageData);
+    expect(noBlobLoad.messages[0].contents[0][1].content.startsWith('data:')).toBe(false);
+  });
+
+  test('pending blob migration scans each message once across batches', async () => {
+    storage = new ChatStorage();
+    storage.migrationRun = true;
+
+    let chatId;
+    await storage.dbOp(['chatMeta', 'messages'], 'readwrite', async transaction => {
+      chatId = await storage.req(transaction.objectStore('chatMeta').add({ title: 'Legacy', timestamp: 1 }));
+      const messageStore = transaction.objectStore('messages');
+
+      for (let messageId = 0; messageId < 120; messageId++) {
+        const imageData = `data:image/png;base64,${Buffer.from(`image-${messageId}`).toString('base64')}`;
+        messageStore.add({
+          chatId,
+          messageId,
+          role: 'user',
+          contents: [[{ type: 'text', content: `message ${messageId}` }]],
+          images: [imageData]
+        });
+      }
+    });
+
+    const originalMessageHasInlineImages = storage.messageHasInlineImages.bind(storage);
+    let scannedMessages = 0;
+    storage.messageHasInlineImages = message => {
+      scannedMessages++;
+      return originalMessageHasInlineImages(message);
+    };
+
+    await ChatStorage.prototype.runPendingMigration.call(storage);
+
+    expect(scannedMessages).toBe(120);
+
+    const stored = await storage.loadChat(chatId, null, { resolveBlobs: false });
+    expect(stored.messages).toHaveLength(120);
+    expect(stored.messages.every(message => !message.images[0].startsWith('data:'))).toBe(true);
+
+    const loaded = await storage.loadChat(chatId);
+    expect(loaded.messages[0].images[0]).toBe('data:image/png;base64,aW1hZ2UtMA==');
+    expect(loaded.messages[119].images[0]).toBe('data:image/png;base64,aW1hZ2UtMTE5');
+  });
+
   test('deleting chat cleans up orphaned blobs', async () => {
     const imageData = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwIB/AL+X1EAAAAASUVORK5CYII=';
     
