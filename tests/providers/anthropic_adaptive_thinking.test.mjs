@@ -16,6 +16,12 @@ describe('AnthropicProvider adaptive thinking', () => {
         expect(provider.supports('reasoning', 'claude-opus-4-12')).toBe(true);
     });
 
+    test('supports Fable 5 adaptive thinking and web search', () => {
+        expect(provider.supports('reasoning', 'claude-fable-5')).toBe(true);
+        expect(provider.supports('thinking', 'claude-fable-5')).toBe(true);
+        expect(provider.supports('web_search', 'claude-fable-5')).toBe(true);
+    });
+
     test('does not enable reasoning levels for Opus 4.5 and earlier', () => {
         expect(provider.supports('reasoning', 'claude-opus-4-5')).toBe(false);
         expect(provider.supports('reasoning', 'claude-opus-4-0')).toBe(false);
@@ -34,6 +40,31 @@ describe('AnthropicProvider adaptive thinking', () => {
         const body = JSON.parse(request.body);
         expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
         expect(body.output_config).toEqual({ effort: 'medium' });
+    });
+
+    test('uses always-on adaptive thinking and 128k max output for Fable 5', () => {
+        const streamWriter = { setThinkingModel: mock() };
+        const [_, request] = provider.createRequest({
+            model: 'claude-fable-5',
+            messages,
+            stream: true,
+            options: {
+                reasoningEffort: 'xhigh',
+                shouldThink: false,
+                webSearch: true,
+                streamWriter
+            },
+            apiKey: 'key',
+            settings: { temperature: 0.5, max_tokens: 200000 }
+        });
+
+        const body = JSON.parse(request.body);
+        expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+        expect(body.output_config).toEqual({ effort: 'max' });
+        expect(body.max_tokens).toBe(MaxTokens.anthropic_fable);
+        expect(body.temperature).toBeUndefined();
+        expect(body.tools).toEqual([{ type: 'web_search_20250305', name: 'web_search', max_uses: 2 }]);
+        expect(streamWriter.setThinkingModel).toHaveBeenCalledTimes(1);
     });
 
     test('keeps thinking support for Opus 4.6', () => {
