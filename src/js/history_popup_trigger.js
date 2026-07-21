@@ -16,3 +16,17 @@ export const attachHistoryPopupTrigger = (trigger, { isOpen, open, close, focusT
         toggle(event, true);
     });
 };
+
+export const attachHistoryPopupEscape = (popup, close) => {
+    popup.addEventListener('keydown', event => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        event.stopPropagation();
+        close();
+    });
+};
+
+export const focusHistoryPopupTrigger = (historyItem) => {
+    const trigger = historyItem?.querySelector('.action-dots');
+    if (trigger?.isConnected) trigger.focus();
+};

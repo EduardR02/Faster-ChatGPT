@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { parseHTML } from 'linkedom';
 import { HistoryChatUI } from '../../src/js/chat_ui.js';
-import { attachHistoryPopupTrigger } from '../../src/js/history_popup_trigger.js';
+import {
+    attachHistoryPopupEscape,
+    attachHistoryPopupTrigger,
+    focusHistoryPopupTrigger
+} from '../../src/js/history_popup_trigger.js';
 import { copyChatMarkdownToClipboard } from '../../src/js/markdown_export.js';
 
 describe('copyChatMarkdownToClipboard', () => {
@@ -100,28 +105,30 @@ describe('copyChatMarkdownToClipboard', () => {
 
 describe('Markdown copy history action', () => {
     const createHarness = () => {
-        const { document, window } = parseHTML(`
-            <div id="history-list"></div>
-            <div class="popup-menu">
-                <button type="button" data-action="copy-markdown">Copy Markdown</button>
-            </div>
-        `);
+        const historyHtml = readFileSync(new URL('../../src/html/history.html', import.meta.url), 'utf8');
+        const { document, window } = parseHTML(historyHtml);
         globalThis.document = document;
-        const state = { open: false, selected: 0, focused: 0 };
-        const copyAction = document.querySelector('[data-action="copy-markdown"]');
-        copyAction.focus = () => { state.focused += 1; };
+        const popup = document.querySelector('.popup-menu');
+        const state = { open: false, selected: 0, focusedActions: [], invokedActions: [], triggerFocused: 0 };
+        popup.querySelectorAll('.popup-item').forEach(action => {
+            action.focus = () => { state.focusedActions.push(action.dataset.action); };
+        });
+        popup.addEventListener('click', event => {
+            if (event.target.dataset.action) state.invokedActions.push(event.target.dataset.action);
+        });
         const context = {
             buildChat: () => { state.selected += 1; },
             addPopup: item => attachHistoryPopupTrigger(item.querySelector('.action-dots'), {
                 isOpen: () => state.open,
                 open: () => { state.open = true; },
                 close: () => { state.open = false; },
-                focusTarget: () => copyAction
+                focusTarget: () => popup.querySelector('.popup-item')
             })
         };
         const item = HistoryChatUI.prototype.createHistoryItem.call(context, { chatId: 1, title: 'Test chat' });
-        document.getElementById('history-list').appendChild(item);
-        return { context, document, window, item, state };
+        document.querySelector('.history-list').appendChild(item);
+        item.querySelector('.action-dots').focus = () => { state.triggerFocused += 1; };
+        return { context, document, window, item, popup, state };
     };
 
     const dispatchKey = (window, target, key) => {
@@ -131,7 +138,7 @@ describe('Markdown copy history action', () => {
         return event;
     };
 
-    test('opens from Enter and Space, focuses Copy Markdown, and does not select the chat', () => {
+    test('opens from Enter and Space, focuses the first action, and does not select the chat', () => {
         const originalDocument = globalThis.document;
         try {
             const harness = createHarness();
@@ -145,7 +152,7 @@ describe('Markdown copy history action', () => {
                 expect(event.defaultPrevented).toBe(true);
                 expect(harness.state.open).toBe(true);
             }
-            expect(harness.state.focused).toBe(2);
+            expect(harness.state.focusedActions).toEqual(['auto-rename', 'auto-rename']);
             expect(harness.state.selected).toBe(0);
         } finally {
             globalThis.document = originalDocument;
@@ -159,7 +166,7 @@ describe('Markdown copy history action', () => {
 
             harness.item.querySelector('.action-dots').click();
             expect(harness.state.open).toBe(true);
-            expect(harness.state.focused).toBe(0);
+            expect(harness.state.focusedActions).toEqual([]);
             expect(harness.state.selected).toBe(0);
 
             harness.item.querySelector('.history-chat-select').click();
@@ -169,11 +176,61 @@ describe('Markdown copy history action', () => {
         }
     });
 
+    test('exposes every popup action as a native button and invokes Rename', () => {
+        const originalDocument = globalThis.document;
+        try {
+            const harness = createHarness();
+            const actions = Array.from(harness.popup.querySelectorAll('.popup-item'));
+
+            expect(actions.map(action => action.dataset.action)).toEqual([
+                'auto-rename',
+                'rename',
+                'copy-markdown',
+                'delete'
+            ]);
+            expect(actions.every(action => action.tagName === 'BUTTON')).toBe(true);
+
+            harness.popup.querySelector('[data-action="rename"]').click();
+            expect(harness.state.invokedActions).toEqual(['rename']);
+        } finally {
+            globalThis.document = originalDocument;
+        }
+    });
+
+    test('Escape closes the popup and restores focus only while the trigger exists', () => {
+        const originalDocument = globalThis.document;
+        try {
+            const harness = createHarness();
+            attachHistoryPopupEscape(harness.popup, () => {
+                harness.state.open = false;
+                focusHistoryPopupTrigger(harness.item);
+            });
+            harness.state.open = true;
+
+            const firstEscape = dispatchKey(
+                harness.window,
+                harness.popup.querySelector('[data-action="auto-rename"]'),
+                'Escape'
+            );
+            expect(firstEscape.defaultPrevented).toBe(true);
+            expect(harness.state.open).toBe(false);
+            expect(harness.state.triggerFocused).toBe(1);
+
+            harness.item.remove();
+            harness.state.open = true;
+            dispatchKey(harness.window, harness.popup.querySelector('[data-action="delete"]'), 'Escape');
+            expect(harness.state.open).toBe(false);
+            expect(harness.state.triggerFocused).toBe(1);
+        } finally {
+            globalThis.document = originalDocument;
+        }
+    });
+
     test('keeps arrow navigation working from the actions trigger', () => {
         const originalDocument = globalThis.document;
         try {
             const harness = createHarness();
-            const historyList = harness.document.getElementById('history-list');
+            const historyList = harness.document.querySelector('.history-list');
             const nextItem = HistoryChatUI.prototype.createHistoryItem.call(
                 harness.context,
                 { chatId: 2, title: 'Next chat' }

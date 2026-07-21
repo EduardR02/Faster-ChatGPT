@@ -6,7 +6,7 @@ import { ChatCore } from './chat_core.js';
 import { createElementWithClass } from './ui_utils.js';
 import { normaliseForSearch } from './search_utils.js';
 import { copyChatMarkdownToClipboard } from './markdown_export.js';
-import { attachHistoryPopupTrigger } from './history_popup_trigger.js';
+import { attachHistoryPopupEscape, attachHistoryPopupTrigger, focusHistoryPopupTrigger } from './history_popup_trigger.js';
 import { getAppendFetchWindow, getMissingMessageRange, takeContiguousMessages } from './history_live_updates.js';
 
 /**
@@ -55,8 +55,9 @@ class PopupMenu {
     init() {
         this.popup = document.querySelector('.popup-menu');
         this.initRenameLogic();
-        document.addEventListener('click', () => this.hide());
+        document.addEventListener('click', () => this.hide(false));
         this.popup.addEventListener('click', (event) => this.handleAction(event));
+        attachHistoryPopupEscape(this.popup, () => this.hide());
     }
 
     initRenameLogic() {
@@ -67,7 +68,8 @@ class PopupMenu {
         };
         this.popup.querySelector('.rename-cancel').onclick = (event) => { 
             event.stopPropagation(); 
-            this.restore(); 
+            this.restore();
+            this.popup.querySelector('[data-action="rename"]').focus();
         };
         
         renameInput.onkeydown = (event) => {
@@ -75,6 +77,8 @@ class PopupMenu {
                 event.preventDefault(); 
                 this.confirmRename(); 
             } else if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
                 this.hide(); 
             }
         };
@@ -85,7 +89,7 @@ class PopupMenu {
             isOpen: () => this.activePopup === historyItem,
             open: () => this.show(historyItem),
             close: () => this.hide(),
-            focusTarget: () => this.popup.querySelector('[data-action="copy-markdown"]')
+            focusTarget: () => this.popup.querySelector('.popup-item')
         });
     }
 
@@ -160,10 +164,12 @@ class PopupMenu {
         if (copyButton) copyButton.textContent = 'Copy Markdown';
     }
 
-    hide() { 
+    hide(restoreFocus = true) {
+        const historyItem = this.activePopup;
         this.restore(); 
         this.popup.classList.remove('active'); 
-        this.activePopup = null; 
+        this.activePopup = null;
+        if (restoreFocus) focusHistoryPopupTrigger(historyItem);
     }
 
     confirmRename() {
