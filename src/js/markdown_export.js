@@ -2,9 +2,9 @@
  * Human-readable Markdown export for chats.
  *
  * Pure serializer for the v3 chat data model (contents/regenerations, arena
- * branches, council responses, thoughts, media placeholders) plus a thin
- * clipboard boundary helper. Message content is already Markdown source, so
- * it passes through verbatim - no HTML rendering is involved.
+ * branches, council responses, thoughts, media placeholders) plus thin
+ * clipboard and file-download boundary helpers. Message content is already
+ * Markdown source, so it passes through verbatim - no HTML rendering is involved.
  */
 
 const REGEN_ARROW = '⟳'; // Matches chat_ui.js UNICODE.REGEN_ARROW
@@ -12,6 +12,10 @@ const REGEN_ARROW = '⟳'; // Matches chat_ui.js UNICODE.REGEN_ARROW
 const ROLE_LABELS = { user: 'You', assistant: 'Assistant', system: 'System' };
 
 const ARENA_MODEL_KEYS = ['model_a', 'model_b'];
+
+const INVALID_FILENAME_CHARACTERS = /[<>:"/\\|?*\u0000-\u001f\u007f\u202a-\u202e\u2066-\u2069]+/g;
+
+const RESERVED_WINDOWS_FILENAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 
 const arenaFallbackName = (modelKey) => (modelKey === 'model_a' ? 'Model A' : 'Model B');
 
@@ -144,6 +148,34 @@ export const serializeChatToMarkdown = (chat) => {
     return `${sections.join('\n\n')}\n`;
 };
 
+export const markdownFilenameFromTitle = (title) => {
+    let stem = typeof title === 'string' ? title.trim() : '';
+    stem = stem
+        .replace(INVALID_FILENAME_CHARACTERS, '-')
+        .replace(/-+/g, '-')
+        .replace(/[ .-]+$/g, '')
+        .replace(/^[ .-]+/g, '');
+    if (/\.md$/i.test(stem)) stem = stem.slice(0, -3).replace(/[ .-]+$/g, '');
+    stem = Array.from(stem).slice(0, 60).join('').replace(/[ .-]+$/g, '');
+    if (!stem) stem = 'Untitled chat';
+    if (RESERVED_WINDOWS_FILENAME.test(stem)) stem = `_${stem}`;
+    return `${stem}.md`;
+};
+
+export const downloadMarkdownFile = (markdown, filename) => {
+    const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    try {
+        const anchor = document.createElement('a');
+        Object.assign(anchor, { href: url, download: filename });
+        anchor.click();
+    } catch (error) {
+        URL.revokeObjectURL(url);
+        throw error;
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+};
+
 /**
  * Loads a chat without resolving blob data (media becomes placeholders) and
  * writes its Markdown serialization to the clipboard.
@@ -154,5 +186,18 @@ export const copyChatMarkdownToClipboard = async (chatStorage, chatId, isCurrent
     const markdown = serializeChatToMarkdown(chat);
     if (!isCurrent()) return false;
     await navigator.clipboard.writeText(markdown);
+    return true;
+};
+
+/**
+ * Loads a chat without resolving binary media and downloads the exact same
+ * deterministic Markdown serialization used by the clipboard action.
+ */
+export const saveChatMarkdownToFile = async (chatStorage, chatId, isCurrent = () => true) => {
+    const chat = await chatStorage.loadChat(chatId, null, { resolveBlobs: false });
+    if (!chat) throw new Error(`Chat not found: ${chatId}`);
+    const markdown = serializeChatToMarkdown(chat);
+    if (!isCurrent()) return false;
+    downloadMarkdownFile(markdown, markdownFilenameFromTitle(chat.title));
     return true;
 };

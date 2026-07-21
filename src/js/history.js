@@ -5,7 +5,8 @@ import { RenameManager } from './rename_manager.js';
 import { ChatCore } from './chat_core.js';
 import { createElementWithClass } from './ui_utils.js';
 import { normaliseForSearch } from './search_utils.js';
-import { copyChatMarkdownToClipboard } from './markdown_export.js';
+import { copyChatMarkdownToClipboard, saveChatMarkdownToFile } from './markdown_export.js';
+import { runHistoryMarkdownAction } from './history_markdown_action.js';
 import { attachHistoryPopupEscape, attachHistoryPopupTrigger, focusHistoryPopupTrigger } from './history_popup_trigger.js';
 import {
     createLiveChatRequest,
@@ -95,7 +96,7 @@ class PopupMenu {
             isOpen: () => this.activePopup === historyItem,
             open: () => this.show(historyItem),
             close: () => this.hide(),
-            focusTarget: () => this.popup.querySelector('.popup-item')
+            focusTarget: () => this.popup.querySelector('.popup-action')
         });
     }
 
@@ -136,11 +137,14 @@ class PopupMenu {
             case 'copy-markdown':
                 this.handleCopyMarkdown(event.target);
                 break;
+            case 'save-markdown':
+                this.handleSaveMarkdown(event.target);
+                break;
         }
     }
 
     showRenameInput() {
-        ['rename', 'delete', 'auto-rename', 'copy-markdown'].forEach(action => {
+        ['rename', 'delete', 'auto-rename', 'copy-markdown', 'save-markdown'].forEach(action => {
             const actionButton = this.popup.querySelector(`[data-action="${action}"]`);
             if (actionButton) {
                 actionButton.style.display = 'none';
@@ -154,7 +158,8 @@ class PopupMenu {
 
     restore() {
         this.copyRequest = null;
-        ['rename', 'delete', 'auto-rename', 'copy-markdown'].forEach(action => {
+        this.saveRequest = null;
+        ['rename', 'delete', 'auto-rename', 'copy-markdown', 'save-markdown'].forEach(action => {
             const actionButton = this.popup.querySelector(`[data-action="${action}"]`);
             if (actionButton) {
                 actionButton.style.display = 'block';
@@ -168,6 +173,8 @@ class PopupMenu {
         }
         const copyButton = this.popup.querySelector('[data-action="copy-markdown"]');
         if (copyButton) copyButton.textContent = 'Copy Markdown';
+        const saveButton = this.popup.querySelector('[data-action="save-markdown"]');
+        if (saveButton) saveButton.textContent = 'Save Markdown';
     }
 
     hide(restoreFocus = true) {
@@ -239,20 +246,37 @@ class PopupMenu {
         const request = {};
         this.copyRequest = request;
         const chatId = parseInt(historyItem.id, 10);
-        item.textContent = 'copying...';
         const isCurrent = () => this.copyRequest === request && this.activePopup === historyItem;
-        try {
-            const copied = await copyChatMarkdownToClipboard(this.chatStorage, chatId, isCurrent);
-            if (!copied || !isCurrent()) return;
-            item.textContent = 'copied!';
-        } catch (error) {
-            if (!isCurrent()) return;
-            console.error('Markdown copy failed:', error);
-            item.textContent = 'failed :(';
-        }
-        setTimeout(() => {
-            if (this.copyRequest === request && this.activePopup === historyItem) this.hide();
-        }, 1500);
+        await runHistoryMarkdownAction({
+            button: item,
+            pendingText: 'copying...',
+            successText: 'copied!',
+            operation: () => copyChatMarkdownToClipboard(this.chatStorage, chatId, isCurrent),
+            isCurrent,
+            onError: error => console.error('Markdown copy failed:', error),
+            scheduleClose: () => setTimeout(() => {
+                if (isCurrent()) this.hide();
+            }, 1500)
+        });
+    }
+
+    async handleSaveMarkdown(item) {
+        const historyItem = this.activePopup;
+        const request = {};
+        this.saveRequest = request;
+        const chatId = parseInt(historyItem.id, 10);
+        const isCurrent = () => this.saveRequest === request && this.activePopup === historyItem;
+        await runHistoryMarkdownAction({
+            button: item,
+            pendingText: 'saving...',
+            successText: 'saved!',
+            operation: () => saveChatMarkdownToFile(this.chatStorage, chatId, isCurrent),
+            isCurrent,
+            onError: error => console.error('Markdown save failed:', error),
+            scheduleClose: () => setTimeout(() => {
+                if (isCurrent()) this.hide();
+            }, 1500)
+        });
     }
 }
 

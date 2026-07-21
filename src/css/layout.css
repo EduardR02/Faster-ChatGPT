@@ -724,7 +724,7 @@ body {
   color: #ffffff;
 }
 
-.popup-item {
+.popup-action {
   padding: 0.5em 1em;
   border-radius: 0.5em;
   color: #d4d4d4;
@@ -733,19 +733,19 @@ body {
   transition: all 0.1s ease-out;
 }
 
-button.popup-item {
+button.popup-action {
   border: none;
   background: transparent;
   font: inherit;
   text-align: center;
 }
 
-button.popup-item:focus-visible {
+button.popup-action:focus-visible {
   outline: 2px solid #fdaaaa;
   outline-offset: -2px;
 }
 
-.popup-item:hover {
+.popup-action:hover {
   background-color: rgba(255, 255, 255, 0.1);
   color: #ffffff;
 }
