@@ -228,13 +228,14 @@ class PopupMenu {
         this.copyRequest = request;
         const chatId = parseInt(historyItem.id, 10);
         item.textContent = 'copying...';
+        const isCurrent = () => this.copyRequest === request && this.activePopup === historyItem;
         try {
-            await copyChatMarkdownToClipboard(this.chatStorage, chatId);
-            if (this.copyRequest !== request || this.activePopup !== historyItem) return;
+            const copied = await copyChatMarkdownToClipboard(this.chatStorage, chatId, isCurrent);
+            if (!copied || !isCurrent()) return;
             item.textContent = 'copied!';
         } catch (error) {
+            if (!isCurrent()) return;
             console.error('Markdown copy failed:', error);
-            if (this.copyRequest !== request || this.activePopup !== historyItem) return;
             item.textContent = 'failed :(';
         }
         setTimeout(() => {

@@ -129,6 +129,48 @@ describe('serializeChatToMarkdown', () => {
         );
     });
 
+    test('marks consecutive top-level assistant messages as regenerations across modes', () => {
+        const chat = {
+            title: 'Cross-mode regenerations',
+            messages: [
+                { role: 'user', contents: [[{ type: 'text', content: 'First prompt' }]] },
+                { role: 'assistant', contents: [[{ type: 'text', content: 'Normal answer', model: 'normal-a' }]] },
+                {
+                    role: 'assistant',
+                    choice: 'ignored',
+                    continued_with: '',
+                    responses: {
+                        model_a: { name: 'arena-a', messages: [[{ type: 'text', content: 'Arena A' }]] },
+                        model_b: { name: 'arena-b', messages: [[{ type: 'text', content: 'Arena B' }]] }
+                    }
+                },
+                {
+                    role: 'assistant',
+                    contents: [[{ type: 'text', content: 'Council summary', model: 'collector' }]],
+                    council: {
+                        collector_model: 'collector',
+                        responses: {
+                            member: { name: 'Member', parts: [{ type: 'text', content: 'Council response' }] }
+                        }
+                    }
+                },
+                { role: 'assistant', contents: [[{ type: 'text', content: 'Final answer', model: 'normal-b' }]] },
+                { role: 'user', contents: [[{ type: 'text', content: 'Second prompt' }]] },
+                { role: 'assistant', contents: [[{ type: 'text', content: 'Fresh answer', model: 'normal-c' }]] }
+            ]
+        };
+
+        const markdown = serializeChatToMarkdown(chat);
+
+        expect(markdown).toContain('**Assistant (normal-a):**\n\nNormal answer');
+        expect(markdown).toContain('**Arena ⟳:**\n\n**Model A (arena-a):**\n\nArena A');
+        expect(markdown).toContain('**Model B (arena-b):**\n\nArena B');
+        expect(markdown).toContain('**Council ⟳:**\n\n**Member:**\n\nCouncil response');
+        expect(markdown).toContain('**Assistant (normal-b) ⟳:**\n\nFinal answer');
+        expect(markdown).toContain('**Assistant (normal-c):**\n\nFresh answer');
+        expect(markdown).not.toContain('**Assistant (normal-c) ⟳:**');
+    });
+
     test('skips empty parts and empty regeneration groups', () => {
         const chat = {
             title: 'Empties',

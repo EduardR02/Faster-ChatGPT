@@ -62,16 +62,16 @@ const serializeMedia = (message) => {
 const labeledBlock = (label, body, isRegeneration = false) =>
     `**${isRegeneration ? `${label} ${REGEN_ARROW}` : label}:**\n\n${body}`;
 
-const serializeContentGroups = (message, baseLabel, mediaBlock = '') => {
+const serializeContentGroups = (message, baseLabel, mediaBlock = '', isRegeneration = false) => {
     const blocks = [];
     (message.contents || []).forEach((parts, index) => {
         const body = [index === 0 ? mediaBlock : '', serializeParts(parts)].filter(Boolean).join('\n\n');
         if (!body) return;
         const model = modelOf(parts);
-        blocks.push(labeledBlock(model ? `${baseLabel} (${model})` : baseLabel, body, index > 0));
+        blocks.push(labeledBlock(model ? `${baseLabel} (${model})` : baseLabel, body, isRegeneration || index > 0));
     });
     if (!blocks.length && mediaBlock) {
-        blocks.push(labeledBlock(baseLabel, mediaBlock));
+        blocks.push(labeledBlock(baseLabel, mediaBlock, isRegeneration));
     }
     return blocks;
 };
@@ -94,7 +94,7 @@ const arenaResultLines = (message) => {
     return lines;
 };
 
-const serializeArena = (message) => {
+const serializeArena = (message, isRegeneration) => {
     const blocks = [];
     for (const modelKey of ARENA_MODEL_KEYS) {
         (message.responses?.[modelKey]?.messages || []).forEach((parts, index) => {
@@ -104,10 +104,10 @@ const serializeArena = (message) => {
         });
     }
     blocks.push(...arenaResultLines(message));
-    return blocks.length ? ['**Arena:**', ...blocks] : [];
+    return blocks.length ? [`**Arena${isRegeneration ? ` ${REGEN_ARROW}` : ''}:**`, ...blocks] : [];
 };
 
-const serializeCouncil = (message) => {
+const serializeCouncil = (message, isRegeneration) => {
     const blocks = [];
     const responses = message.council?.responses || {};
     for (const [modelId, entry] of Object.entries(responses)) {
@@ -122,21 +122,24 @@ const serializeCouncil = (message) => {
         if (!body) return;
         blocks.push(labeledBlock(summaryLabel, body, index > 0));
     });
-    return blocks.length ? ['**Council:**', ...blocks] : [];
+    return blocks.length ? [`**Council${isRegeneration ? ` ${REGEN_ARROW}` : ''}:**`, ...blocks] : [];
 };
 
-const serializeMessage = (message) => {
-    if (message.responses) return serializeArena(message);
-    if (message.council) return serializeCouncil(message);
+const serializeMessage = (message, isRegeneration) => {
+    if (message.responses) return serializeArena(message, isRegeneration);
+    if (message.council) return serializeCouncil(message, isRegeneration);
     const baseLabel = ROLE_LABELS[message.role] || message.role || 'unknown';
-    return serializeContentGroups(message, baseLabel, serializeMedia(message));
+    return serializeContentGroups(message, baseLabel, serializeMedia(message), isRegeneration);
 };
 
 export const serializeChatToMarkdown = (chat) => {
     const title = (chat?.title || '').trim() || 'Untitled chat';
     const sections = [`# ${title}`];
+    let assistantCount = 0;
     for (const message of chat?.messages || []) {
-        sections.push(...serializeMessage(message));
+        const isAssistant = message.role === 'assistant';
+        sections.push(...serializeMessage(message, isAssistant && assistantCount > 0));
+        assistantCount = isAssistant ? assistantCount + 1 : 0;
     }
     return `${sections.join('\n\n')}\n`;
 };
@@ -145,8 +148,11 @@ export const serializeChatToMarkdown = (chat) => {
  * Loads a chat without resolving blob data (media becomes placeholders) and
  * writes its Markdown serialization to the clipboard.
  */
-export const copyChatMarkdownToClipboard = async (chatStorage, chatId) => {
+export const copyChatMarkdownToClipboard = async (chatStorage, chatId, isCurrent = () => true) => {
     const chat = await chatStorage.loadChat(chatId, null, { resolveBlobs: false });
     if (!chat) throw new Error(`Chat not found: ${chatId}`);
-    await navigator.clipboard.writeText(serializeChatToMarkdown(chat));
+    const markdown = serializeChatToMarkdown(chat);
+    if (!isCurrent()) return false;
+    await navigator.clipboard.writeText(markdown);
+    return true;
 };

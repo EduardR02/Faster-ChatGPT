@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { copyChatMarkdownToClipboard } from '../../src/js/markdown_export.js';
 
 describe('copyChatMarkdownToClipboard', () => {
@@ -72,5 +73,35 @@ describe('copyChatMarkdownToClipboard', () => {
         const chatStorage = { loadChat: async () => ({ title: 'T', messages: [] }) };
 
         await expect(copyChatMarkdownToClipboard(chatStorage, 1)).rejects.toThrow('Document is not focused');
+    });
+
+    test('does not let an older overlapping request write after a newer request starts', async () => {
+        let resolveFirstLoad;
+        let currentRequest = 1;
+        const firstLoad = new Promise(resolve => { resolveFirstLoad = resolve; });
+        const chatStorage = {
+            loadChat: async (chatId) => chatId === 1
+                ? firstLoad
+                : { title: 'New request', messages: [] }
+        };
+
+        const firstCopy = copyChatMarkdownToClipboard(chatStorage, 1, () => currentRequest === 1);
+        currentRequest = 2;
+        const secondCopy = copyChatMarkdownToClipboard(chatStorage, 2, () => currentRequest === 2);
+        resolveFirstLoad({ title: 'Stale request', messages: [] });
+
+        expect(await secondCopy).toBe(true);
+        expect(await firstCopy).toBe(false);
+        expect(clipboardWrites).toEqual(['# New request\n']);
+    });
+});
+
+describe('Markdown copy history action', () => {
+    test('uses a native button so keyboard activation works without custom handlers', () => {
+        const historyHtml = readFileSync(new URL('../../src/html/history.html', import.meta.url), 'utf8');
+
+        expect(historyHtml).toMatch(
+            /<button[^>]*type="button"[^>]*data-action="copy-markdown"[^>]*>Copy Markdown<\/button>/
+        );
     });
 });

@@ -713,6 +713,18 @@ body {
   transition: all 0.1s ease-out;
 }
 
+button.popup-item {
+  border: none;
+  background: transparent;
+  font: inherit;
+  text-align: center;
+}
+
+button.popup-item:focus-visible {
+  outline: 2px solid #fdaaaa;
+  outline-offset: -2px;
+}
+
 .popup-item:hover {
   background-color: rgba(255, 255, 255, 0.1);
   color: #ffffff;
