@@ -1951,8 +1951,8 @@ export class HistoryChatUI extends ChatUI {
         document.addEventListener('keydown', async (e) => {
             if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
             
-            const current = document.activeElement;
-            if (!current?.classList.contains('history-sidebar-item') || !this.historyList.contains(current)) return;
+            const current = document.activeElement?.closest('.history-sidebar-item');
+            if (!current || !this.historyList.contains(current)) return;
 
             e.preventDefault();
             const direction = e.key === 'ArrowUp' ? 'up' : 'down';
@@ -1963,8 +1963,9 @@ export class HistoryChatUI extends ChatUI {
             }
 
             if (next) {
-                next.focus();
-                next.click();
+                const selectButton = next.querySelector('.history-chat-select');
+                selectButton.focus();
+                selectButton.click();
                 next.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
                 next.classList.add('keyboard-navigating');
                 setTimeout(() => next.classList.remove('keyboard-navigating'), KEYBOARD_NAV_HIGHLIGHT_MS);
@@ -2130,16 +2131,20 @@ export class HistoryChatUI extends ChatUI {
     }
 
     createSearchTempItem(doc) {
-        const historyItem = createElementWithClass('button', 'unset-button history-sidebar-item');
+        const historyItem = createElementWithClass('div', 'history-sidebar-item');
         historyItem.id = `${doc.id}`;
         historyItem.dataset.searchTemp = 'true';
 
         const titleText = doc?.title || 'Untitled chat';
         const textSpan = createElementWithClass('span', 'item-text', titleText);
-        const dotsSpan = createElementWithClass('div', 'action-dots', UNICODE.ELLIPSIS);
+        const selectButton = createElementWithClass('button', 'unset-button history-chat-select');
+        const dotsButton = createElementWithClass('button', 'unset-button action-dots', UNICODE.ELLIPSIS);
+        selectButton.type = dotsButton.type = 'button';
+        dotsButton.setAttribute('aria-label', `Actions for ${titleText}`);
 
-        historyItem.append(textSpan, dotsSpan);
-        historyItem.onclick = () => this.buildChat(doc.id);
+        selectButton.appendChild(textSpan);
+        selectButton.onclick = () => this.buildChat(doc.id);
+        historyItem.append(selectButton, dotsButton);
         this.addPopup(historyItem);
 
         this.historyList.appendChild(historyItem);
@@ -2247,15 +2252,17 @@ export class HistoryChatUI extends ChatUI {
     }
 
     createHistoryItem(chat) {
-        const button = createElementWithClass('button', 'unset-button history-sidebar-item');
-        button.id = chat.chatId;
-        button.append(
-            createElementWithClass('span', 'item-text', chat.title), 
-            createElementWithClass('div', 'action-dots', '⋯')
-        );
-        button.onclick = () => this.buildChat(chat.chatId);
-        this.addPopup(button);
-        return button;
+        const item = createElementWithClass('div', 'history-sidebar-item');
+        const selectButton = createElementWithClass('button', 'unset-button history-chat-select');
+        const dotsButton = createElementWithClass('button', 'unset-button action-dots', '⋯');
+        item.id = chat.chatId;
+        selectButton.type = dotsButton.type = 'button';
+        dotsButton.setAttribute('aria-label', `Actions for ${chat.title}`);
+        selectButton.appendChild(createElementWithClass('span', 'item-text', chat.title));
+        selectButton.onclick = () => this.buildChat(chat.chatId);
+        item.append(selectButton, dotsButton);
+        this.addPopup(item);
+        return item;
     }
 
     handleItemDeletion(item) {

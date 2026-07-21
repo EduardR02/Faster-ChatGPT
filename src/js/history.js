@@ -6,6 +6,7 @@ import { ChatCore } from './chat_core.js';
 import { createElementWithClass } from './ui_utils.js';
 import { normaliseForSearch } from './search_utils.js';
 import { copyChatMarkdownToClipboard } from './markdown_export.js';
+import { attachHistoryPopupTrigger } from './history_popup_trigger.js';
 import { getAppendFetchWindow, getMissingMessageRange, takeContiguousMessages } from './history_live_updates.js';
 
 /**
@@ -80,13 +81,12 @@ class PopupMenu {
     }
 
     attachToItem(historyItem) {
-        historyItem.querySelector('.action-dots').onclick = (event) => {
-            event.stopPropagation();
-            if (this.activePopup === historyItem) {
-                return this.hide();
-            }
-            this.show(historyItem);
-        };
+        attachHistoryPopupTrigger(historyItem.querySelector('.action-dots'), {
+            isOpen: () => this.activePopup === historyItem,
+            open: () => this.show(historyItem),
+            close: () => this.hide(),
+            focusTarget: () => this.popup.querySelector('[data-action="copy-markdown"]')
+        });
     }
 
     show(historyItem) {

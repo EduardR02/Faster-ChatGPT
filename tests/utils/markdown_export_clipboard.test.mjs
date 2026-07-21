@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { parseHTML } from 'linkedom';
+import { HistoryChatUI } from '../../src/js/chat_ui.js';
+import { attachHistoryPopupTrigger } from '../../src/js/history_popup_trigger.js';
 import { copyChatMarkdownToClipboard } from '../../src/js/markdown_export.js';
 
 describe('copyChatMarkdownToClipboard', () => {
@@ -97,11 +99,105 @@ describe('copyChatMarkdownToClipboard', () => {
 });
 
 describe('Markdown copy history action', () => {
-    test('uses a native button so keyboard activation works without custom handlers', () => {
-        const historyHtml = readFileSync(new URL('../../src/html/history.html', import.meta.url), 'utf8');
+    const createHarness = () => {
+        const { document, window } = parseHTML(`
+            <div id="history-list"></div>
+            <div class="popup-menu">
+                <button type="button" data-action="copy-markdown">Copy Markdown</button>
+            </div>
+        `);
+        globalThis.document = document;
+        const state = { open: false, selected: 0, focused: 0 };
+        const copyAction = document.querySelector('[data-action="copy-markdown"]');
+        copyAction.focus = () => { state.focused += 1; };
+        const context = {
+            buildChat: () => { state.selected += 1; },
+            addPopup: item => attachHistoryPopupTrigger(item.querySelector('.action-dots'), {
+                isOpen: () => state.open,
+                open: () => { state.open = true; },
+                close: () => { state.open = false; },
+                focusTarget: () => copyAction
+            })
+        };
+        const item = HistoryChatUI.prototype.createHistoryItem.call(context, { chatId: 1, title: 'Test chat' });
+        document.getElementById('history-list').appendChild(item);
+        return { context, document, window, item, state };
+    };
 
-        expect(historyHtml).toMatch(
-            /<button[^>]*type="button"[^>]*data-action="copy-markdown"[^>]*>Copy Markdown<\/button>/
-        );
+    const dispatchKey = (window, target, key) => {
+        const event = new window.Event('keydown', { bubbles: true, cancelable: true });
+        Object.defineProperty(event, 'key', { value: key });
+        target.dispatchEvent(event);
+        return event;
+    };
+
+    test('opens from Enter and Space, focuses Copy Markdown, and does not select the chat', () => {
+        const originalDocument = globalThis.document;
+        try {
+            const harness = createHarness();
+            const trigger = harness.item.querySelector('.action-dots');
+
+            expect(trigger.tagName).toBe('BUTTON');
+            expect(trigger.getAttribute('aria-label')).toBe('Actions for Test chat');
+            for (const key of ['Enter', ' ']) {
+                harness.state.open = false;
+                const event = dispatchKey(harness.window, trigger, key);
+                expect(event.defaultPrevented).toBe(true);
+                expect(harness.state.open).toBe(true);
+            }
+            expect(harness.state.focused).toBe(2);
+            expect(harness.state.selected).toBe(0);
+        } finally {
+            globalThis.document = originalDocument;
+        }
+    });
+
+    test('keeps mouse selection and action clicks separate', () => {
+        const originalDocument = globalThis.document;
+        try {
+            const harness = createHarness();
+
+            harness.item.querySelector('.action-dots').click();
+            expect(harness.state.open).toBe(true);
+            expect(harness.state.focused).toBe(0);
+            expect(harness.state.selected).toBe(0);
+
+            harness.item.querySelector('.history-chat-select').click();
+            expect(harness.state.selected).toBe(1);
+        } finally {
+            globalThis.document = originalDocument;
+        }
+    });
+
+    test('keeps arrow navigation working from the actions trigger', () => {
+        const originalDocument = globalThis.document;
+        try {
+            const harness = createHarness();
+            const historyList = harness.document.getElementById('history-list');
+            const nextItem = HistoryChatUI.prototype.createHistoryItem.call(
+                harness.context,
+                { chatId: 2, title: 'Next chat' }
+            );
+            historyList.appendChild(nextItem);
+            nextItem.scrollIntoView = () => {};
+            let focused = false;
+            nextItem.querySelector('.history-chat-select').focus = () => { focused = true; };
+            Object.defineProperty(harness.document, 'activeElement', {
+                configurable: true,
+                value: harness.item.querySelector('.action-dots')
+            });
+            HistoryChatUI.prototype.initKeyboardNav.call({
+                historyList,
+                paginator: { requestMore: async () => false }
+            });
+
+            const event = dispatchKey(harness.window, harness.item.querySelector('.action-dots'), 'ArrowDown');
+
+            expect(event.defaultPrevented).toBe(true);
+            expect(focused).toBe(true);
+            expect(harness.state.selected).toBe(1);
+        } finally {
+            globalThis.document = originalDocument;
+        }
     });
 });

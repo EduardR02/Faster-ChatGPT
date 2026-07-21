@@ -496,6 +496,18 @@ body {
   position: relative;
 }
 
+.history-list .history-sidebar-item {
+  padding-left: 0;
+}
+
+.history-chat-select {
+  color: inherit;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding-left: 0.5em;
+}
+
 .item-text {
   width: 100%;  /* take full width */
   white-space: nowrap;
@@ -587,10 +599,12 @@ body {
   transition: color 0.2s ease-out;
 }
 
+.history-sidebar-item:focus-within .action-dots,
 .history-sidebar-item:hover .action-dots {
   opacity: 1;
 }
 
+.history-sidebar-item:focus-within .item-text,
 .history-sidebar-item:hover .item-text {
   mask-image: linear-gradient(to right, black 75%, transparent 85%);  /* adjusted to account for dots */
 }
@@ -598,6 +612,12 @@ body {
 .action-dots:hover {
   background-color: rgba(255, 255, 255, 0.1);
   color: #ffffff;
+}
+
+.action-dots:focus-visible {
+  opacity: 1;
+  outline: 2px solid #fdaaaa;
+  outline-offset: -2px;
 }
 
 .history-sidebar-item::before {
