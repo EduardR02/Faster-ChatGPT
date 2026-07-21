@@ -313,7 +313,7 @@ export class SidepanelController {
 
         const activeArenaModels = this.state.getArenaModels();
         if (['model_a', 'model_b', 'draw', 'draw(bothbad)'].includes(choice)) {
-            this.arenaRating.addMatchAndUpdate(activeArenaModels[0], activeArenaModels[1], choice);
+            await this.arenaRating.addMatchAndUpdate(activeArenaModels[0], activeArenaModels[1], choice);
         }
 
         const modelEloRatings = [

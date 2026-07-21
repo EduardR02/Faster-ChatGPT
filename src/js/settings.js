@@ -14,7 +14,7 @@ const apiDisplayNames = {
     llamacpp: 'Llamacpp'
 };
 
-class SettingsUI {
+export class SettingsUI {
     constructor() {
         this.stateManager = new SettingsStateManager();
         this.currentApiIndex = 0;
@@ -594,7 +594,11 @@ class SettingsUI {
         try {
             await this.arenaReady;
             await this.arenaRatingManager.wipe();
-            await this.renderArenaLeaderboard();
+            try {
+                await this.renderArenaLeaderboard();
+            } catch {
+                this.renderArenaLeaderboardError();
+            }
             button.textContent = 'Reset Arena Matches ';
         } catch {
             button.textContent = 'Reset Failed ';

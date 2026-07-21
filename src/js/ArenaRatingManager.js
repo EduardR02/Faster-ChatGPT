@@ -8,8 +8,14 @@ export class ArenaRatingManager {
             storeName, 
             cacheKey, 
             db: null, 
-            cachedRatings: {} 
+            cachedRatings: {},
+            ratingsWrite: Promise.resolve(),
+            lockName: `arena-ratings:${dbName}:${storeName}:${cacheKey}`
         });
+    }
+
+    withWriteLock(callback) {
+        return navigator.locks.request(this.lockName, callback);
     }
 
     async initDB() {
@@ -55,9 +61,10 @@ export class ArenaRatingManager {
                 timestamp: Date.now() 
             };
             
-            const request = store.add(matchData);
-            request.onsuccess = () => resolve();
-            request.onerror = () => reject(request.error);
+            store.add(matchData);
+            transaction.oncomplete = () => resolve();
+            transaction.onerror = () => reject(transaction.error);
+            transaction.onabort = () => reject(transaction.error);
         });
     }
 
@@ -124,7 +131,7 @@ export class ArenaRatingManager {
         });
 
         this.cachedRatings = ratings;
-        chrome.storage.local.set({ [this.cacheKey]: ratings });
+        this.ratingsWrite = chrome.storage.local.set({ [this.cacheKey]: ratings });
         return ratings;
     }
 
@@ -147,12 +154,14 @@ export class ArenaRatingManager {
     }
 
     async addMatchAndUpdate(modelA, modelB, result) {
-        await this.saveMatch(modelA, modelB, result);
-        // Another extension context may have reset the shared cache since this
-        // manager initialized. Refresh only at the write boundary so stale
-        // in-memory ratings can never recreate data that was wiped.
-        await this.loadRatings();
-        return this.calculateElo([{ model_a: modelA, model_b: modelB, result }]);
+        return this.withWriteLock(async () => {
+            await this.ratingsWrite;
+            await this.saveMatch(modelA, modelB, result);
+            await this.loadRatings();
+            const ratings = this.calculateElo([{ model_a: modelA, model_b: modelB, result }]);
+            await this.ratingsWrite;
+            return ratings;
+        });
     }
 
     getModelRating(modelId) {
@@ -160,21 +169,30 @@ export class ArenaRatingManager {
     }
 
     async recalculate() {
-        const matchHistory = await this.getHistory();
-        this.cachedRatings = {};
-        return this.calculateElo(matchHistory);
+        return this.withWriteLock(async () => {
+            await this.ratingsWrite;
+            const matchHistory = await this.getHistory();
+            this.cachedRatings = {};
+            const ratings = this.calculateElo(matchHistory);
+            await this.ratingsWrite;
+            return ratings;
+        });
     }
 
     async wipe() {
-        this.cachedRatings = {};
-        await chrome.storage.local.remove(this.cacheKey);
-        
-        return new Promise((resolve, reject) => {
-            const transaction = this.db.transaction([this.storeName], "readwrite");
-            const store = transaction.objectStore(this.storeName);
-            const request = store.clear();
-            request.onsuccess = () => resolve();
-            request.onerror = () => reject(request.error);
+        return this.withWriteLock(async () => {
+            await this.ratingsWrite;
+            await chrome.storage.local.remove(this.cacheKey);
+
+            await new Promise((resolve, reject) => {
+                const transaction = this.db.transaction([this.storeName], "readwrite");
+                transaction.objectStore(this.storeName).clear();
+                transaction.oncomplete = () => resolve();
+                transaction.onerror = () => reject(transaction.error);
+                transaction.onabort = () => reject(transaction.error);
+            });
+
+            this.cachedRatings = {};
         });
     }
 }
