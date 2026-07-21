@@ -81,6 +81,22 @@ describe('SSE hardening - parser', () => {
     expect(events).toEqual([[1, 2]]);
   });
 
+  test('recovers adjacent events after malformed object or array data', () => {
+    for (const malformed of ['{bad}', '[bad]']) {
+      const events = parseStream([
+        `data: ${malformed}\n`,
+        'data: {"choices":[{"delta":{"content":"Hi"}}]}\n',
+        'data: {"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":1}}\n',
+        'data: [DONE]\n'
+      ]);
+
+      expect(events).toEqual([
+        { choices: [{ delta: { content: 'Hi' } }] },
+        { choices: [], usage: { prompt_tokens: 3, completion_tokens: 1 } }
+      ]);
+    }
+  });
+
   test('ignores comment and keepalive lines', () => {
     const events = parseStream([': keep-alive\n', ':\n', ':{"not":"data"}\n', 'data: {"a":1}\n']);
     expect(events).toEqual([{ a: 1 }]);
@@ -176,6 +192,21 @@ describe('SSE hardening - stream termination', () => {
 
     expect(tokenCounter.inputTokens).toBe(11);
     expect(tokenCounter.outputTokens).toBe(7);
+  });
+
+  test('streams content and usage after malformed blankless data', async () => {
+    const response = createStreamResponse([
+      'data: {bad}\n',
+      'data: {"choices":[{"delta":{"content":"Hi"}}]}\n',
+      'data: {"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":1}}\n',
+      'data: [DONE]\n'
+    ]);
+
+    await apiManager.handleStreamResponse(response, 'local-model', tokenCounter, writer);
+
+    expect(writer._processedContent.map(entry => entry.content)).toEqual(['Hi']);
+    expect(tokenCounter.inputTokens).toBe(3);
+    expect(tokenCounter.outputTokens).toBe(1);
   });
 
   test('preserves final usage handling for every provider format', async () => {

@@ -24,6 +24,11 @@ function parseJSONSafe(text) {
     }
 }
 
+function clearSSEEvent(state) {
+    state.dataLines.length = 0;
+    state.dataStructure = null;
+}
+
 function flushSSEEvent(state, events) {
     if (!state.dataLines.length) return;
 
@@ -36,7 +41,49 @@ function flushSSEEvent(state, events) {
             if (parsedLine !== undefined) events.push(parsedLine);
         }
     }
-    state.dataLines.length = 0;
+    clearSSEEvent(state);
+}
+
+function scanJSONStructure(structure, text) {
+    for (const character of text) {
+        if (structure.inString) {
+            if (structure.escaped) {
+                structure.escaped = false;
+            } else if (character === '\\') {
+                structure.escaped = true;
+            } else if (character === '"') {
+                structure.inString = false;
+            }
+            continue;
+        }
+
+        if (character === '"') {
+            structure.inString = true;
+        } else if (character === '{') {
+            structure.stack.push('}');
+        } else if (character === '[') {
+            structure.stack.push(']');
+        } else if (character === '}' || character === ']') {
+            if (structure.stack.pop() !== character) return false;
+        }
+    }
+    return !structure.inString;
+}
+
+function startSSEEvent(state, value) {
+    const trimmed = value.trimStart();
+    const opening = trimmed[0];
+    if (opening !== '{' && opening !== '[') return;
+
+    const next = trimmed.slice(1).trimStart()[0];
+    if (opening === '{' && next !== undefined && next !== '"' && next !== '}') return;
+    if (opening === '[' && next !== undefined && !'[]{"-0123456789tfn'.includes(next)) return;
+
+    const structure = { stack: [], inString: false, escaped: false };
+    if (!scanJSONStructure(structure, value) || structure.stack.length === 0) return;
+
+    state.dataLines.push(value);
+    state.dataStructure = structure;
 }
 
 function processSSELine(state, line, events) {
@@ -53,29 +100,30 @@ function processSSELine(state, line, events) {
     let value = colon === -1 ? '' : line.slice(colon + 1);
     if (value.startsWith(' ')) value = value.slice(1);
     if (value.trim() === '[DONE]') {
-        state.dataLines.length = 0;
+        flushSSEEvent(state, events);
+        return;
+    }
+
+    const parsedLine = parseJSONSafe(value);
+    if (!state.dataLines.length) {
+        if (parsedLine !== undefined) {
+            events.push(parsedLine);
+        } else {
+            startSSEEvent(state, value);
+        }
+        return;
+    }
+
+    const structure = state.dataStructure;
+    if (!scanJSONStructure(structure, value)) {
+        clearSSEEvent(state);
+        if (parsedLine !== undefined) events.push(parsedLine);
+        else startSSEEvent(state, value);
         return;
     }
 
     state.dataLines.push(value);
-    const parsedEvent = parseJSONSafe(state.dataLines.join('\n'));
-    if (parsedEvent !== undefined) {
-        events.push(parsedEvent);
-        state.dataLines.length = 0;
-        return;
-    }
-
-    // Existing providers also emit adjacent JSON data lines without SSE blank
-    // lines. If a malformed line precedes one, discard it without blocking the
-    // next valid provider event.
-    const eventStart = state.dataLines[0].trimStart()[0];
-    if (state.dataLines.length > 1 && eventStart !== '{' && eventStart !== '[') {
-        const parsedLine = parseJSONSafe(value);
-        if (parsedLine !== undefined) {
-            events.push(parsedLine);
-            state.dataLines.length = 0;
-        }
-    }
+    if (structure.stack.length === 0) flushSSEEvent(state, events);
 }
 
 function processSSEBuffer(state, events, final = false) {
@@ -391,6 +439,7 @@ export class ApiManager {
     static parseSSEChunk(state, chunk) {
         state.buffer += chunk;
         state.dataLines ??= [];
+        state.dataStructure ??= null;
         const events = [];
         processSSEBuffer(state, events);
         return events;
@@ -404,6 +453,7 @@ export class ApiManager {
      */
     static flushSSEBuffer(state) {
         state.dataLines ??= [];
+        state.dataStructure ??= null;
         const events = [];
         processSSEBuffer(state, events, true);
         flushSSEEvent(state, events);
@@ -414,7 +464,7 @@ export class ApiManager {
         const reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
         const provider = this.getProvider(modelId);
-        const state = { buffer: '', dataLines: [] };
+        const state = { buffer: '', dataLines: [], dataStructure: null };
 
         while (true) {
             const { done, value } = await reader.read();
