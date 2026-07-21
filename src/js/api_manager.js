@@ -95,6 +95,18 @@ export class ApiManager {
         return this.getProvider(modelId).supports('reasoning', modelId); 
     }
 
+    getReasoningEfforts(modelId) {
+        return this.getProvider(modelId).getReasoningEfforts(modelId);
+    }
+
+    normalizeReasoningEffort(modelId, effort) {
+        return this.getProvider(modelId).normalizeReasoningEffort(modelId, effort);
+    }
+
+    hasReasoningModes(modelId) {
+        return this.getProvider(modelId).supports('reasoning_mode', modelId);
+    }
+
     hasWebSearchSupport(modelId) { 
         return this.getProvider(modelId).supports('web_search', modelId); 
     }

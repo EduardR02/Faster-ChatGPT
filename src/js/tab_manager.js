@@ -96,7 +96,8 @@ export class TabManager {
             chatUI,
             controller,
             container,
-            title: options.initialTitle || 'New Chat'
+            title: options.initialTitle || 'New Chat',
+            reconstruction: options.reconstruction || null
         };
 
         this.tabs.set(id, tab);
@@ -233,6 +234,7 @@ export class TabManager {
     isCurrentTabEmpty() {
         const activeTab = this.getActiveTab();
         if (!activeTab) return true;
+        if (activeTab.reconstruction !== null) return false;
         
         const chatCore = activeTab.controller.chatCore;
         const hasStarted = chatCore.hasChatStarted();
@@ -250,7 +252,12 @@ export class TabManager {
     getActiveTabState() { return this.getActiveTab()?.tabState; }
 
     getTabChatId(tab) {
-        return tab?.controller?.chatCore?.getChatId() ?? tab?.tabState?.chatId;
+        const reconstructionChatId = tab?.reconstruction?.options?.index === undefined
+            ? tab?.reconstruction?.options?.chatId
+            : null;
+        return tab?.controller?.chatCore?.getChatId()
+            ?? tab?.tabState?.chatId
+            ?? reconstructionChatId;
     }
 
     findTabByChatId(chatId) {
@@ -313,55 +320,69 @@ export class TabManager {
                 .map(tab => this.getTabChatId(tab))
                 .filter(chatId => chatId != null));
 
-            const results = await Promise.all(persistedChatIds
-                .filter(chatId => chatId != null && !existingChatIds.has(chatId))
-                .slice(0, MAX_TABS - this.tabs.size)
-                .map(async (chatId) => {
-                    const newTab = this.createTab({ activate: false, initialTitle: 'Loading...' });
-                    if (newTab) {
-                        newTab.tabState.chatId = chatId;
-                        return this.loadChatIntoTab(newTab.id, chatId);
-                    }
-                    return false;
-                }));
-
-            if (results.some(success => !success)) {
-                this.isDirty = true;
+            const seen = new Set();
+            const normalizedChatIds = [];
+            let needsCleanup = false;
+            for (const chatId of persistedChatIds) {
+                const numericChatId = Number(chatId);
+                if (chatId == null || (typeof chatId === 'string' && !chatId.trim()) || !Number.isInteger(numericChatId) || numericChatId <= 0 || seen.has(numericChatId)) {
+                    needsCleanup = true;
+                    continue;
+                }
+                seen.add(numericChatId);
+                if (existingChatIds.has(numericChatId)) {
+                    needsCleanup = true;
+                    continue;
+                }
+                normalizedChatIds.push(numericChatId);
             }
+
+            const availableSlots = MAX_TABS - this.tabs.size;
+            if (normalizedChatIds.length > availableSlots) needsCleanup = true;
+            const chatIdsToRestore = normalizedChatIds.slice(0, availableSlots);
+            const metadataResults = await Promise.all(chatIdsToRestore.map(async chatId => {
+                try {
+                    return { chatId, metadata: await this.chatStorage.getChatMetadataById(chatId) };
+                } catch (error) {
+                    console.warn(`Failed to restore chat metadata for ${chatId}:`, error);
+                    return { chatId, metadata: null };
+                }
+            }));
+
+            for (const { chatId, metadata } of metadataResults) {
+                if (!metadata) {
+                    needsCleanup = true;
+                    continue;
+                }
+                if (Array.from(this.tabs.values()).some(tab => this.getTabChatId(tab) === chatId)) {
+                    needsCleanup = true;
+                    continue;
+                }
+
+                const newTab = this.createTab({
+                    activate: false,
+                    initialTitle: metadata.title || 'Chat',
+                    reconstruction: { status: 'pending', options: { chatId } }
+                });
+                if (!newTab) {
+                    needsCleanup = true;
+                    continue;
+                }
+                newTab.tabState.chatId = chatId;
+            }
+
+            if (needsCleanup) this.isDirty = true;
+        } catch (error) {
+            console.warn('Failed to restore persisted tabs:', error);
         } finally {
             this.isRestoring = false;
             if (this.isDirty) {
-                this.persistTabsNow();
+                try {
+                    await this.persistTabsNow();
+                } catch (error) {
+                    console.warn('Failed to clean up persisted tabs:', error);
+                }
             }
-        }
-    }
-
-    async loadChatIntoTab(tabId, chatId) {
-        const tab = this.tabs.get(tabId);
-        if (!tab) return false;
-
-        try {
-            const chatData = await this.chatStorage.loadChat(chatId);
-            if (!this.tabs.has(tabId) || !chatData?.chatId || tab.tabState.chatId !== chatData.chatId) {
-                return false;
-            }
-
-            tab.controller.initStates(chatData.title || 'Chat');
-            tab.controller.chatCore.buildFromDB(chatData);
-            
-            tab.chatUI.updateIncognito(tab.controller.chatCore.hasChatStarted());
-            tab.chatUI.buildChat(tab.controller.chatCore.getChat());
-            tab.controller.syncWebpageContextUI();
-            tab.controller.restoreLatestAssistantActions();
-            
-            tab.tabState.chatId = chatData.chatId;
-            this.updateTabTitle(tabId, chatData.title || 'Chat');
-            return true;
-        } catch (error) {
-            if (this.tabs.has(tabId)) {
-                this.closeTab(tabId);
-            }
-            return false;
         }
     }
 

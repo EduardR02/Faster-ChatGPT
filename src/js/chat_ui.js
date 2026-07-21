@@ -257,6 +257,7 @@ class ChatUI {
         const fragment = document.createDocumentFragment();
         this._renderTarget = fragment;
         this._isBuildingChat = true;
+        const indexOffset = options.indexOffset || 0;
         
         try {
             const messages = chat.messages;
@@ -264,6 +265,7 @@ class ChatUI {
             let assistantCount = 0;
             while (i < messages.length) {
                 const message = messages[i];
+                const messageIndex = indexOffset + i;
                 
                 if (message.role === 'assistant') {
                     // Determine rendering mode (Council, Arena, or Normal)
@@ -274,20 +276,20 @@ class ChatUI {
                     if (isArena) {
                         this.createArenaWrapper(message, { 
                             continueFunc: options.continueFunc, 
-                            messageIndex: i,
-                            messageId: message.messageId ?? i,
+                            messageIndex,
+                            messageId: message.messageId ?? messageIndex,
                             isRegeneration
                         });
                     } else if (isCouncil) {
                         this.createCouncilWrapper(message, {
                             continueFunc: options.continueFunc,
-                            messageIndex: i,
-                            messageId: message.messageId ?? i,
+                            messageIndex,
+                            messageId: message.messageId ?? messageIndex,
                             allowContinue: options.allowContinue,
                             isRegeneration
                         });
                     } else {
-                        this._renderMessageContents(message, i, {
+                        this._renderMessageContents(message, messageIndex, {
                             isRegenerationBase: isRegeneration,
                             hideModels: options.hideModels,
                             continueFunc: options.continueFunc
@@ -299,7 +301,7 @@ class ChatUI {
                     // User or System
                     assistantCount = 0; // Reset assistant count on user message
                     if (options.addSystemMsg || message.role !== 'system') {
-                        this._renderMessageContents(message, i, {
+                        this._renderMessageContents(message, messageIndex, {
                             isRegenerationBase: false,
                             hideModels: options.hideModels,
                             continueFunc: options.continueFunc
@@ -1065,6 +1067,7 @@ export class SidepanelChatUI extends ChatUI {
 
     initSonnetThinking() {
         const button = document.getElementById('sonnet-thinking-toggle');
+        const modeButton = document.getElementById('reasoning-mode-toggle');
         if (!button) return;
 
         const updateVisuals = () => {
@@ -1073,14 +1076,19 @@ export class SidepanelChatUI extends ChatUI {
                              this.stateManager.apiManager.hasReasoningLevels(currentModel);
             const hasLevels = this.stateManager.apiManager.hasReasoningLevels(currentModel);
             const canToggle = this.stateManager.apiManager.canToggleThinking(currentModel);
+            const hasModes = this.stateManager.apiManager.hasReasoningModes?.(currentModel) ?? false;
             
             // shouldThink defaults are set by TabState.setCurrentModel on actual model changes.
             // updateVisuals is read-only for state; it only updates UI visibility/styling.
 
             button.style.display = canThink ? 'flex' : 'none';
+            if (modeButton) modeButton.style.display = hasModes ? 'flex' : 'none';
             
             if (canThink) {
-                const effort = this.stateManager.getReasoningEffort();
+                const currentEffort = this.stateManager.getReasoningEffort();
+                const effort = hasLevels
+                    ? (this.stateManager.apiManager.normalizeReasoningEffort?.(currentModel, currentEffort) ?? currentEffort)
+                    : currentEffort;
                 button.title = hasLevels ? `Reasoning: ${effort}` : 'Reasoning';
                 // Active for: reasoning-level models, toggle models with shouldThink on, or non-toggle thinkers
                 const isActive = hasLevels || (canToggle ? this.stateManager.getShouldThink() : true);
@@ -1091,19 +1099,42 @@ export class SidepanelChatUI extends ChatUI {
                     label.textContent = hasLevels ? effort : 'reason';
                 }
             }
+            if (modeButton && hasModes) {
+                const mode = this.stateManager.getReasoningMode();
+                const isPro = mode === 'pro';
+                modeButton.classList.toggle('active', isPro);
+                modeButton.title = `Reasoning mode: ${isPro ? 'Pro' : 'Standard'} (click to switch)`;
+                const label = modeButton.querySelector('.reasoning-label');
+                if (label) label.textContent = isPro ? 'Pro' : 'Standard';
+            }
             updateTextfieldHeight(this.textarea);
         };
 
         button.onclick = () => {
             const model = this.stateManager.getSetting('current_model') || '';
             if (this.stateManager.apiManager.hasReasoningLevels(model)) {
-                this.stateManager.cycleReasoningEffort();
+                const efforts = this.stateManager.apiManager.getReasoningEfforts?.(model);
+                const currentEffort = this.stateManager.apiManager.normalizeReasoningEffort?.(
+                    model,
+                    this.stateManager.getReasoningEffort()
+                );
+                this.stateManager.cycleReasoningEffort(efforts?.length ? efforts : undefined, currentEffort);
             } else if (this.stateManager.apiManager.canToggleThinking(model)) {
                 this.stateManager.toggleShouldThink();
             }
             // Non-toggle thinking models: clicking does nothing (reasoning is always on)
             updateVisuals();
         };
+
+        if (modeButton) {
+            modeButton.onclick = () => {
+                const model = this.stateManager.getSetting('current_model') || '';
+                if (this.stateManager.apiManager.hasReasoningModes?.(model)) {
+                    this.stateManager.toggleReasoningMode();
+                }
+                updateVisuals();
+            };
+        }
 
         this.stateManager.runOnReady(updateVisuals);
         this.stateManager.apiManager?.settingsManager?.runOnReady?.(updateVisuals);
@@ -1392,14 +1423,15 @@ export class SidepanelChatUI extends ChatUI {
         this.scrollIntoView();
     }
 
-    buildChat(chat) {
+    buildChat(chat, options = {}) {
         this.shouldScroll = false;
-        const options = { 
+        const buildOptions = {
             hideModels: !this.stateManager.getSetting('show_model_name'), 
             continueFunc: this.continueFunc,
-            skipTextarea: true
+            skipTextarea: true,
+            ...options
         };
-        super.buildChat(chat, options);
+        super.buildChat(chat, buildOptions);
         this.resetAutoScroll();
         this.updateChatHeader(chat.title);
         this.scrollIntoView(true);
@@ -1540,7 +1572,9 @@ export class SidepanelChatUI extends ChatUI {
     addCouncilContinueButton(messageIndex = null) {
         if (!this.continueFunc) return;
 
-        const councilBlock = messageIndex == null ? this.activeDivs : this.conversationDiv.children[messageIndex];
+        const councilBlock = messageIndex == null
+            ? this.activeDivs
+            : this.conversationDiv.querySelector(`[data-message-index="${messageIndex}"]`) || this.conversationDiv.children[messageIndex];
         if (!councilBlock?.classList?.contains('council-message')) return;
 
         const resolvedIndex = Number.isFinite(messageIndex) ? messageIndex : Number(councilBlock.dataset.messageIndex);

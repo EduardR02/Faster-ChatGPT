@@ -268,6 +268,7 @@ export class SidepanelController {
             shouldThink: state.getShouldThink(), 
             webSearch: state.getShouldWebSearch(), 
             reasoningEffort: state.getReasoningEffort(), 
+            reasoningMode: state.getReasoningMode?.() ?? 'standard',
             imageAspectRatio: state.getImageAspectRatio(), 
             imageResolution: state.getImageResolution() 
         };
@@ -423,7 +424,7 @@ export class SidepanelController {
 
         const tokenResult = await this.makeApiCall(collectorModel, false, {
             mode: 'collector',
-            messages: this.buildCollectorPrompt(councilModels),
+            messages: this.buildCollectorPrompt(councilModels, collectorModel),
             contentDiv: collectorContent || collectorWrapper || collectorMessage
         });
 
@@ -621,8 +622,8 @@ export class SidepanelController {
         }
     }
 
-    buildCollectorPrompt(councilModels) {
-        const canonicalMessages = this.chatCore.getMessagesForAPI();
+    buildCollectorPrompt(councilModels, collectorModel = null) {
+        const canonicalMessages = this.chatCore.getMessagesForAPI(collectorModel);
 
         // Build system content: collector prompt appended to existing system or standalone
         let systemContent = '';

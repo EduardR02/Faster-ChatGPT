@@ -134,6 +134,40 @@ describe('ChatStorage', () => {
     expect(loaded.messages[119].images[0]).toBe('data:image/png;base64,aW1hZ2UtMTE5');
   });
 
+  test('blob migration completion marker skips repeated background scans', async () => {
+    const previousChrome = globalThis.chrome;
+    const localData = {};
+    globalThis.chrome = {
+      ...previousChrome,
+      storage: {
+        local: {
+          get: async keys => {
+            const result = {};
+            keys.forEach(key => { result[key] = localData[key]; });
+            return result;
+          },
+          set: async data => { Object.assign(localData, data); }
+        }
+      }
+    };
+
+    try {
+      storage = new ChatStorage();
+      storage.migrationRun = true;
+
+      let runs = 0;
+      storage.runPendingMigration = async () => { runs++; };
+
+      await storage.runPendingMigrationIfNeeded();
+      await storage.runPendingMigrationIfNeeded();
+
+      expect(runs).toBe(1);
+      expect(Object.values(localData)).toEqual([true]);
+    } finally {
+      globalThis.chrome = previousChrome;
+    }
+  });
+
   test('deleting chat cleans up orphaned blobs', async () => {
     const imageData = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwIB/AL+X1EAAAAASUVORK5CYII=';
     

@@ -2,6 +2,8 @@ import { base64NeedsRepair, sanitizeBase64Image } from './image_utils.js';
 import { Migrations } from './migrations.js';
 import { normaliseForSearch } from './search_utils.js';
 
+const BLOB_MIGRATION_COMPLETE_KEY = 'chat_storage_blob_migration_complete_v5';
+
 /**
  * Manages chat persistence using IndexedDB.
  * Handles messages, metadata, blobs (images), and search indexing.
@@ -30,7 +32,7 @@ export class ChatStorage {
 
                 if (!this.migrationRun) {
                     this.migrationRun = true;
-                    this.runPendingMigration().catch(error => {
+                    this.runPendingMigrationIfNeeded().catch(error => {
                         console.warn('Background migration failed:', error);
                     });
                 }
@@ -287,6 +289,35 @@ export class ChatStorage {
         });
 
         return { messages, lastKey, complete: !batchFull };
+    }
+
+    async getBlobMigrationComplete() {
+        const storage = globalThis.chrome?.storage?.local;
+        if (!storage?.get) return false;
+
+        try {
+            const result = await storage.get([BLOB_MIGRATION_COMPLETE_KEY]);
+            return result?.[BLOB_MIGRATION_COMPLETE_KEY] === true;
+        } catch {
+            return false;
+        }
+    }
+
+    async setBlobMigrationComplete() {
+        const storage = globalThis.chrome?.storage?.local;
+        if (!storage?.set) return;
+
+        try {
+            await storage.set({ [BLOB_MIGRATION_COMPLETE_KEY]: true });
+        } catch {
+            // The migration itself is complete; a failed marker write should not break chat loading.
+        }
+    }
+
+    async runPendingMigrationIfNeeded() {
+        if (await this.getBlobMigrationComplete()) return;
+        await this.runPendingMigration();
+        await this.setBlobMigrationComplete();
     }
 
     async runPendingMigration() {

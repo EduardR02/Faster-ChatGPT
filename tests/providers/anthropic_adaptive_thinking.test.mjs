@@ -60,7 +60,7 @@ describe('AnthropicProvider adaptive thinking', () => {
 
         const body = JSON.parse(request.body);
         expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
-        expect(body.output_config).toEqual({ effort: 'max' });
+        expect(body.output_config).toEqual({ effort: 'xhigh' });
         expect(body.max_tokens).toBe(MaxTokens.anthropic_fable);
         expect(body.temperature).toBeUndefined();
         expect(body.tools).toEqual([{ type: 'web_search_20250305', name: 'web_search', max_uses: 2 }]);

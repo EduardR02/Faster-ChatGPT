@@ -15,6 +15,7 @@ export const MaxTemp = {
 export const MaxTokens = {
     openai: 16384,
     openai_thinking: 100000,
+    openai_56: 128000,
     anthropic: 32000,
     anthropic_thinking: 64000,
     anthropic_fable: 128000,
@@ -26,17 +27,25 @@ export const MaxTokens = {
     anthropic_old: 8192,
     grok: 131072,
     kimi: 262144,
+    kimi_k3: 1048576,
     mistral: 32768
 };
 
+export const NEW_DEFAULT_MODELS = {
+    openai: { "gpt-5.6-sol": "GPT-5.6 Sol", "gpt-5.6-terra": "GPT-5.6 Terra", "gpt-5.6-luna": "GPT-5.6 Luna" },
+    anthropic: { "claude-fable-5": "Claude Fable 5", "claude-opus-4-8": "Claude Opus 4.8" },
+    gemini: { "gemini-3.5-flash": "Gemini 3.5 Flash" },
+    kimi: { "kimi-k3": "Kimi K3" }
+};
+
 export const DEFAULT_MODELS = {
-    openai: { "gpt-5.2": "GPT-5.2", "gpt-5.3-codex": "GPT-5.3 Codex", "gpt-5.2-mini": "GPT-5.2 mini" },
-    anthropic: { "claude-fable-5": "Claude Fable 5", "claude-opus-4-6": "Claude Opus 4.6", "claude-4.5-opus": "Claude 4.5 Opus", "claude-sonnet-4-5": "Claude 4.5 Sonnet", "claude-4.5-haiku": "Claude 4.5 Haiku" },
-    gemini: { "gemini-3-pro-preview": "Gemini 3 Pro", "gemini-3-flash-preview": "Gemini 3 Flash", "gemini-3-pro-image-preview": "Nano Banana Pro", "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite", "gemini-3.1-flash-image-preview": "Nano Banana 2" },
+    openai: { "gpt-5.2": "GPT-5.2", "gpt-5.3-codex": "GPT-5.3 Codex", "gpt-5.2-mini": "GPT-5.2 mini", ...NEW_DEFAULT_MODELS.openai },
+    anthropic: { ...NEW_DEFAULT_MODELS.anthropic, "claude-opus-4-6": "Claude Opus 4.6", "claude-4.5-opus": "Claude 4.5 Opus", "claude-sonnet-4-5": "Claude 4.5 Sonnet", "claude-4.5-haiku": "Claude 4.5 Haiku" },
+    gemini: { ...NEW_DEFAULT_MODELS.gemini, "gemini-3-pro-preview": "Gemini 3 Pro", "gemini-3-flash-preview": "Gemini 3 Flash", "gemini-3-pro-image-preview": "Nano Banana Pro", "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite", "gemini-3.1-flash-image-preview": "Nano Banana 2" },
     deepseek: { "deepseek-chat": "DeepSeek V3.2", "deepseek-reasoner": "DeepSeek V3.2 thinking" },
     mistral: { "mistral-large-latest": "Mistral Large", "mistral-small-latest": "Mistral Small" },
     grok: { "grok-4": "Grok 4", "grok-4.1-fast-reasoning": "Grok 4.1 Fast Reasoning" },
-    kimi: { "kimi-k2.6": "Kimi 2.6", "kimi-k2-thinking": "Kimi 2 Thinking" },
+    kimi: { ...NEW_DEFAULT_MODELS.kimi, "kimi-k2.6": "Kimi 2.6", "kimi-k2-thinking": "Kimi 2 Thinking" },
     llamacpp: { "local-model": "Local Model" }
 };
 
@@ -47,6 +56,14 @@ export class BaseProvider {
     }
 
     isThinkingDefaultOn(model) { return false; }
+
+    getReasoningEfforts(model) { return []; }
+
+    normalizeReasoningEffort(model, effort, fallback = 'medium') {
+        const efforts = this.getReasoningEfforts(model);
+        if (efforts.includes(effort)) return effort;
+        return efforts.includes(fallback) ? fallback : efforts[0];
+    }
 
     supports(feature, model) {
         if (feature === 'image') {
@@ -184,7 +201,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
         this.beforeCreateRequest(context);
         const body = {
             model: this.getRequestModel(context),
-            messages: this.formatMessages(messages),
+            messages: this.formatMessages(messages, context),
             stream
         };
         if (this.shouldIncludeMaxTokens(context)) body.max_tokens = Math.min(settings.max_tokens, this.maxTokens);
@@ -237,7 +254,20 @@ export class OpenAIProvider extends BaseProvider {
         if (feature === 'web_search') {
             return ['gpt-4.1', 'gpt-5'].some(substring => model.includes(substring)) && !model.includes('nano');
         }
+        if (feature === 'reasoning_mode') return /^gpt-5\.6(?:-|$)/.test(model);
         return super.supports(feature, model);
+    }
+
+    getReasoningEfforts(model) {
+        if (!this.supports('reasoning', model)) return [];
+        return /^gpt-5\.6(?:-|$)/.test(model)
+            ? ['none', 'low', 'medium', 'high', 'xhigh', 'max']
+            : ['minimal', 'low', 'medium', 'high', 'xhigh'];
+    }
+
+    normalizeReasoningEffort(model, effort) {
+        if (/^gpt-5\.6(?:-|$)/.test(model) && effort === 'minimal') return 'none';
+        return super.normalizeReasoningEffort(model, effort, 'medium');
     }
 
     formatMessages(messages, addImages) {
@@ -266,6 +296,7 @@ export class OpenAIProvider extends BaseProvider {
 
     createRequest({ model, messages, stream, options, apiKey, settings }) {
         const isReasoner = this.supports('reasoning', model);
+        const isGpt56 = /^gpt-5\.6(?:-|$)/.test(model);
         const shouldWebSearch = (options.webSearch ?? options.getWebSearch?.() ?? false) && 
                               this.supports('web_search', model);
         const noImage = model.includes('o1-mini') || model.includes('o1-preview') || model.includes('o3-mini');
@@ -279,7 +310,7 @@ export class OpenAIProvider extends BaseProvider {
         const body = {
             model,
             input: this.formatMessages(messages, !noImage),
-            max_output_tokens: Math.min(settings.max_tokens, isReasoner ? MaxTokens.openai_thinking : this.maxTokens),
+            max_output_tokens: Math.min(settings.max_tokens, isGpt56 ? MaxTokens.openai_56 : (isReasoner ? MaxTokens.openai_thinking : this.maxTokens)),
             stream
         };
 
@@ -292,10 +323,12 @@ export class OpenAIProvider extends BaseProvider {
         }
         
         if (isReasoner) {
+            const requestedEffort = options.reasoningEffort ?? options.getOpenAIReasoningEffort?.() ?? 'medium';
             body.reasoning = { 
-                effort: options.reasoningEffort ?? options.getOpenAIReasoningEffort?.() ?? 'medium',
+                effort: this.normalizeReasoningEffort(model, requestedEffort),
                 summary: 'auto'
             };
+            if (isGpt56) body.reasoning.mode = options.reasoningMode === 'pro' ? 'pro' : 'standard';
         } else {
             body.temperature = Math.min(settings.temperature, this.maxTemp);
         }
@@ -396,6 +429,22 @@ export class AnthropicProvider extends BaseProvider {
         return super.supports(feature, model);
     }
 
+    getReasoningEfforts(model) {
+        if (model === 'claude-fable-5') return ['low', 'medium', 'high', 'xhigh', 'max'];
+        const match = model.match(/opus-4-(\d+)/);
+        if (!match) return [];
+        const version = parseInt(match[1], 10);
+        if (version >= 7) return ['low', 'medium', 'high', 'xhigh', 'max'];
+        if (version === 6) return ['low', 'medium', 'high', 'max'];
+        return [];
+    }
+
+    normalizeReasoningEffort(model, effort) {
+        if (effort === 'minimal') return 'low';
+        if (model === 'claude-opus-4-6' && effort === 'xhigh') return 'max';
+        return super.normalizeReasoningEffort(model, effort, 'high');
+    }
+
     formatMessages(messages) {
         const formattedMessages = messages.map(message => {
             const text = this.extractTextContent(message);
@@ -431,7 +480,7 @@ export class AnthropicProvider extends BaseProvider {
                               this.supports('web_search', model);
         
         let maxLimit = this.maxTokens;
-        if (model === 'claude-fable-5') {
+        if (model === 'claude-fable-5' || model === 'claude-opus-4-8') {
             maxLimit = MaxTokens.anthropic_fable;
         } else if (isThinking) {
             maxLimit = MaxTokens.anthropic_thinking;
@@ -459,10 +508,10 @@ export class AnthropicProvider extends BaseProvider {
 
         if (isThinking) {
             if (hasReasoningLevels) {
-                const effort = options.reasoningEffort ?? options.getOpenAIReasoningEffort?.() ?? 'high';
-                const effortMap = { minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'max' };
+                const requestedEffort = options.reasoningEffort ?? options.getOpenAIReasoningEffort?.() ?? 'high';
+                const effort = this.normalizeReasoningEffort(model, requestedEffort);
                 body.thinking = { type: 'adaptive', display: 'summarized' };
-                body.output_config = { effort: effortMap[effort] || 'high' };
+                body.output_config = { effort };
             } else {
                 body.thinking = {
                     type: "enabled",
@@ -570,6 +619,18 @@ export class GeminiProvider extends BaseProvider {
         return super.supports(feature, model);
     }
 
+    getReasoningEfforts(model) {
+        if (!this.supports('reasoning', model)) return [];
+        return model === 'gemini-3.5-flash'
+            ? ['minimal', 'low', 'medium', 'high']
+            : ['minimal', 'low', 'medium', 'high', 'xhigh'];
+    }
+
+    normalizeReasoningEffort(model, effort) {
+        if (model === 'gemini-3.5-flash' && (effort === 'xhigh' || effort === 'max')) return 'high';
+        return super.normalizeReasoningEffort(model, effort, 'medium');
+    }
+
     getGeminiMaxTokens(model) {
         if (model.includes('image')) return MaxTokens.gemini_image;
         if (/gemini-[2-9]\.?\d*|gemini-\d{2,}/.test(model)) return MaxTokens.gemini_modern;
@@ -655,7 +716,8 @@ export class GeminiProvider extends BaseProvider {
         };
 
         if (isGemini3) {
-            const effort = options.reasoningEffort ?? options.getGeminiThinkingLevel?.() ?? 'medium';
+            const requestedEffort = options.reasoningEffort ?? options.getGeminiThinkingLevel?.() ?? 'medium';
+            const effort = this.normalizeReasoningEffort(model, requestedEffort);
             const isFlash = model.includes('flash');
             const level = isFlash 
                 ? (effort === 'xhigh' ? 'high' : effort) 
@@ -895,18 +957,47 @@ export class KimiProvider extends OpenAICompatibleProvider {
         return true;
     }
 
-    isThinkingDefaultOn(model) { return model === 'kimi-k2.6'; }
+    isThinkingDefaultOn(model) { return model === 'kimi-k2.6' || model === 'kimi-k3'; }
 
     supports(feature, model) {
         if (feature === 'thinking_toggle') return model === 'kimi-k2.6';
+        if (feature === 'thinking' || feature === 'reasoning') return model === 'kimi-k3';
         return super.supports(feature, model);
     }
 
-    shouldIncludeTemperature({ model }) {
-        return model !== 'kimi-k2.6';
+    getReasoningEfforts(model) {
+        return model === 'kimi-k3' ? ['max'] : [];
     }
 
-    extendRequestBody(body, { model, options }) {
+    formatMessages(messages, context) {
+        const formatted = super.formatMessages(messages, context);
+        if (context?.model !== 'kimi-k3') return formatted;
+
+        formatted.forEach((message, index) => {
+            if (message.role !== RoleEnum.assistant) return;
+            const reasoningContent = (messages[index].parts || [])
+                .filter(part => part.type === 'thought' && part.content)
+                .map(part => part.content)
+                .join('\n');
+            if (reasoningContent) message.reasoning_content = reasoningContent;
+        });
+        return formatted;
+    }
+
+    shouldIncludeMaxTokens({ model }) {
+        return model !== 'kimi-k3';
+    }
+
+    shouldIncludeTemperature({ model }) {
+        return model !== 'kimi-k2.6' && model !== 'kimi-k3';
+    }
+
+    extendRequestBody(body, { model, options, settings }) {
+        if (model === 'kimi-k3') {
+            body.max_completion_tokens = Math.min(settings.max_tokens, MaxTokens.kimi_k3);
+            body.reasoning_effort = 'max';
+            return;
+        }
         if (model === 'kimi-k2.6') {
             const shouldThink = options.shouldThink ?? options.getShouldThink?.() ?? true;
             if (!shouldThink) {
@@ -918,7 +1009,7 @@ export class KimiProvider extends OpenAICompatibleProvider {
     }
 
     beforeCreateRequest({ model, options }) {
-        const isThinking = model === 'kimi-k2-thinking' ||
+        const isThinking = model === 'kimi-k3' || model === 'kimi-k2-thinking' ||
             (model === 'kimi-k2.6' && (options.shouldThink ?? options.getShouldThink?.() ?? true));
         if (isThinking && options.streamWriter) {
             options.streamWriter.setThinkingModel();

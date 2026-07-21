@@ -71,6 +71,7 @@ export const initializeInteractiveState = (state, overrides = {}) => {
         shouldThink: false,
         shouldWebSearch: undefined,
         reasoningEffort: undefined,
+        reasoningMode: undefined,
         imageAspectRatio: undefined,
         imageResolution: undefined,
         ...overrides
@@ -250,11 +251,19 @@ const interactiveStateMixin = {
         return this.getSetting('reasoning_effort') || 'high';
     },
 
-    cycleReasoningEffort() {
+    cycleReasoningEffort(options = REASONING_EFFORT_OPTIONS, currentEffort = this.getReasoningEffort()) {
         const state = S(this);
-        const nextEffort = cycleOption(this.getReasoningEffort(), REASONING_EFFORT_OPTIONS);
+        const nextEffort = cycleOption(currentEffort, options);
         state.reasoningEffort = nextEffort;
         return nextEffort;
+    },
+
+    getReasoningMode() { return S(this).reasoningMode || 'standard'; },
+
+    toggleReasoningMode() {
+        const state = S(this);
+        state.reasoningMode = this.getReasoningMode() === 'standard' ? 'pro' : 'standard';
+        return state.reasoningMode;
     },
 
     getImageAspectRatio() { return S(this).imageAspectRatio || 'auto'; },

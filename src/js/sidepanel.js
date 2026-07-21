@@ -12,6 +12,7 @@ import { createStateProxy } from './state_proxy.js';
 const STARTUP_WINDOW_MS = 2000;  // Time window to consider closing empty startup tabs
 const NEW_TAB_URL = 'chrome://newtab';
 const POPOUT_READY_TIMEOUT_MS = 3000;
+const CONTINUATION_RENDER_TAIL_MESSAGES = 80;
 
 // Arena and Council mode toggle icons
 const ICON = {
@@ -21,7 +22,7 @@ const ICON = {
     COUNCIL_ON: '\u{2042}'   // ⁂ Asterism - council mode enabled
 };
 
-class SidepanelApp {
+export class SidepanelApp {
     constructor() {
         this.stateManager = new SidepanelStateManager('chat_prompt');
         this.apiManager = new ApiManager({ settingsManager: this.stateManager });
@@ -32,6 +33,8 @@ class SidepanelApp {
         this.tabTextareaContent = new Map();
         this.sharedUIInitialized = false;
         this.openedForReconstruct = false;
+        this.deferRestoredTabSwitchLoads = false;
+        this.restoredTabLoadTimers = new Map();
         this.startupAt = Date.now();
         this.startupNewTabId = null;
 
@@ -110,7 +113,13 @@ class SidepanelApp {
         await new Promise(resolve => requestAnimationFrame(resolve));
 
         if (this.tabManager.getAllTabs().length > 0) {
-            this.ensureActiveTab();
+            this.deferRestoredTabSwitchLoads = true;
+            try {
+                this.ensureActiveTab();
+            } finally {
+                this.deferRestoredTabSwitchLoads = false;
+            }
+            this.scheduleRestoredTabLoad(this.getActiveTab()?.id);
             return;
         }
 
@@ -130,8 +139,13 @@ class SidepanelApp {
     async attachPageContextToTab(tabId, webpageContext = undefined) {
         if (!tabId) return;
 
-        const tab = this.tabManager.getTab(tabId);
+        let tab = this.tabManager.getTab(tabId);
         if (!tab?.controller) return;
+
+        if (tab.reconstruction !== null) {
+            const ready = await this.ensureTabReady(tabId);
+            if (!ready || this.tabManager.getTab(tabId) !== tab) return;
+        }
 
         const chatCore = tab.controller.chatCore;
         const currentText = this.getActiveTab()?.id === tabId
@@ -173,6 +187,145 @@ class SidepanelApp {
         return true;
     }
 
+    updateInputReconstructionState(tab = this.getActiveTab()) {
+        if (this.textInput) {
+            this.textInput.disabled = tab?.reconstruction?.status === 'loading';
+        }
+    }
+
+    setTabDraft(tabId, text) {
+        const value = text || '';
+        this.tabTextareaContent.set(tabId, value);
+        if (this.getActiveTab()?.id !== tabId || !this.textInput) return;
+
+        this.textInput.value = value;
+        updateTextfieldHeight(this.textInput);
+    }
+
+    ensureTabReady(tabId) {
+        this.cancelRestoredTabLoad(tabId);
+        const tab = this.tabManager.getTab(tabId);
+        if (!tab) return false;
+        if (tab.reconstruction === null) return true;
+        if (tab.reconstruction.status === 'loading') return tab.reconstruction.promise;
+
+        const options = tab.reconstruction.options;
+        const operation = { status: 'loading', options, promise: null };
+        tab.reconstruction = operation;
+        if (this.getActiveTab()?.id === tabId) this.updateInputReconstructionState(tab);
+
+        operation.promise = this.runReconstruction(tab, operation);
+        return operation.promise;
+    }
+
+    async runReconstruction(tab, operation) {
+        try {
+            const prepared = await this.prepareReconstruction(operation.options);
+            if (this.tabManager.getTab(tab.id) !== tab || tab.reconstruction !== operation) return false;
+
+            this.commitReconstruction(tab, prepared);
+            tab.reconstruction = null;
+            if (this.getActiveTab()?.id === tab.id) this.updateInputReconstructionState(tab);
+            return true;
+        } catch (error) {
+            if (this.tabManager.getTab(tab.id) !== tab || tab.reconstruction !== operation) return false;
+
+            console.warn('Failed to reconstruct tab:', error);
+            tab.reconstruction = { status: 'pending', options: operation.options };
+            tab.chatUI.addErrorMessage(error?.userMessage || 'Failed to load chat');
+            if (this.getActiveTab()?.id === tab.id) this.updateInputReconstructionState(tab);
+            return false;
+        }
+    }
+
+    async prepareReconstruction(options) {
+        if (!options.chatId) return { options, chat: null, fullChatLength: null };
+
+        const chatId = Number(options.chatId);
+        if (!Number.isFinite(chatId)) {
+            const error = new Error('Invalid chat ID');
+            error.userMessage = 'Invalid chat ID';
+            throw error;
+        }
+
+        const isContinuation = options.index !== undefined;
+        const [chat, fullChatLength] = await Promise.all([
+            this.chatStorage.loadChat(chatId, isContinuation ? options.index + 1 : null),
+            isContinuation ? this.chatStorage.getChatLength(chatId) : null
+        ]);
+        if (!chat?.messages) {
+            const error = new Error(`Chat ${chatId} not found`);
+            error.userMessage = 'Chat not found';
+            throw error;
+        }
+
+        const selectedMessage = chat.messages.at(-1) || null;
+        const secondaryLength = selectedMessage?.contents
+            ? selectedMessage.contents.length
+            : selectedMessage?.responses?.[options.modelChoice || 'model_a']?.messages?.length;
+
+        return { options, chatId, chat, fullChatLength, selectedMessage, secondaryLength, isContinuation };
+    }
+
+    async getReadyActiveTab() {
+        const tab = this.getActiveTab();
+        if (!tab || !await this.ensureTabReady(tab.id)) return null;
+        return this.getActiveTab() === tab && this.tabManager.getTab(tab.id) === tab ? tab : null;
+    }
+
+    scheduleRestoredTabLoad(tabId, options = {}) {
+        if (tabId == null) return;
+
+        const run = () => {
+            this.restoredTabLoadTimers.delete(tabId);
+            const tab = this.tabManager.getTab(tabId);
+            if (!tab || !tab.reconstruction) return;
+
+            void this.ensureTabReady(tab.id);
+        };
+
+        if (options.immediate) {
+            this.cancelRestoredTabLoad(tabId);
+            run();
+            return;
+        }
+
+        if (this.restoredTabLoadTimers.has(tabId)) return;
+
+        if (window.requestIdleCallback) {
+            const id = window.requestIdleCallback(run, { timeout: 500 });
+            this.restoredTabLoadTimers.set(tabId, { type: 'idle', id });
+        } else {
+            const id = setTimeout(run, 100);
+            this.restoredTabLoadTimers.set(tabId, { type: 'timeout', id });
+        }
+    }
+
+    cancelRestoredTabLoad(tabId) {
+        const timer = this.restoredTabLoadTimers.get(tabId);
+        if (!timer) return;
+
+        if (timer.type === 'idle') window.cancelIdleCallback?.(timer.id);
+        else clearTimeout(timer.id);
+        this.restoredTabLoadTimers.delete(tabId);
+    }
+
+    getContinuationRenderChat(chat) {
+        const messages = chat?.messages || [];
+        if (messages.length <= CONTINUATION_RENDER_TAIL_MESSAGES) {
+            return { chat, indexOffset: 0 };
+        }
+
+        let indexOffset = messages.length - CONTINUATION_RENDER_TAIL_MESSAGES;
+        while (indexOffset > 0 && messages[indexOffset]?.role === 'assistant' && messages[indexOffset - 1]?.role === 'assistant') {
+            indexOffset--;
+        }
+        return {
+            chat: { ...chat, messages: messages.slice(indexOffset) },
+            indexOffset
+        };
+    }
+
     isTabReallyEmpty(tabId) {
         const tabs = this.tabManager.getAllTabs();
         const tab = tabs.find(t => t.id === tabId);
@@ -180,6 +333,7 @@ class SidepanelApp {
         if (!tab) {
             return false;
         }
+        if (tab.reconstruction !== null) return false;
 
         const controller = tab.controller;
         const chatCore = controller?.chatCore;
@@ -204,6 +358,7 @@ class SidepanelApp {
             getShouldThink: () => false,
             getShouldWebSearch: () => false,
             getReasoningEffort: () => 'medium',
+            getReasoningMode: () => 'standard',
             getImageAspectRatio: () => 'auto',
             getImageResolution: () => '2K',
             getCurrentModel: () => this.stateManager.getSetting('current_model'),
@@ -284,24 +439,30 @@ class SidepanelApp {
     }
 
     async handleInput() {
-        const activeTabState = this.getActiveTabState();
-        const activeController = this.getActiveController();
-        
-        if (!activeTabState || !activeController || !this.stateManager.isOn()) {
-            return;
-        }
+        if (!this.stateManager.isOn()) return;
+
+        const activeTab = await this.getReadyActiveTab();
+        if (!activeTab) return;
+
+        const { controller: activeController, tabState: activeTabState } = activeTab;
+        if (!activeTabState || !activeController) return;
         
         await activeController.awaitPromptReady();
 
         if (activeController.chatCore.getSystemPrompt() === undefined) {
             await activeController.initPrompt({ mode: "chat" });
         }
+
+        const currentTab = this.getActiveTab();
+        if (currentTab?.id !== activeTab.id || currentTab.controller !== activeController) return;
         activeController.sendUserMessage();
     }
 
-    continueFromCurrent(index, secondaryIndex = null, modelChoice = null) {
-        const activeController = this.getActiveController();
-        if (!activeController) return;
+    async continueFromCurrent(index, secondaryIndex = null, modelChoice = null) {
+        const activeTab = await this.getReadyActiveTab();
+        if (!activeTab) return;
+
+        const activeController = activeTab.controller;
 
         const reconstructOptions = {
             chatId: activeController.chatCore.getChatId(),
@@ -317,7 +478,7 @@ class SidepanelApp {
             reconstructOptions.systemPrompt = activeController.chatCore.getSystemPrompt();
         }
         
-        void this.handleReconstructChat(reconstructOptions);
+        return this.handleReconstructChat(reconstructOptions);
     }
 
     // ========== Tab Switch Handler ========== 
@@ -333,6 +494,10 @@ class SidepanelApp {
 
         if (activeTab.chatUI) {
             activeTab.chatUI.updateIncognitoButtonVisuals(this.incognitoToggle);
+        }
+        this.updateInputReconstructionState(activeTab);
+        if (!this.deferRestoredTabSwitchLoads) {
+            this.scheduleRestoredTabLoad(activeTab.id, { immediate: true });
         }
         
         if (activeTab.tabState) {
@@ -375,7 +540,8 @@ class SidepanelApp {
         if (resolutionLabel && tabState) resolutionLabel.textContent = tabState.getImageResolution();
     }
 
-    handleTabClose(tabId) { 
+    handleTabClose(tabId) {
+        this.cancelRestoredTabLoad(tabId);
         this.voiceManager.handleTabClose(tabId); 
         this.tabTextareaContent.delete(tabId); 
     }
@@ -555,127 +721,120 @@ class SidepanelApp {
         }
     }
 
-    async handleReconstructChat(reconstructOptions) {
-        this.openedForReconstruct = true; 
+    handleReconstructChat(reconstructOptions) {
+        this.openedForReconstruct = true;
         this.ensureActiveTab();
-        
-        if (reconstructOptions?.chatId && reconstructOptions.index === undefined) {
-            const existingTab = this.tabManager.findTabByChatId(reconstructOptions.chatId);
+
+        const isFullChat = reconstructOptions?.chatId && reconstructOptions.index === undefined;
+        if (isFullChat) {
+            const existingTab = this.findFullChatTab(reconstructOptions.chatId);
             if (existingTab) {
                 if (this.startupNewTabId && this.startupNewTabId !== existingTab.id && Date.now() - this.startupAt < STARTUP_WINDOW_MS && this.isTabReallyEmpty(this.startupNewTabId)) {
                     this.tabManager.closeTab(this.startupNewTabId);
                     this.startupNewTabId = null;
                 }
-                return this.tabManager.switchTab(existingTab.id);
+                this.tabManager.switchTab(existingTab.id);
+                return this.ensureTabReady(existingTab.id);
             }
-        }
-        
-        if (!this.createTabIfNeeded()) return;
-        
-        const activeController = this.getActiveController();
-        const activeChatUI = this.getActiveChatUI();
-        const activeTabState = this.getActiveTabState();
-        const activeTab = this.getActiveTab();
-        
-        if (!activeController || !activeChatUI || !activeTabState) return;
-        if (!reconstructOptions.chatId) {
-            activeTabState.chatId = null;
-        }
-        
-        activeController.initStates(reconstructOptions.chatId ? "Continued Chat" : "New Chat");
-        activeTabState.isSidePanel = reconstructOptions.isSidePanel !== false;
-
-        if (!reconstructOptions.chatId && !reconstructOptions.pendingUserMessage) {
-            if (reconstructOptions.systemPrompt) {
-                activeController.chatCore.insertSystemMessage(reconstructOptions.systemPrompt);
-            }
-            if (reconstructOptions.webpageContext !== undefined) {
-                activeController.chatCore.setWebpageContext(reconstructOptions.webpageContext);
-            }
-            if (reconstructOptions.webpageContextDismissed !== undefined) {
-                activeController.chatCore.setWebpageContextDismissed(reconstructOptions.webpageContextDismissed);
-            }
-            activeChatUI.clearConversation();
-            activeController.syncWebpageContextUI();
-            return;
         }
 
-        let lastHistoryMessage = null;
-        if (reconstructOptions.chatId) {
-            const numericChatId = Number(reconstructOptions.chatId);
-            if (!Number.isFinite(numericChatId)) {
-                activeChatUI.addErrorMessage("Invalid chat ID");
-                return;
-            }
+        let targetTab = this.getActiveTab();
+        if (!targetTab || !this.isTabReallyEmpty(targetTab.id)) {
+            targetTab = this.tabManager.createTab({
+                continueFunc: (i, s, m) => this.continueFromCurrent(i, s, m)
+            });
+        }
+        if (!targetTab) {
+            this.getActiveChatUI()?.addErrorMessage("Maximum tabs reached. Close a tab first.");
+            return false;
+        }
 
-            const messageLimit = reconstructOptions.index !== undefined ? reconstructOptions.index + 1 : null;
-            let loadedChat;
-            try {
-                loadedChat = await this.chatStorage.loadChat(numericChatId, messageLimit);
-            } catch (error) {
-                console.warn('Failed to load chat:', error);
-                activeChatUI.addErrorMessage("Failed to load chat");
-                return;
-            }
-            if (!loadedChat?.messages) return activeChatUI.addErrorMessage("Chat not found");
-            
-            lastHistoryMessage = loadedChat.messages.at(-1);
-            const secondaryLength = lastHistoryMessage?.contents
-                ? lastHistoryMessage.contents.length
-                : lastHistoryMessage?.responses?.[reconstructOptions.modelChoice || 'model_a']?.messages?.length;
-            
-            activeController.chatCore.buildFromDB(loadedChat, null, reconstructOptions.secondaryIndex, reconstructOptions.modelChoice);
-            if (reconstructOptions.webpageContext !== undefined) {
-                activeController.chatCore.setWebpageContext(reconstructOptions.webpageContext);
-            }
-            if (reconstructOptions.webpageContextDismissed !== undefined) {
-                activeController.chatCore.setWebpageContextDismissed(reconstructOptions.webpageContextDismissed);
-            }
-            
-            activeChatUI.updateIncognito(activeController.chatCore.hasChatStarted()); 
-            activeChatUI.buildChat(activeController.chatCore.getChat());
-            activeController.syncWebpageContextUI();
-            
-            activeController.chatCore.continuedChatOptions = { 
-                fullChatLength: await this.chatStorage.getChatLength(numericChatId), 
-                lastMessage: lastHistoryMessage, 
-                index: reconstructOptions.index,
-                modelChoice: reconstructOptions.modelChoice,
-                secondaryIndex: reconstructOptions.secondaryIndex,
-                secondaryLength
-            };
-            
-            if (activeTab && loadedChat.title) {
-                this.tabManager.updateTabTitle(activeTab.id, loadedChat.title);
-            }
-            activeTabState.chatId = numericChatId; 
-            this.tabManager.schedulePersist();
-        }
-        
-        if (reconstructOptions.systemPrompt) {
-            activeController.chatCore.insertSystemMessage(reconstructOptions.systemPrompt);
-        }
-        if (!reconstructOptions.chatId && reconstructOptions.webpageContext !== undefined) {
-            activeController.chatCore.setWebpageContext(reconstructOptions.webpageContext);
-            activeController.chatCore.setWebpageContextDismissed(reconstructOptions.webpageContextDismissed);
-            activeController.syncWebpageContextUI();
-        }
-        
-        this.handleLastUserMsg(lastHistoryMessage?.role === 'user' ? lastHistoryMessage : reconstructOptions.pendingUserMessage);
-
-        activeController.restoreLatestAssistantActions();
+        const pending = { status: 'pending', options: reconstructOptions };
+        targetTab.reconstruction = pending;
+        return this.ensureTabReady(targetTab.id);
     }
 
-    handleLastUserMsg(message) {
-        const controller = this.getActiveController();
-        const chatUI = this.getActiveChatUI();
-        
-        if (!controller || !chatUI) {
+    findFullChatTab(chatId) {
+        const numericChatId = Number(chatId);
+        return this.tabManager.getAllTabs().find(tab => {
+            if (this.tabManager.getTabChatId(tab) !== numericChatId) return false;
+            if (tab.reconstruction) return tab.reconstruction.options?.index === undefined;
+            return !tab.controller.chatCore.hasPendingContinuation();
+        });
+    }
+
+    commitReconstruction(tab, prepared) {
+        const { controller, chatUI, tabState } = tab;
+        const { options } = prepared;
+
+        controller.initStates(options.chatId ? 'Continued Chat' : 'New Chat');
+        tabState.isSidePanel = options.isSidePanel !== false;
+
+        if (!options.chatId) {
+            tabState.chatId = null;
+            if (options.systemPrompt) controller.chatCore.insertSystemMessage(options.systemPrompt);
+            if (options.webpageContext !== undefined) {
+                controller.chatCore.setWebpageContext(options.webpageContext);
+                controller.chatCore.setWebpageContextDismissed(options.webpageContextDismissed);
+            }
+            chatUI.clearConversation({ skipTextarea: true });
+            controller.syncWebpageContextUI();
+            if (options.pendingUserMessage) {
+                this.restorePendingUserMessage(tab, options.pendingUserMessage);
+                controller.restoreLatestAssistantActions();
+            }
             return;
         }
-        
+
+        const removeTrailingUser = prepared.isContinuation && prepared.selectedMessage?.role === 'user';
+        controller.chatCore.buildFromDB(
+            prepared.chat,
+            null,
+            options.secondaryIndex,
+            options.modelChoice,
+            removeTrailingUser
+        );
+        if (options.webpageContext !== undefined) {
+            controller.chatCore.setWebpageContext(options.webpageContext);
+        }
+        if (options.webpageContextDismissed !== undefined) {
+            controller.chatCore.setWebpageContextDismissed(options.webpageContextDismissed);
+        }
+
+        chatUI.updateIncognito(controller.chatCore.hasChatStarted());
+        const renderState = prepared.isContinuation
+            ? this.getContinuationRenderChat(controller.chatCore.getChat())
+            : { chat: controller.chatCore.getChat(), indexOffset: 0 };
+        chatUI.buildChat(renderState.chat, { indexOffset: renderState.indexOffset });
+        controller.syncWebpageContextUI();
+
+        if (prepared.isContinuation) {
+            controller.chatCore.continuedChatOptions = {
+                fullChatLength: prepared.fullChatLength,
+                lastMessage: prepared.selectedMessage,
+                index: options.index,
+                modelChoice: options.modelChoice,
+                secondaryIndex: options.secondaryIndex,
+                secondaryLength: prepared.secondaryLength
+            };
+            this.restorePendingUserMessage(
+                tab,
+                removeTrailingUser ? prepared.selectedMessage : options.pendingUserMessage,
+                removeTrailingUser ? options.secondaryIndex : null
+            );
+        } else {
+            controller.chatCore.continuedChatOptions = {};
+        }
+
+        if (prepared.chat.title) this.tabManager.updateTabTitle(tab.id, prepared.chat.title);
+        tabState.chatId = prepared.chatId;
+        this.tabManager.schedulePersist();
+        controller.restoreLatestAssistantActions();
+    }
+
+    restorePendingUserMessage(tab, message, secondaryIndex = null) {
+        const { controller } = tab;
         if (message?.role === "user") {
-            // Restore media
             if (message.images) {
                 controller.appendPendingMedia(message.images, 'image');
             }
@@ -685,22 +844,22 @@ class SidepanelApp {
             if (message.files) {
                 controller.appendPendingMedia(message.files, 'file');
             }
-            
-            // Restore text
+
             if (message.contents) {
-                const text = message.contents.at(-1).at(-1).content;
-                chatUI.setTextareaText(text);
+                const content = secondaryIndex == null ? message.contents.at(-1) : message.contents[secondaryIndex];
+                const text = content?.at(-1)?.content || '';
+                this.setTabDraft(tab.id, text);
             }
         } else {
-            chatUI.setTextareaText('');
+            this.setTabDraft(tab.id, '');
         }
     }
 
     async handlePopoutToggle() {
-        const activeController = this.getActiveController();
-        const activeTabState = this.getActiveTabState();
-        const activeChatUI = this.getActiveChatUI();
-        
+        const activeTab = await this.getReadyActiveTab();
+        if (!activeTab) return;
+
+        const { controller: activeController, tabState: activeTabState, chatUI: activeChatUI } = activeTab;
         if (!activeController || !activeTabState) {
             return;
         }
@@ -714,7 +873,7 @@ class SidepanelApp {
                 return;
             }
             
-            const currentActiveTabId = this.getActiveTab()?.id;
+            const currentActiveTabId = activeTab.id;
             const unsavedTabsList = this.tabManager.getAllTabs().filter(tab => {
                 const isNotCurrentlyActive = (tab.id !== currentActiveTabId);
                 const isNotYetSavedToStorage = !this.tabManager.getTabChatId(tab);
@@ -809,19 +968,28 @@ class SidepanelApp {
 
     initTextareaImageHandling() {
         this.dragDropManager = new DragDropManager(this.textInput, {
-            onImage: base64String => this.getActiveController()?.appendPendingMedia([base64String], 'image'),
-            onAudio: (base64String, fileName) => this.getActiveController()?.appendPendingMedia([{ data: base64String, name: fileName }], 'audio'),
-            onFile: fileObject => this.getActiveController()?.appendPendingMedia([fileObject], 'file'),
-            onText: droppedText => this.getActiveChatUI()?.setTextareaText(droppedText),
+            onImage: base64String => { void this.withReadyActiveTab(tab => tab.controller.appendPendingMedia([base64String], 'image')); },
+            onAudio: (base64String, fileName) => { void this.withReadyActiveTab(tab => tab.controller.appendPendingMedia([{ data: base64String, name: fileName }], 'audio')); },
+            onFile: fileObject => { void this.withReadyActiveTab(tab => tab.controller.appendPendingMedia([fileObject], 'file')); },
+            onText: droppedText => { void this.withReadyActiveTab(tab => this.setTabDraft(tab.id, droppedText)); },
             onError: errorMessage => this.getActiveChatUI()?.addErrorMessage(this.apiManager.getUiErrorMessage(errorMessage))
         });
+    }
+
+    async withReadyActiveTab(action) {
+        const tab = await this.getReadyActiveTab();
+        if (!tab) return false;
+        action(tab);
+        return true;
     }
 }
 
 
 // Initialize the application when the DOM is loaded
-document.addEventListener('DOMContentLoaded', async () => {
-    const app = new SidepanelApp();
-    await app.readyPromise;
-    chrome.runtime.sendMessage({ type: "sidepanel_ready" });
-});
+if (typeof document !== 'undefined') {
+    document.addEventListener('DOMContentLoaded', async () => {
+        const app = new SidepanelApp();
+        await app.readyPromise;
+        chrome.runtime.sendMessage({ type: "sidepanel_ready" });
+    });
+}

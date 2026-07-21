@@ -45,4 +45,31 @@ describe('SidepanelChatUI webpage context banner', () => {
         banner.querySelector('.webpage-context-remove').click();
         expect(removed).toBe(true);
     });
+
+    test('buildChat preserves original indexes when rendering a tail slice', () => {
+        let continuedIndex = null;
+        const chatUI = new SidepanelChatUI({
+            conversationWrapperId: 'conversation-wrapper-test',
+            scrollElementId: 'tab-container-test',
+            continueFunc: index => { continuedIndex = index; },
+            stateManager: {
+                getSetting: () => false,
+                isThinking: () => false,
+                isSolving: () => false,
+                subscribeToSetting: () => {},
+                unsubscribeFromSetting: () => {}
+            }
+        });
+
+        chatUI.buildChat({
+            title: 'Tail',
+            messages: [
+                { role: 'user', contents: [[{ type: 'text', content: 'Question' }]] },
+                { role: 'assistant', contents: [[{ type: 'text', content: 'Answer' }]] }
+            ]
+        }, { indexOffset: 8 });
+
+        document.querySelector('.assistant-message .continue-conversation-button').click();
+        expect(continuedIndex).toBe(9);
+    });
 });
