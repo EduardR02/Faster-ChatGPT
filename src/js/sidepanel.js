@@ -223,7 +223,8 @@ export class SidepanelApp {
             const prepared = await this.prepareReconstruction(operation.options);
             if (this.tabManager.getTab(tab.id) !== tab || tab.reconstruction !== operation) return false;
 
-            this.commitReconstruction(tab, prepared);
+            const committed = await this.commitReconstruction(tab, prepared);
+            if (committed === false || this.tabManager.getTab(tab.id) !== tab || tab.reconstruction !== operation) return false;
             tab.reconstruction = null;
             if (this.getActiveTab()?.id === tab.id) this.updateInputReconstructionState(tab);
             return true;
@@ -763,7 +764,7 @@ export class SidepanelApp {
         });
     }
 
-    commitReconstruction(tab, prepared) {
+    async commitReconstruction(tab, prepared) {
         const { controller, chatUI, tabState } = tab;
         const { options } = prepared;
 
@@ -783,7 +784,7 @@ export class SidepanelApp {
                 this.restorePendingUserMessage(tab, options.pendingUserMessage);
                 controller.restoreLatestAssistantActions();
             }
-            return;
+            return true;
         }
 
         const removeTrailingUser = prepared.isContinuation && prepared.selectedMessage?.role === 'user';
@@ -805,7 +806,8 @@ export class SidepanelApp {
         const renderState = prepared.isContinuation
             ? this.getContinuationRenderChat(controller.chatCore.getChat())
             : { chat: controller.chatCore.getChat(), indexOffset: 0 };
-        chatUI.buildChat(renderState.chat, { indexOffset: renderState.indexOffset });
+        const rendered = await chatUI.buildChat(renderState.chat, { indexOffset: renderState.indexOffset });
+        if (rendered === false) return false;
         controller.syncWebpageContextUI();
 
         if (prepared.isContinuation) {
@@ -830,6 +832,7 @@ export class SidepanelApp {
         tabState.chatId = prepared.chatId;
         this.tabManager.schedulePersist();
         controller.restoreLatestAssistantActions();
+        return true;
     }
 
     restorePendingUserMessage(tab, message, secondaryIndex = null) {

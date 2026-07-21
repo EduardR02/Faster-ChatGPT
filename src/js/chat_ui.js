@@ -9,6 +9,23 @@ const HISTORY_SCROLL_BUFFER = 10;       // Pixels from bottom to trigger loading
 const KEYBOARD_NAV_HIGHLIGHT_MS = 300;  // Duration for keyboard navigation highlight
 const ERROR_FLASH_MS = 1000;            // Duration for error flash animation
 const MS_PER_DAY = 86400000;            // Milliseconds in a day
+const CHAT_RENDER_CHUNK_SIZE = 20;
+
+const yieldToMainThread = () => {
+    if (globalThis.scheduler?.postTask) {
+        return globalThis.scheduler.postTask(() => {}, { priority: 'user-visible' });
+    }
+
+    return new Promise(resolve => {
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => {
+            channel.port1.close();
+            channel.port2.close();
+            resolve();
+        };
+        channel.port2.postMessage(null);
+    });
+};
 
 export const getDistanceFromBottom = element => {
     if (!element) return Number.POSITIVE_INFINITY;
@@ -63,6 +80,8 @@ class ChatUI {
         };
         this._renderTarget = null;
         this._isBuildingChat = false;
+        this._activeChatBuild = null;
+        this.renderScheduler = options.renderScheduler || yieldToMainThread;
     }
 
     appendConversationNode(node) {
@@ -255,71 +274,92 @@ class ChatUI {
         this.clearConversation(options);
 
         const fragment = document.createDocumentFragment();
+        const build = {};
+        this._activeChatBuild = build;
         this._renderTarget = fragment;
         this._isBuildingChat = true;
         const indexOffset = options.indexOffset || 0;
-        
-        try {
-            const messages = chat.messages;
-            let i = 0;
-            let assistantCount = 0;
-            while (i < messages.length) {
-                const message = messages[i];
-                const messageIndex = indexOffset + i;
-                
-                if (message.role === 'assistant') {
-                    // Determine rendering mode (Council, Arena, or Normal)
-                    const isCouncil = !!message.council;
-                    const isArena = !!message.responses;
-                    const isRegeneration = assistantCount > 0;
-                    
-                    if (isArena) {
-                        this.createArenaWrapper(message, { 
-                            continueFunc: options.continueFunc, 
-                            messageIndex,
-                            messageId: message.messageId ?? messageIndex,
-                            isRegeneration
-                        });
-                    } else if (isCouncil) {
-                        this.createCouncilWrapper(message, {
-                            continueFunc: options.continueFunc,
-                            messageIndex,
-                            messageId: message.messageId ?? messageIndex,
-                            allowContinue: options.allowContinue,
-                            isRegeneration
-                        });
-                    } else {
-                        this._renderMessageContents(message, messageIndex, {
-                            isRegenerationBase: isRegeneration,
-                            hideModels: options.hideModels,
-                            continueFunc: options.continueFunc
-                        });
-                    }
-                    assistantCount++;
-                    i++;
-                } else {
-                    // User or System
-                    assistantCount = 0; // Reset assistant count on user message
-                    if (options.addSystemMsg || message.role !== 'system') {
-                        this._renderMessageContents(message, messageIndex, {
-                            isRegenerationBase: false,
-                            hideModels: options.hideModels,
-                            continueFunc: options.continueFunc
-                        });
-                    }
-                    i++;
-                }
+        const messages = chat.messages;
+        let i = 0;
+        let assistantCount = 0;
 
-                if (i !== messages.length) {
-                    this.pendingMediaDiv = null;
-                }
-            }
-        } finally {
+        const finish = () => {
+            if (this._activeChatBuild !== build) return false;
             this._renderTarget = null;
             this._isBuildingChat = false;
+            this._activeChatBuild = null;
+            return true;
+        };
+
+        const fail = error => {
+            if (this._activeChatBuild === build) {
+                this._renderTarget = null;
+                this._isBuildingChat = false;
+                this._activeChatBuild = null;
+            }
+            throw error;
+        };
+
+        const renderChunk = () => {
+            if (this._activeChatBuild !== build) return false;
+
+            const chunkEnd = Math.min(i + CHAT_RENDER_CHUNK_SIZE, messages.length);
+            try {
+                while (i < chunkEnd) {
+                    assistantCount = this._renderChatMessage(messages[i], indexOffset + i, assistantCount, options);
+                    i++;
+                    if (i !== messages.length) {
+                        this.pendingMediaDiv = null;
+                    }
+                }
+            } catch (error) {
+                return fail(error);
+            }
+
+            this.conversationDiv.appendChild(fragment);
+            if (i === messages.length) return finish();
+
+            try {
+                return Promise.resolve(this.renderScheduler()).then(renderChunk, fail);
+            } catch (error) {
+                return fail(error);
+            }
+        };
+
+        const result = renderChunk();
+        return result instanceof Promise ? result : undefined;
+    }
+
+    _renderChatMessage(message, messageIndex, assistantCount, options) {
+        if (message.role !== 'assistant') {
+            if (options.addSystemMsg || message.role !== 'system') {
+                this._renderMessageContents(message, messageIndex, {
+                    isRegenerationBase: false,
+                    hideModels: options.hideModels,
+                    continueFunc: options.continueFunc
+                });
+            }
+            return 0;
         }
 
-        this.conversationDiv.appendChild(fragment);
+        const renderOptions = {
+            continueFunc: options.continueFunc,
+            messageIndex,
+            messageId: message.messageId ?? messageIndex,
+            isRegeneration: assistantCount > 0
+        };
+        if (message.responses) {
+            this.createArenaWrapper(message, renderOptions);
+        } else if (message.council) {
+            this.createCouncilWrapper(message, { ...renderOptions, allowContinue: options.allowContinue });
+        } else {
+            this._renderMessageContents(message, messageIndex, {
+                isRegenerationBase: renderOptions.isRegeneration,
+                hideModels: options.hideModels,
+                continueFunc: options.continueFunc
+            });
+        }
+        return assistantCount + 1;
     }
 
     _renderMessageContents(message, index, { isRegenerationBase = false, hideModels, continueFunc } = {}) {
@@ -982,6 +1022,9 @@ class ChatUI {
     }
 
     clearConversation(options = {}) {
+        this._activeChatBuild = null;
+        this._renderTarget = null;
+        this._isBuildingChat = false;
         this.conversationDiv.innerHTML = '';
         this.pendingMediaDiv = null;
         this.setWebpageContext(null);
@@ -1431,10 +1474,20 @@ export class SidepanelChatUI extends ChatUI {
             skipTextarea: true,
             ...options
         };
-        super.buildChat(chat, buildOptions);
-        this.resetAutoScroll();
-        this.updateChatHeader(chat.title);
-        this.scrollIntoView(true);
+        const finish = () => {
+            this.resetAutoScroll();
+            this.updateChatHeader(chat.title);
+            this.scrollIntoView(true);
+        };
+        const result = super.buildChat(chat, buildOptions);
+        if (result) {
+            return result.then(completed => {
+                if (!completed) return false;
+                finish();
+                return true;
+            });
+        }
+        finish();
     }
 
     addErrorMessage(text) {
@@ -2408,12 +2461,14 @@ export class HistoryChatUI extends ChatUI {
     async buildChat(chatId) {
         this.activeId = chatId;
         const fullChatData = await this.loadChat(chatId);
+        if (this.activeId !== chatId) return false;
         
-        super.buildChat(fullChatData, { 
+        const completed = await super.buildChat(fullChatData, {
             hideModels: false, 
             addSystemMsg: true, 
             continueFunc: this.continueFunc 
         });
+        if (completed === false || this.activeId !== chatId) return false;
         this.setWebpageContext(fullChatData.webpage_context || null);
         
         this.updateChatHeader(fullChatData.title);
@@ -2425,6 +2480,7 @@ export class HistoryChatUI extends ChatUI {
         }
         
         this.applyHighlight({ force: true });
+        return true;
     }
 
     clearConversation() {
