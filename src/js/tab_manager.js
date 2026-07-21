@@ -189,6 +189,7 @@ export class TabManager {
         const tab = this.tabs.get(id);
         if (!tab) return;
 
+        tab.reconstruction = null;
         tab.chatUI.destroy();
         tab.container.remove();
         const tabButton = document.getElementById(`tab-btn-${id}`);

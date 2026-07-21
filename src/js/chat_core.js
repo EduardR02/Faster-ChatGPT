@@ -65,6 +65,11 @@ export class ChatCore {
         return this.currentChat;
     }
 
+    setChat(chat) {
+        this.currentChat = chat;
+        return chat;
+    }
+
     getSystemPrompt() {
         const firstMessage = this.currentChat.messages[0];
         if (firstMessage?.role === 'system') {
@@ -81,8 +86,7 @@ export class ChatCore {
     }
 
     async loadChat(chatId) {
-        this.currentChat = await this.chatStorage.loadChat(chatId);
-        return this.currentChat;
+        return this.setChat(await this.chatStorage.loadChat(chatId));
     }
 }
 

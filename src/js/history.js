@@ -1,5 +1,5 @@
 import { ChatStorage } from './chat_storage.js';
-import { HistoryChatUI } from './chat_ui.js';
+import { HistoryChatUI, runAfterSuccessfulBuild } from './chat_ui.js';
 import { HistoryStateManager } from './state_manager.js';
 import { RenameManager } from './rename_manager.js';
 import { ChatCore } from './chat_core.js';
@@ -288,7 +288,8 @@ const chatUI = new HistoryChatUI({
         return items;
     },
     addPopupActions: (item) => popupMenu.attachToItem(item),
-    loadChat: (id) => chatCore.loadChat(id),
+    loadChat: (id) => chatStorage.loadChat(id),
+    activateChat: (chat) => chatCore.setChat(chat),
     getChatMeta: getCachedMeta,
 });
 popupMenu.chatUI = chatUI;
@@ -380,7 +381,7 @@ async function handleAppended(chatId, addedCount, startIndex, searchDelta = null
     const contiguousMessages = takeContiguousMessages(fetchedMessages, appendWindow.startIndex);
     if (!contiguousMessages.length) return;
 
-    chatUI.appendMessages(contiguousMessages, appendWindow.startIndex);
+    chatUI.appendMessages(contiguousMessages, appendWindow.startIndex, chatId);
     chatCore.addMultipleFromHistory(contiguousMessages);
 }
 
@@ -1160,7 +1161,7 @@ class MediaTab {
     }
 
     handleMediaClick(entry) {
-        this.chatUI.buildChat(entry.chatId).then(() => {
+        void runAfterSuccessfulBuild(this.chatUI.buildChat(entry.chatId), () => {
             document.querySelector('[data-tab="chats"]').click();
             requestAnimationFrame(() => {
                 const targetImage = this.findImageInMessage(entry);

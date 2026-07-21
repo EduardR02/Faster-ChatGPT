@@ -36,6 +36,12 @@ export const isWithinBottomGrace = (element, thresholdPx = SCROLL_REENGAGE_PX) =
     return getDistanceFromBottom(element) <= thresholdPx;
 };
 
+export const runAfterSuccessfulBuild = async (buildResult, callback) => {
+    if (await buildResult === false) return false;
+    callback();
+    return true;
+};
+
 export const normalizeAudioItem = (audioItem) => {
     if (typeof audioItem === 'string') {
         return { data: audioItem, name: 'Audio attachment' };
@@ -279,7 +285,7 @@ class ChatUI {
         this._renderTarget = fragment;
         this._isBuildingChat = true;
         const indexOffset = options.indexOffset || 0;
-        const messages = chat.messages;
+        const messages = chat.messages.slice();
         let i = 0;
         let assistantCount = 0;
 
@@ -1022,12 +1028,16 @@ class ChatUI {
     }
 
     clearConversation(options = {}) {
-        this._activeChatBuild = null;
-        this._renderTarget = null;
-        this._isBuildingChat = false;
+        this.cancelChatBuild();
         this.conversationDiv.innerHTML = '';
         this.pendingMediaDiv = null;
         this.setWebpageContext(null);
+    }
+
+    cancelChatBuild() {
+        this._activeChatBuild = null;
+        this._renderTarget = null;
+        this._isBuildingChat = false;
     }
 
     createArenaWrapper(message, options = {}) {
@@ -1102,6 +1112,7 @@ export class SidepanelChatUI extends ChatUI {
     }
 
     destroy() {
+        this.cancelChatBuild();
         this._settingCallbacks.forEach(({ key, callback }) => {
             this.stateManager.unsubscribeFromSetting(key, callback);
         });
@@ -1907,13 +1918,16 @@ export class HistoryChatUI extends ChatUI {
             addPopup: options.addPopupActions,
             loadHistory: options.loadHistoryItems,
             loadChat: options.loadChat,
+            activateChat: options.activateChat,
             getMeta: options.getChatMeta,
             mode: 'history',
             inSearch: false,
             requestMoreSearch: null,
             paginator: this.createPaginator(),
             renderedIds: new Set(),
-            resultCategories: new Map()
+            resultCategories: new Map(),
+            pendingMessageAppends: [],
+            _renderingHistoryRequest: null
         });
 
         this.historyList.onscroll = () => {
@@ -2356,7 +2370,18 @@ export class HistoryChatUI extends ChatUI {
         }
     }
 
-    appendMessages(messages, start) {
+    appendMessages(messages, start, chatId = this.activeId) {
+        if (chatId !== this.activeId) return;
+        if (this._isBuildingChat) {
+            const request = this._renderingHistoryRequest;
+            if (request !== this._activeHistoryRequest) return;
+            this.pendingMessageAppends.push({ messages: messages.slice(), start, chatId, request });
+            return;
+        }
+        this._appendMessages(messages, start);
+    }
+
+    _appendMessages(messages, start) {
         messages.forEach((msg, i) => {
             const messageId = msg.messageId ?? (start + i);
             if (msg.responses) {
@@ -2367,6 +2392,16 @@ export class HistoryChatUI extends ChatUI {
                 this.buildFullMessage(msg, messageId);
             }
             this.pendingMediaDiv = null;
+        });
+    }
+
+    flushPendingMessageAppends(chatId, request) {
+        const pending = this.pendingMessageAppends;
+        this.pendingMessageAppends = [];
+        pending.forEach(append => {
+            if (append.chatId === chatId && append.request === request) {
+                this._appendMessages(append.messages, append.start);
+            }
         });
     }
 
@@ -2459,16 +2494,26 @@ export class HistoryChatUI extends ChatUI {
     }
 
     async buildChat(chatId) {
+        const request = {};
+        this._activeHistoryRequest = request;
         this.activeId = chatId;
         const fullChatData = await this.loadChat(chatId);
-        if (this.activeId !== chatId) return false;
+        if (this._activeHistoryRequest !== request) return false;
+        this.activateChat?.(fullChatData);
         
-        const completed = await super.buildChat(fullChatData, {
-            hideModels: false, 
-            addSystemMsg: true, 
-            continueFunc: this.continueFunc 
-        });
-        if (completed === false || this.activeId !== chatId) return false;
+        this._renderingHistoryRequest = request;
+        let completed;
+        try {
+            completed = await super.buildChat(fullChatData, {
+                hideModels: false,
+                addSystemMsg: true,
+                continueFunc: this.continueFunc
+            });
+        } finally {
+            if (this._renderingHistoryRequest === request) this._renderingHistoryRequest = null;
+        }
+        if (completed === false || this._activeHistoryRequest !== request) return false;
+        this.flushPendingMessageAppends(chatId, request);
         this.setWebpageContext(fullChatData.webpage_context || null);
         
         this.updateChatHeader(fullChatData.title);

@@ -223,7 +223,7 @@ export class SidepanelApp {
             const prepared = await this.prepareReconstruction(operation.options);
             if (this.tabManager.getTab(tab.id) !== tab || tab.reconstruction !== operation) return false;
 
-            const committed = await this.commitReconstruction(tab, prepared);
+            const committed = await this.commitReconstruction(tab, prepared, operation);
             if (committed === false || this.tabManager.getTab(tab.id) !== tab || tab.reconstruction !== operation) return false;
             tab.reconstruction = null;
             if (this.getActiveTab()?.id === tab.id) this.updateInputReconstructionState(tab);
@@ -764,7 +764,7 @@ export class SidepanelApp {
         });
     }
 
-    async commitReconstruction(tab, prepared) {
+    async commitReconstruction(tab, prepared, operation = null) {
         const { controller, chatUI, tabState } = tab;
         const { options } = prepared;
 
@@ -807,7 +807,9 @@ export class SidepanelApp {
             ? this.getContinuationRenderChat(controller.chatCore.getChat())
             : { chat: controller.chatCore.getChat(), indexOffset: 0 };
         const rendered = await chatUI.buildChat(renderState.chat, { indexOffset: renderState.indexOffset });
-        if (rendered === false) return false;
+        if (rendered === false || this.tabManager.getTab(tab.id) !== tab || (operation && tab.reconstruction !== operation)) {
+            return false;
+        }
         controller.syncWebpageContextUI();
 
         if (prepared.isContinuation) {

@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import { parseHTML } from 'linkedom';
-import { HistoryChatUI, SidepanelChatUI } from '../../src/js/chat_ui.js';
+import { HistoryChatUI, SidepanelChatUI, runAfterSuccessfulBuild } from '../../src/js/chat_ui.js';
 import { SidepanelApp } from '../../src/js/sidepanel.js';
+import { TabManager } from '../../src/js/tab_manager.js';
 
 const deferred = () => {
     let resolve;
@@ -187,6 +188,95 @@ describe('chunked chat rendering', () => {
         expect(continued).toEqual([[20, 0, 'model_b']]);
     });
 
+    test('HistoryChatUI activates only the latest out-of-order load', async () => {
+        const loads = new Map([[1, deferred()], [2, deferred()]]);
+        let currentChat = null;
+        const stateManager = {
+            ...createStateManager(),
+            historyList: document.getElementById('history-list'),
+            limit: 20,
+            offset: 0,
+            shouldLoadMore: () => false
+        };
+        const chatUI = new HistoryChatUI({
+            conversationWrapperId: 'history-conversation',
+            stateManager,
+            addPopupActions: () => {},
+            loadHistoryItems: async () => [],
+            loadChat: id => loads.get(id).promise,
+            activateChat: chat => { currentChat = chat; },
+            getChatMeta: async () => null
+        });
+
+        const first = chatUI.buildChat(1);
+        const second = chatUI.buildChat(2);
+        const secondChat = {
+            chatId: 2,
+            title: 'Second',
+            timestamp: 2,
+            messages: [{ role: 'user', contents: textParts('second-message') }]
+        };
+        loads.get(2).resolve(secondChat);
+        expect(await second).toBe(true);
+
+        loads.get(1).resolve({
+            chatId: 1,
+            title: 'First',
+            timestamp: 1,
+            messages: [{ role: 'user', contents: textParts('first-message') }]
+        });
+        expect(await first).toBe(false);
+        expect(currentChat).toBe(secondChat);
+        expect(Array.from(document.getElementById('history-conversation').children).map(blockMarker)).toEqual(['second-message']);
+        expect(document.getElementById('history-chat-header').textContent).toBe('Second');
+    });
+
+    test('queues live appends during a yielded history build and renders each message once in order', async () => {
+        const scheduled = [];
+        const messages = Array.from({ length: 25 }, (_, index) => ({
+            role: index % 2 === 0 ? 'user' : 'assistant',
+            contents: textParts(`stored-${index}`)
+        }));
+        const stateManager = {
+            ...createStateManager(),
+            historyList: document.getElementById('history-list'),
+            limit: 20,
+            offset: 0,
+            shouldLoadMore: () => false
+        };
+        const chatUI = new HistoryChatUI({
+            conversationWrapperId: 'history-conversation',
+            stateManager,
+            addPopupActions: () => {},
+            loadHistoryItems: async () => [],
+            loadChat: async () => ({ chatId: 7, title: 'Live', timestamp: 7, messages }),
+            activateChat: () => {},
+            getChatMeta: async () => null,
+            renderScheduler: () => {
+                const task = deferred();
+                scheduled.push(task);
+                return task.promise;
+            }
+        });
+
+        const rendering = chatUI.buildChat(7);
+        await Promise.resolve();
+        expect(scheduled).toHaveLength(1);
+        const liveMessage = { role: 'assistant', contents: textParts('live-25') };
+        messages.push(liveMessage);
+        chatUI.appendMessages([liveMessage], 25, 7);
+        expect(document.getElementById('history-conversation').children).toHaveLength(20);
+
+        scheduled.shift().resolve();
+        expect(await rendering).toBe(true);
+        const markers = Array.from(document.getElementById('history-conversation').children).map(blockMarker);
+        expect(markers).toEqual([
+            ...Array.from({ length: 25 }, (_, index) => `stored-${index}`),
+            'live-25'
+        ]);
+        expect(markers.filter(marker => marker === 'live-25')).toHaveLength(1);
+    });
+
     test('a newer build cancels queued chunks from the previous conversation', async () => {
         const scheduled = [];
         const chatUI = new SidepanelChatUI({
@@ -217,6 +307,45 @@ describe('chunked chat rendering', () => {
         expect(await oldRendering).toBe(false);
         expect(topLevelBlocks().map(blockMarker)).toEqual(['new-message']);
         expect(document.querySelector('.conversation-title').textContent).toBe('New');
+    });
+
+    test('destroy cancels a queued render and closeTab clears reconstruction ownership first', async () => {
+        const scheduled = [];
+        const chatUI = new SidepanelChatUI({
+            conversationWrapperId: 'conversation',
+            scrollElementId: 'scroll-container',
+            stateManager: createStateManager(),
+            renderScheduler: () => {
+                const task = deferred();
+                scheduled.push(task);
+                return task.promise;
+            }
+        });
+        const rendering = chatUI.buildChat({
+            title: 'Closing',
+            messages: Array.from({ length: 25 }, (_, index) => ({ role: 'user', contents: textParts(`closing-${index}`) }))
+        });
+        chatUI.destroy();
+        scheduled.shift().resolve();
+        expect(await rendering).toBe(false);
+        expect(topLevelBlocks()).toHaveLength(20);
+
+        const manager = Object.create(TabManager.prototype);
+        let reconstructionAtDestroy = 'not destroyed';
+        const tab = {
+            id: 'closing-tab',
+            reconstruction: { status: 'loading' },
+            chatUI: { destroy: () => { reconstructionAtDestroy = tab.reconstruction; } },
+            container: { remove: () => {} }
+        };
+        manager.tabs = new Map([[tab.id, tab]]);
+        manager.tabOrder = [tab.id];
+        manager.activeTabId = 'other-tab';
+        manager.schedulePersist = () => {};
+        manager.closeTab(tab.id);
+
+        expect(reconstructionAtDestroy).toBeNull();
+        expect(manager.tabs.has(tab.id)).toBe(false);
     });
 
     test('lazy reconstruction restores pending media only after chunked rendering completes', async () => {
@@ -250,6 +379,7 @@ describe('chunked chat rendering', () => {
         app.getContinuationRenderChat = renderChat => ({ chat: renderChat, indexOffset: 40 });
         app.restorePendingUserMessage = (_tab, message) => events.push(['pending', message]);
         app.tabManager = {
+            getTab: id => id === tab.id ? tab : null,
             updateTabTitle: () => events.push(['title']),
             schedulePersist: () => events.push(['persist'])
         };
@@ -273,5 +403,67 @@ describe('chunked chat rendering', () => {
         expect(events.map(event => event[0])).toEqual(['build', 'context', 'pending', 'title', 'persist', 'actions']);
         expect(events[2]).toEqual(['pending', pendingUserMessage]);
         expect(tab.tabState.chatId).toBe(7);
+    });
+
+    test('closed reconstruction cannot restore pending state after rendering resolves', async () => {
+        const rendering = deferred();
+        const events = [];
+        const chat = { chatId: 8, title: 'Closing', messages: [] };
+        const tab = {
+            id: 'tab-8',
+            reconstruction: { status: 'loading' },
+            tabState: { chatId: null },
+            chatUI: {
+                updateIncognito: () => {},
+                buildChat: () => {
+                    events.push('build');
+                    return rendering.promise;
+                }
+            },
+            controller: {
+                chatCore: {
+                    continuedChatOptions: {},
+                    buildFromDB: restored => { chat.messages = restored.messages; },
+                    getChat: () => chat,
+                    hasChatStarted: () => true
+                },
+                initStates: () => {},
+                syncWebpageContextUI: () => events.push('context'),
+                restoreLatestAssistantActions: () => events.push('actions')
+            }
+        };
+        const tabs = new Map([[tab.id, tab]]);
+        const app = Object.create(SidepanelApp.prototype);
+        app.getContinuationRenderChat = renderChat => ({ chat: renderChat, indexOffset: 0 });
+        app.restorePendingUserMessage = () => events.push('pending');
+        app.tabManager = {
+            getTab: id => tabs.get(id),
+            updateTabTitle: () => events.push('title'),
+            schedulePersist: () => events.push('persist')
+        };
+        const operation = tab.reconstruction;
+        const committing = app.commitReconstruction(tab, {
+            options: { chatId: 8, pendingUserMessage: { role: 'user', images: ['stale'] } },
+            chat: { ...chat, messages: [{ role: 'user', contents: textParts('stored') }] },
+            chatId: 8,
+            isContinuation: true,
+            selectedMessage: { role: 'assistant' }
+        }, operation);
+
+        tabs.delete(tab.id);
+        tab.reconstruction = null;
+        rendering.resolve(true);
+        expect(await committing).toBe(false);
+        expect(events).toEqual(['build']);
+        expect(tab.tabState.chatId).toBeNull();
+    });
+
+    test('post-build navigation does not run for a canceled media chat build', async () => {
+        let navigations = 0;
+        expect(await runAfterSuccessfulBuild(Promise.resolve(false), () => { navigations++; })).toBe(false);
+        expect(navigations).toBe(0);
+
+        expect(await runAfterSuccessfulBuild(Promise.resolve(true), () => { navigations++; })).toBe(true);
+        expect(navigations).toBe(1);
     });
 });
