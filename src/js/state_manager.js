@@ -228,11 +228,12 @@ export class SettingsStateManager extends SettingsManager {
         this.updateSettingsPersistent({ models });
     }
 
-    removeModel(apiName) {
+    removeModel(apiName, targetProvider = null) {
         const models = this.state.settings.models;
         let found = false;
 
         for (const provider in models) {
+            if (targetProvider && provider !== targetProvider) continue;
             if (apiName in models[provider]) {
                 delete models[provider][apiName];
                 found = true;
@@ -243,6 +244,12 @@ export class SettingsStateManager extends SettingsManager {
         if (!found) return;
 
         const settingUpdates = { models };
+        const modelStillAvailable = Object.values(models).some(providerModels => apiName in providerModels);
+
+        if (modelStillAvailable) {
+            this.updateSettingsPersistent(settingUpdates);
+            return;
+        }
 
         // Handle fallout of model removal - check both persisted and pending
         if (this.state.settings.current_model === apiName) {

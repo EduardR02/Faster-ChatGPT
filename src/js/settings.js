@@ -2,6 +2,7 @@ import { SettingsStateManager } from './state_manager.js';
 import { createElementWithClass, autoResizeTextfieldListener, updateTextfieldHeight } from "./ui_utils.js";
 import { ArenaRatingManager } from "./ArenaRatingManager.js";
 import { computeLeaderboard, renderLeaderboard, renderLeaderboardError, resolveDisplayNames } from "./arena_leaderboard.js";
+import { resolveModelRemoval } from "./model_removal.js";
 
 const apiDisplayNames = {
     anthropic: 'Anthropic',
@@ -153,9 +154,9 @@ export class SettingsUI {
 
         // Initialize models from state
         const storedModels = this.stateManager.state.settings.models || {};
-        Object.values(storedModels).forEach(providerMap => {
+        Object.entries(storedModels).forEach(([provider, providerMap]) => {
             Object.entries(providerMap).forEach(([apiName, displayName]) => {
-                this.addModelUI(apiName, displayName);
+                this.addModelUI(apiName, displayName, provider);
             });
         });
         
@@ -406,7 +407,7 @@ export class SettingsUI {
         });
 
         if (!apiExists && !displayNameExists) {
-            this.addModelUI(apiName, displayName);
+            this.addModelUI(apiName, displayName, this.currentAPIProvider);
             this.stateManager.addModel(this.currentAPIProvider, apiName, displayName);
             
             // Clear inputs
@@ -415,13 +416,14 @@ export class SettingsUI {
         }
     }
 
-    addModelUI(apiName, displayName) {
+    addModelUI(apiName, displayName, provider) {
         const input = document.createElement('input');
         input.className = 'checkbox';
         input.type = 'radio';
         input.id = apiName;
         input.name = 'model_select';
         input.value = apiName;
+        input.dataset.provider = provider;
         
         const label = createElementWithClass('label', 'model-label', displayName);
         label.setAttribute('for', apiName);
@@ -467,32 +469,55 @@ export class SettingsUI {
     }
 
     async removeModel() {
-        const nameInput = document.getElementById('model-display-name-input');
-        const nameToRemove = nameInput.value.trim();
-        
-        const labels = document.getElementsByClassName('model-label');
-        const targetLabel = Array.from(labels).find(label => {
-            return label.textContent.trim() === nameToRemove;
+        const displayNameInput = document.getElementById('model-display-name-input');
+        const apiNameInput = document.getElementById('model-api-name-input');
+        const displayName = displayNameInput.value.trim();
+        const apiName = apiNameInput.value.trim();
+        const mode = this.getCurrentMode();
+        const selectedModelIds = Array.from(
+            document.querySelectorAll('input[name="model_select"]:checked'),
+            input => input.id
+        );
+        const target = resolveModelRemoval({
+            models: this.stateManager.getSetting('models') || {},
+            displayName,
+            apiName,
+            mode,
+            selectedModelIds
         });
-        
-        if (targetLabel) {
-            const input = targetLabel.previousElementSibling;
-            const apiName = input.id;
-            const row = targetLabel.parentElement;
-            
-            this.stateManager.removeModel(apiName);
-            
-            row.removeChild(input);
-            row.removeChild(targetLabel);
-            
-            // Cleanup empty rows
-            if (row.children.length === 0) {
-                row.parentElement.remove();
-            }
-            
-            this.updateCheckboxes();
-            nameInput.value = '';
+        const modelsLabel = document.getElementById('models-label');
+
+        if (!target) {
+            modelsLabel.classList.add('settings-error');
+            return;
         }
+
+        const modelInputs = Array.from(document.getElementsByName('model_select'));
+        const providerMatches = modelInputs.filter(input =>
+            input.id === target.apiName && input.dataset.provider === target.provider
+        );
+        const idMatches = modelInputs.filter(input => input.id === target.apiName);
+        const input = providerMatches.length === 1
+            ? providerMatches[0]
+            : (idMatches.length === 1 ? idMatches[0] : null);
+
+        if (!input || !input.nextElementSibling?.classList.contains('model-label')) {
+            modelsLabel.classList.add('settings-error');
+            return;
+        }
+
+        const targetLabel = input.nextElementSibling;
+        const row = targetLabel.parentElement;
+        this.stateManager.removeModel(target.apiName, target.provider);
+        row.removeChild(input);
+        row.removeChild(targetLabel);
+
+        if (row.children.length === 0) row.parentElement.remove();
+
+        modelsLabel.classList.remove('settings-error');
+        displayNameInput.value = '';
+        apiNameInput.value = '';
+        this.updateCheckboxes();
     }
 
     save() {
