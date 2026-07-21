@@ -3,6 +3,11 @@ import { parseHTML } from 'linkedom';
 import { HistoryChatUI, SidepanelChatUI, runAfterSuccessfulBuild } from '../../src/js/chat_ui.js';
 import { SidepanelApp } from '../../src/js/sidepanel.js';
 import { TabManager } from '../../src/js/tab_manager.js';
+import {
+    createLiveChatRequest,
+    fetchAndApplyAppendedMessages,
+    fetchAndApplyMessageUpdate
+} from '../../src/js/history_live_updates.js';
 
 const deferred = () => {
     let resolve;
@@ -231,12 +236,14 @@ describe('chunked chat rendering', () => {
         expect(document.getElementById('history-chat-header').textContent).toBe('Second');
     });
 
-    test('queues live appends during a yielded history build and renders each message once in order', async () => {
+    test('queues ordered live appends and updates during a yielded history build', async () => {
         const scheduled = [];
         const messages = Array.from({ length: 25 }, (_, index) => ({
             role: index % 2 === 0 ? 'user' : 'assistant',
             contents: textParts(`stored-${index}`)
         }));
+        const chat = { chatId: 7, title: 'Live', timestamp: 7, messages };
+        let currentChat = null;
         const stateManager = {
             ...createStateManager(),
             historyList: document.getElementById('history-list'),
@@ -249,8 +256,8 @@ describe('chunked chat rendering', () => {
             stateManager,
             addPopupActions: () => {},
             loadHistoryItems: async () => [],
-            loadChat: async () => ({ chatId: 7, title: 'Live', timestamp: 7, messages }),
-            activateChat: () => {},
+            loadChat: async () => chat,
+            activateChat: loadedChat => { currentChat = loadedChat; },
             getChatMeta: async () => null,
             renderScheduler: () => {
                 const task = deferred();
@@ -262,9 +269,42 @@ describe('chunked chat rendering', () => {
         const rendering = chatUI.buildChat(7);
         await Promise.resolve();
         expect(scheduled).toHaveLength(1);
-        const liveMessage = { role: 'assistant', contents: textParts('live-25') };
-        messages.push(liveMessage);
-        chatUI.appendMessages([liveMessage], 25, 7);
+        const request = createLiveChatRequest(7, () => currentChat, () => chatUI.activeId);
+        const liveMessage = { messageId: 25, role: 'assistant', contents: textParts('live-25') };
+        expect(await fetchAndApplyAppendedMessages({
+            request,
+            startIndex: 25,
+            addedCount: 1,
+            getChat: () => currentChat,
+            getActiveChatId: () => chatUI.activeId,
+            getMessages: async () => [liveMessage],
+            applyUI: (appended, start, id) => chatUI.appendMessages(appended, start, id),
+            applyCore: appended => currentChat.messages.push(...appended)
+        })).toBe(true);
+        const updatedLiveMessage = {
+            messageId: 25,
+            role: 'assistant',
+            contents: [
+                [{ type: 'text', content: 'live-25' }],
+                [{ type: 'text', content: 'live-25-regen' }]
+            ]
+        };
+        expect(await fetchAndApplyMessageUpdate({
+            request,
+            messageId: 25,
+            messageData: updatedLiveMessage,
+            getChat: () => currentChat,
+            getActiveChatId: () => chatUI.activeId,
+            getMessage: () => { throw new Error('messageData should avoid storage'); },
+            acceptMessage: () => true,
+            beforeRefresh: () => {},
+            refreshHistory: async () => {},
+            applyMissingRange: () => { throw new Error('appended message is present in core'); },
+            applyUI: (message, index, id) => chatUI.applyMessageUpdate(message, index, id),
+            applyCore: (message, index) => {
+                currentChat.messages = currentChat.messages.map((item, itemIndex) => itemIndex === index ? message : item);
+            }
+        })).toBe(true);
         expect(document.getElementById('history-conversation').children).toHaveLength(20);
 
         scheduled.shift().resolve();
@@ -272,9 +312,71 @@ describe('chunked chat rendering', () => {
         const markers = Array.from(document.getElementById('history-conversation').children).map(blockMarker);
         expect(markers).toEqual([
             ...Array.from({ length: 25 }, (_, index) => `stored-${index}`),
-            'live-25'
+            'live-25',
+            'live-25-regen'
         ]);
         expect(markers.filter(marker => marker === 'live-25')).toHaveLength(1);
+        expect(markers.filter(marker => marker === 'live-25-regen')).toHaveLength(1);
+    });
+
+    test('production append handler drops a fetched result after chat ownership changes', async () => {
+        const fetched = deferred();
+        const chatA = { chatId: 1, messages: [{ role: 'user' }] };
+        const chatB = { chatId: 2, messages: [{ role: 'user' }] };
+        let currentChat = chatA;
+        let activeChatId = 1;
+        const mutations = [];
+        const request = createLiveChatRequest(1, () => currentChat, () => activeChatId);
+        const applying = fetchAndApplyAppendedMessages({
+            request,
+            startIndex: 1,
+            addedCount: 1,
+            getChat: () => currentChat,
+            getActiveChatId: () => activeChatId,
+            getMessages: () => fetched.promise,
+            applyUI: () => mutations.push('ui'),
+            applyCore: () => mutations.push('core')
+        });
+
+        currentChat = chatB;
+        activeChatId = 2;
+        fetched.resolve([{ messageId: 1, role: 'assistant' }]);
+
+        expect(await applying).toBe(false);
+        expect(mutations).toEqual([]);
+        expect(currentChat).toBe(chatB);
+    });
+
+    test('production update handler drops metadata completion after chat ownership changes', async () => {
+        const refreshed = deferred();
+        const chatA = { chatId: 1, messages: [{ role: 'assistant' }] };
+        const chatB = { chatId: 2, messages: [{ role: 'user' }] };
+        let currentChat = chatA;
+        let activeChatId = 1;
+        const mutations = [];
+        const request = createLiveChatRequest(1, () => currentChat, () => activeChatId);
+        const applying = fetchAndApplyMessageUpdate({
+            request,
+            messageId: 0,
+            messageData: { role: 'assistant', contents: textParts('updated') },
+            getChat: () => currentChat,
+            getActiveChatId: () => activeChatId,
+            getMessage: () => { throw new Error('messageData should avoid storage'); },
+            acceptMessage: () => true,
+            beforeRefresh: () => mutations.push('metadata-started'),
+            refreshHistory: () => refreshed.promise,
+            applyMissingRange: () => { throw new Error('message is not missing'); },
+            applyUI: () => mutations.push('ui'),
+            applyCore: () => mutations.push('core')
+        });
+
+        currentChat = chatB;
+        activeChatId = 2;
+        refreshed.resolve();
+
+        expect(await applying).toBe(false);
+        expect(mutations).toEqual(['metadata-started']);
+        expect(currentChat).toBe(chatB);
     });
 
     test('a newer build cancels queued chunks from the previous conversation', async () => {

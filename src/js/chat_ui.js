@@ -1926,7 +1926,7 @@ export class HistoryChatUI extends ChatUI {
             paginator: this.createPaginator(),
             renderedIds: new Set(),
             resultCategories: new Map(),
-            pendingMessageAppends: [],
+            pendingLiveEvents: [],
             _renderingHistoryRequest: null
         });
 
@@ -2371,14 +2371,36 @@ export class HistoryChatUI extends ChatUI {
     }
 
     appendMessages(messages, start, chatId = this.activeId) {
+        this.applyLiveEvent({ type: 'append', messages: messages.slice(), start }, chatId);
+    }
+
+    applyMessageUpdate(message, index, chatId = this.activeId) {
+        this.applyLiveEvent({ type: 'update', message, index }, chatId);
+    }
+
+    applyLiveEvent(event, chatId) {
         if (chatId !== this.activeId) return;
         if (this._isBuildingChat) {
             const request = this._renderingHistoryRequest;
             if (request !== this._activeHistoryRequest) return;
-            this.pendingMessageAppends.push({ messages: messages.slice(), start, chatId, request });
+            this.pendingLiveEvents.push({ event, chatId, request });
             return;
         }
-        this._appendMessages(messages, start);
+        this._applyLiveEvent(event);
+    }
+
+    _applyLiveEvent(event) {
+        if (event.type === 'append') {
+            this._appendMessages(event.messages, event.start);
+            return;
+        }
+        if (event.message.responses) {
+            this.updateArena(event.message, event.index);
+        } else if (event.message.council) {
+            this.updateCouncil(event.message, event.index);
+        } else {
+            this.appendSingleRegen(event.message, event.index);
+        }
     }
 
     _appendMessages(messages, start) {
@@ -2395,12 +2417,12 @@ export class HistoryChatUI extends ChatUI {
         });
     }
 
-    flushPendingMessageAppends(chatId, request) {
-        const pending = this.pendingMessageAppends;
-        this.pendingMessageAppends = [];
-        pending.forEach(append => {
-            if (append.chatId === chatId && append.request === request) {
-                this._appendMessages(append.messages, append.start);
+    flushPendingLiveEvents(chatId, request) {
+        const pending = this.pendingLiveEvents;
+        this.pendingLiveEvents = [];
+        pending.forEach(item => {
+            if (item.chatId === chatId && item.request === request) {
+                this._applyLiveEvent(item.event);
             }
         });
     }
@@ -2513,7 +2535,7 @@ export class HistoryChatUI extends ChatUI {
             if (this._renderingHistoryRequest === request) this._renderingHistoryRequest = null;
         }
         if (completed === false || this._activeHistoryRequest !== request) return false;
-        this.flushPendingMessageAppends(chatId, request);
+        this.flushPendingLiveEvents(chatId, request);
         this.setWebpageContext(fullChatData.webpage_context || null);
         
         this.updateChatHeader(fullChatData.title);

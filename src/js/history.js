@@ -7,7 +7,12 @@ import { createElementWithClass } from './ui_utils.js';
 import { normaliseForSearch } from './search_utils.js';
 import { copyChatMarkdownToClipboard } from './markdown_export.js';
 import { attachHistoryPopupEscape, attachHistoryPopupTrigger, focusHistoryPopupTrigger } from './history_popup_trigger.js';
-import { getAppendFetchWindow, getMissingMessageRange, takeContiguousMessages } from './history_live_updates.js';
+import {
+    createLiveChatRequest,
+    fetchAndApplyAppendedMessages,
+    fetchAndApplyMessageUpdate,
+    ownsLiveChatRequest
+} from './history_live_updates.js';
 
 /**
  * timing and duration formatting helpers.
@@ -362,7 +367,9 @@ function initMessageListeners() {
 }
 
 async function handleAppended(chatId, addedCount, startIndex, searchDelta = null, timestamp = null) {
+    const request = createLiveChatRequest(chatId, () => chatCore.getChat(), () => chatUI.activeId);
     await handleHistoryRefresh(chatId, timestamp ? { timestamp: timestamp } : {});
+    if (request && !ownsLiveChatRequest(request, () => chatCore.getChat(), () => chatUI.activeId)) return false;
     if (searchDelta) {
         chatSearch?.enqueueAppend({ chatId, delta: searchDelta, timestamp: timestamp });
     }
@@ -372,43 +379,56 @@ async function handleAppended(chatId, addedCount, startIndex, searchDelta = null
             runWhenIdle(() => mediaTab.refreshMedia({ incremental: true })); 
         }
     }
-    if (chatCore.getChatId() !== chatId) return;
-
-    const appendWindow = getAppendFetchWindow(chatCore.getLength(), startIndex, addedCount);
-    if (!appendWindow) return;
-
-    const fetchedMessages = await chatStorage.getMessages(chatId, appendWindow.startIndex);
-    const contiguousMessages = takeContiguousMessages(fetchedMessages, appendWindow.startIndex);
-    if (!contiguousMessages.length) return;
-
-    chatUI.appendMessages(contiguousMessages, appendWindow.startIndex, chatId);
-    chatCore.addMultipleFromHistory(contiguousMessages);
+    if (!ownsLiveChatRequest(request, () => chatCore.getChat(), () => chatUI.activeId)) return false;
+    return applyAppendedMessages(request, addedCount, startIndex);
 }
 
 async function handleUpdate(chatId, messageId, timestamp = null, messageData = null) {
-    if (chatCore.getChatId() !== chatId) return;
-    const message = messageData || await chatStorage.getMessage(chatId, messageId);
-    if (!message) return;
-    const effectiveTimestamp = getLiveMessageTimestamp(timestamp, message);
-    if (!shouldApplyLiveMessage(chatId, messageId, effectiveTimestamp)) return;
+    const request = createLiveChatRequest(chatId, () => chatCore.getChat(), () => chatUI.activeId);
+    if (!request) return false;
+    return fetchAndApplyMessageUpdate({
+        request,
+        messageId,
+        messageData,
+        getChat: () => chatCore.getChat(),
+        getActiveChatId: () => chatUI.activeId,
+        getMessage: (id, index) => chatStorage.getMessage(id, index),
+        acceptMessage: message => {
+            const effectiveTimestamp = getLiveMessageTimestamp(timestamp, message);
+            return shouldApplyLiveMessage(chatId, messageId, effectiveTimestamp);
+        },
+        beforeRefresh: () => {
+            if (mediaTab) mediaTab.deferredForceRefresh = true;
+        },
+        refreshHistory: message => {
+            const effectiveTimestamp = getLiveMessageTimestamp(timestamp, message);
+            return handleHistoryRefresh(chatId, { timestamp: effectiveTimestamp || Date.now() });
+        },
+        applyMissingRange: async (ownedRequest, range, message) => {
+            const effectiveTimestamp = getLiveMessageTimestamp(timestamp, message);
+            await handleHistoryRefresh(chatId, { timestamp: effectiveTimestamp || Date.now() });
+            if (!ownsLiveChatRequest(ownedRequest, () => chatCore.getChat(), () => chatUI.activeId)) return false;
+            return applyAppendedMessages(ownedRequest, range.count, range.startIndex);
+        },
+        applyUI: (message, index, id) => chatUI.applyMessageUpdate(message, index, id),
+        applyCore: (message, index) => {
+            chatCore.miscUpdate({ messages: chatCore.currentChat.messages.map((item, itemIndex) => itemIndex === index ? message : item) });
+        }
+    });
+}
 
-    const missingRange = getMissingMessageRange(chatCore.getLength(), messageId);
-    if (missingRange) {
-        return handleAppended(chatId, missingRange.count, missingRange.startIndex, null, effectiveTimestamp);
-    }
-
-    if (mediaTab) {
-        mediaTab.deferredForceRefresh = true;
-    }
-    await handleHistoryRefresh(chatId, { timestamp: effectiveTimestamp || Date.now() });
-    if (message.responses) {
-        chatUI.updateArena(message, messageId);
-    } else if (message.council) {
-        chatUI.updateCouncil(message, messageId);
-    } else {
-        chatUI.appendSingleRegen(message, messageId);
-    }
-    chatCore.miscUpdate({ messages: chatCore.currentChat.messages.map((msg, index) => index === messageId ? message : msg) });
+function applyAppendedMessages(request, addedCount, startIndex) {
+    if (!request) return false;
+    return fetchAndApplyAppendedMessages({
+        request,
+        startIndex,
+        addedCount,
+        getChat: () => chatCore.getChat(),
+        getActiveChatId: () => chatUI.activeId,
+        getMessages: (id, index) => chatStorage.getMessages(id, index),
+        applyUI: (messages, index, id) => chatUI.appendMessages(messages, index, id),
+        applyCore: messages => chatCore.addMultipleFromHistory(messages)
+    });
 }
 
 function handleRenamed(chatId, title) {

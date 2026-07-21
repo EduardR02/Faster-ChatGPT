@@ -49,3 +49,81 @@ export function takeContiguousMessages(messages, startIndex) {
 
     return contiguous;
 }
+
+export function createLiveChatRequest(chatId, getChat, getActiveChatId) {
+    const chat = getChat();
+    if (chat?.chatId !== chatId || getActiveChatId() !== chatId) return null;
+    return { chatId, chat };
+}
+
+export function ownsLiveChatRequest(request, getChat, getActiveChatId) {
+    return !!request
+        && getChat() === request.chat
+        && getActiveChatId() === request.chatId;
+}
+
+export async function fetchAndApplyAppendedMessages({
+    request,
+    startIndex,
+    addedCount,
+    getChat,
+    getActiveChatId,
+    getMessages,
+    applyUI,
+    applyCore
+}) {
+    const ownsRequest = () => ownsLiveChatRequest(request, getChat, getActiveChatId);
+    if (!ownsRequest()) return false;
+
+    const appendWindow = getAppendFetchWindow(request.chat.messages.length, startIndex, addedCount);
+    if (!appendWindow) return false;
+
+    const fetchedMessages = await getMessages(request.chatId, appendWindow.startIndex);
+    if (!ownsRequest()) return false;
+
+    const messages = takeContiguousMessages(fetchedMessages, appendWindow.startIndex);
+    if (!messages.length) return false;
+
+    if (!ownsRequest()) return false;
+    applyUI(messages, appendWindow.startIndex, request.chatId);
+    if (!ownsRequest()) return false;
+    applyCore(messages);
+    return true;
+}
+
+export async function fetchAndApplyMessageUpdate({
+    request,
+    messageId,
+    messageData,
+    getChat,
+    getActiveChatId,
+    getMessage,
+    acceptMessage,
+    beforeRefresh,
+    refreshHistory,
+    applyMissingRange,
+    applyUI,
+    applyCore
+}) {
+    const ownsRequest = () => ownsLiveChatRequest(request, getChat, getActiveChatId);
+    if (!ownsRequest()) return false;
+
+    const message = messageData || await getMessage(request.chatId, messageId);
+    if (!ownsRequest() || !message) return false;
+    if (!acceptMessage(message)) return false;
+
+    const missingRange = getMissingMessageRange(request.chat.messages.length, messageId);
+    if (missingRange) {
+        return applyMissingRange(request, missingRange, message);
+    }
+
+    if (!ownsRequest()) return false;
+    beforeRefresh();
+    await refreshHistory(message);
+    if (!ownsRequest()) return false;
+
+    applyUI(message, messageId, request.chatId);
+    if (!ownsRequest()) return false;
+    applyCore(message, messageId);
+    return true;
+}
