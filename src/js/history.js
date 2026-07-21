@@ -5,6 +5,7 @@ import { RenameManager } from './rename_manager.js';
 import { ChatCore } from './chat_core.js';
 import { createElementWithClass } from './ui_utils.js';
 import { normaliseForSearch } from './search_utils.js';
+import { copyChatMarkdownToClipboard } from './markdown_export.js';
 import { getAppendFetchWindow, getMissingMessageRange, takeContiguousMessages } from './history_live_updates.js';
 
 /**
@@ -91,11 +92,19 @@ class PopupMenu {
     show(historyItem) {
         this.restore();
         const itemRect = historyItem.getBoundingClientRect();
-        Object.assign(this.popup.style, { 
-            top: `${itemRect.top}px`, 
-            left: `${itemRect.right + 5}px` 
-        });
         this.popup.classList.add('active');
+        const popupRect = this.popup.getBoundingClientRect();
+        const gap = 5;
+        const margin = 5;
+        const right = itemRect.right + gap;
+        const left = right + popupRect.width <= window.innerWidth - margin
+            ? right
+            : Math.max(margin, itemRect.left - popupRect.width - gap);
+        const top = Math.min(
+            Math.max(margin, itemRect.top),
+            Math.max(margin, window.innerHeight - popupRect.height - margin)
+        );
+        Object.assign(this.popup.style, { top: `${top}px`, left: `${left}px` });
         this.activePopup = historyItem;
     }
 
@@ -114,11 +123,14 @@ class PopupMenu {
             case 'auto-rename': 
                 this.handleAutoRename(); 
                 break;
+            case 'copy-markdown':
+                this.handleCopyMarkdown(event.target);
+                break;
         }
     }
 
     showRenameInput() {
-        ['rename', 'delete', 'auto-rename'].forEach(action => {
+        ['rename', 'delete', 'auto-rename', 'copy-markdown'].forEach(action => {
             const actionButton = this.popup.querySelector(`[data-action="${action}"]`);
             if (actionButton) {
                 actionButton.style.display = 'none';
@@ -131,7 +143,8 @@ class PopupMenu {
     }
 
     restore() {
-        ['rename', 'delete', 'auto-rename'].forEach(action => {
+        this.copyRequest = null;
+        ['rename', 'delete', 'auto-rename', 'copy-markdown'].forEach(action => {
             const actionButton = this.popup.querySelector(`[data-action="${action}"]`);
             if (actionButton) {
                 actionButton.style.display = 'block';
@@ -143,6 +156,8 @@ class PopupMenu {
             deleteButton.classList.remove('delete-confirm'); 
             deleteButton.textContent = 'Delete'; 
         }
+        const copyButton = this.popup.querySelector('[data-action="copy-markdown"]');
+        if (copyButton) copyButton.textContent = 'Copy Markdown';
     }
 
     hide() { 
@@ -205,6 +220,26 @@ class PopupMenu {
             }
         }
         this.hide();
+    }
+
+    async handleCopyMarkdown(item) {
+        const historyItem = this.activePopup;
+        const request = {};
+        this.copyRequest = request;
+        const chatId = parseInt(historyItem.id, 10);
+        item.textContent = 'copying...';
+        try {
+            await copyChatMarkdownToClipboard(this.chatStorage, chatId);
+            if (this.copyRequest !== request || this.activePopup !== historyItem) return;
+            item.textContent = 'copied!';
+        } catch (error) {
+            console.error('Markdown copy failed:', error);
+            if (this.copyRequest !== request || this.activePopup !== historyItem) return;
+            item.textContent = 'failed :(';
+        }
+        setTimeout(() => {
+            if (this.copyRequest === request && this.activePopup === historyItem) this.hide();
+        }, 1500);
     }
 }
 
