@@ -1085,6 +1085,57 @@ a:visited {
   animation: wiggle 0.1s ease-in-out 2;
 }
 
+.arena-leaderboard {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.arena-leaderboard-empty {
+  color: #abb2bf;
+  font-size: 0.9em;
+}
+
+.arena-leaderboard-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+  color: #ffffff;
+}
+
+.arena-leaderboard-table th,
+.arena-leaderboard-table td {
+  padding: 0.3em 0.6em;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.arena-leaderboard-table th {
+  color: #abb2bf;
+  font-weight: normal;
+  border-bottom: 1px solid #4b5363;
+}
+
+.arena-leaderboard-table td {
+  border-bottom: 1px solid rgba(75, 83, 99, 0.4);
+}
+
+.arena-leaderboard-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.arena-leaderboard-table td.arena-leaderboard-model {
+  white-space: normal;
+  word-break: break-word;
+}
+
+.arena-leaderboard-table td.arena-leaderboard-rank {
+  color: #abb2bf;
+}
+
+.arena-leaderboard-table td.arena-leaderboard-rating {
+  color: #fdaaaa;
+}
+
 h1 {
   color: #61afef;
 }

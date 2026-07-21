@@ -1,6 +1,7 @@
 import { SettingsStateManager } from './state_manager.js';
 import { createElementWithClass, autoResizeTextfieldListener, updateTextfieldHeight } from "./ui_utils.js";
 import { ArenaRatingManager } from "./ArenaRatingManager.js";
+import { computeLeaderboard, renderLeaderboard, resolveDisplayNames } from "./arena_leaderboard.js";
 
 const apiDisplayNames = {
     anthropic: 'Anthropic',
@@ -162,6 +163,21 @@ class SettingsUI {
         this.initPromptUI();
         this.initReasoning();
         this.updateCheckboxes();
+        this.initArenaLeaderboard();
+    }
+
+    initArenaLeaderboard() {
+        this.arenaRatingManager = new ArenaRatingManager();
+        this.arenaReady = this.arenaRatingManager.initDB();
+        this.arenaReady.then(() => this.renderArenaLeaderboard());
+    }
+
+    async renderArenaLeaderboard() {
+        const container = document.getElementById('arena-leaderboard');
+        if (!container) return;
+        const matches = await this.arenaRatingManager.getHistory();
+        const entries = computeLeaderboard(matches, this.arenaRatingManager.cachedRatings);
+        renderLeaderboard(container, entries, resolveDisplayNames(this.stateManager.getSetting('models')));
     }
 
     initMicrophone() {
@@ -564,10 +580,11 @@ class SettingsUI {
             return; 
         }
         
-        const ratingManager = new ArenaRatingManager();
-        ratingManager.initDB().then(() => ratingManager.wipe());
-        
-        button.classList.remove('confirm'); 
+        this.arenaReady
+            .then(() => this.arenaRatingManager.wipe())
+            .then(() => this.renderArenaLeaderboard());
+
+        button.classList.remove('confirm');
         button.textContent = 'Reset Arena Matches ';
     }
 
