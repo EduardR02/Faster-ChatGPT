@@ -16,6 +16,89 @@ const LOCAL_SERVER = {
     FALLBACK_PORTS: [8000, 8080]
 };
 
+function parseJSONSafe(text) {
+    try {
+        return JSON.parse(text);
+    } catch (_) {
+        return undefined;
+    }
+}
+
+function flushSSEEvent(state, events) {
+    if (!state.dataLines.length) return;
+
+    const parsed = parseJSONSafe(state.dataLines.join('\n'));
+    if (parsed !== undefined) {
+        events.push(parsed);
+    } else {
+        for (const line of state.dataLines) {
+            const parsedLine = parseJSONSafe(line);
+            if (parsedLine !== undefined) events.push(parsedLine);
+        }
+    }
+    state.dataLines.length = 0;
+}
+
+function processSSELine(state, line, events) {
+    if (line === '') {
+        flushSSEEvent(state, events);
+        return;
+    }
+    if (line.startsWith(':')) return;
+
+    const colon = line.indexOf(':');
+    const field = colon === -1 ? line : line.slice(0, colon);
+    if (field !== 'data') return;
+
+    let value = colon === -1 ? '' : line.slice(colon + 1);
+    if (value.startsWith(' ')) value = value.slice(1);
+    if (value.trim() === '[DONE]') {
+        state.dataLines.length = 0;
+        return;
+    }
+
+    state.dataLines.push(value);
+    const parsedEvent = parseJSONSafe(state.dataLines.join('\n'));
+    if (parsedEvent !== undefined) {
+        events.push(parsedEvent);
+        state.dataLines.length = 0;
+        return;
+    }
+
+    // Existing providers also emit adjacent JSON data lines without SSE blank
+    // lines. If a malformed line precedes one, discard it without blocking the
+    // next valid provider event.
+    const eventStart = state.dataLines[0].trimStart()[0];
+    if (state.dataLines.length > 1 && eventStart !== '{' && eventStart !== '[') {
+        const parsedLine = parseJSONSafe(value);
+        if (parsedLine !== undefined) {
+            events.push(parsedLine);
+            state.dataLines.length = 0;
+        }
+    }
+}
+
+function processSSEBuffer(state, events, final = false) {
+    const buffer = state.buffer;
+    let lineStart = 0;
+
+    for (let index = 0; index < buffer.length; index++) {
+        const character = buffer[index];
+        if (character !== '\r' && character !== '\n') continue;
+        if (character === '\r' && index === buffer.length - 1 && !final) break;
+
+        processSSELine(state, buffer.slice(lineStart, index), events);
+        if (character === '\r' && buffer[index + 1] === '\n') index++;
+        lineStart = index + 1;
+    }
+
+    state.buffer = buffer.slice(lineStart);
+    if (final && state.buffer) {
+        processSSELine(state, state.buffer, events);
+        state.buffer = '';
+    }
+}
+
 /**
  * Handles communication with various LLM APIs.
  * Supports streaming, audio transcription, and image generation.
@@ -300,26 +383,30 @@ export class ApiManager {
 
     /**
      * Parses a chunk of SSE data.
-     * @param {Object} state Object containing 'buffer' string.
+     * @param {Object} state Object containing a 'buffer' string; the parser
+     *   also keeps pending data lines in state.dataLines across calls.
      * @param {string} chunk New data to parse.
      * @returns {Array<Object>} Array of parsed event data objects.
      */
     static parseSSEChunk(state, chunk) {
         state.buffer += chunk;
-        const lines = state.buffer.split('\n');
-        state.buffer = lines.pop(); // Keep the last incomplete line in the buffer
-
+        state.dataLines ??= [];
         const events = [];
-        for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed.startsWith('data: ') && trimmed.slice(6) !== '[DONE]') {
-                try {
-                    events.push(JSON.parse(trimmed.slice(6)));
-                } catch (_) {
-                    continue;
-                }
-            }
-        }
+        processSSEBuffer(state, events);
+        return events;
+    }
+
+    /**
+     * Flushes the SSE parser state once the stream has ended, emitting any
+     * final event that was not terminated by a newline or blank line.
+     * @param {Object} state Parser state previously used with parseSSEChunk.
+     * @returns {Array<Object>} Array of parsed event data objects.
+     */
+    static flushSSEBuffer(state) {
+        state.dataLines ??= [];
+        const events = [];
+        processSSEBuffer(state, events, true);
+        flushSSEEvent(state, events);
         return events;
     }
 
@@ -327,18 +414,26 @@ export class ApiManager {
         const reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
         const provider = this.getProvider(modelId);
-        const state = { buffer: '' };
+        const state = { buffer: '', dataLines: [] };
 
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
 
             const chunk = decoder.decode(value, { stream: true });
-            const events = ApiManager.parseSSEChunk(state, chunk);
-
-            for (const parsed of events) {
+            for (const parsed of ApiManager.parseSSEChunk(state, chunk)) {
                 provider.handleStream({ parsed, tokenCounter, writer });
             }
+        }
+
+        // Streams may end without a trailing newline or mid UTF-8 sequence;
+        // flush the decoder and parser so the final event (and its token
+        // usage) is not lost.
+        for (const parsed of ApiManager.parseSSEChunk(state, decoder.decode())) {
+            provider.handleStream({ parsed, tokenCounter, writer });
+        }
+        for (const parsed of ApiManager.flushSSEBuffer(state)) {
+            provider.handleStream({ parsed, tokenCounter, writer });
         }
         return true;
     }
