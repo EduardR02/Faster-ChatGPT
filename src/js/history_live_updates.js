@@ -62,6 +62,23 @@ export function ownsLiveChatRequest(request, getChat, getActiveChatId) {
         && getActiveChatId() === request.chatId;
 }
 
+export async function handlePersistedAppend({
+    request,
+    getChat,
+    getActiveChatId,
+    refreshHistory,
+    updateSearch,
+    invalidateMedia,
+    applyActiveAppend
+}) {
+    await refreshHistory();
+    updateSearch();
+    invalidateMedia();
+
+    if (!ownsLiveChatRequest(request, getChat, getActiveChatId)) return false;
+    return applyActiveAppend(request);
+}
+
 export async function fetchAndApplyAppendedMessages({
     request,
     startIndex,

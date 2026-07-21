@@ -11,6 +11,7 @@ import {
     createLiveChatRequest,
     fetchAndApplyAppendedMessages,
     fetchAndApplyMessageUpdate,
+    handlePersistedAppend,
     ownsLiveChatRequest
 } from './history_live_updates.js';
 
@@ -368,19 +369,23 @@ function initMessageListeners() {
 
 async function handleAppended(chatId, addedCount, startIndex, searchDelta = null, timestamp = null) {
     const request = createLiveChatRequest(chatId, () => chatCore.getChat(), () => chatUI.activeId);
-    await handleHistoryRefresh(chatId, timestamp ? { timestamp: timestamp } : {});
-    if (request && !ownsLiveChatRequest(request, () => chatCore.getChat(), () => chatUI.activeId)) return false;
-    if (searchDelta) {
-        chatSearch?.enqueueAppend({ chatId, delta: searchDelta, timestamp: timestamp });
-    }
-    if (mediaTab) { 
-        mediaTab.deferredForceRefresh = true; 
-        if (mediaTab.isMediaTabActive()) {
-            runWhenIdle(() => mediaTab.refreshMedia({ incremental: true })); 
-        }
-    }
-    if (!ownsLiveChatRequest(request, () => chatCore.getChat(), () => chatUI.activeId)) return false;
-    return applyAppendedMessages(request, addedCount, startIndex);
+    return handlePersistedAppend({
+        request,
+        getChat: () => chatCore.getChat(),
+        getActiveChatId: () => chatUI.activeId,
+        refreshHistory: () => handleHistoryRefresh(chatId, timestamp ? { timestamp } : {}),
+        updateSearch: () => {
+            if (searchDelta) chatSearch?.enqueueAppend({ chatId, delta: searchDelta, timestamp });
+        },
+        invalidateMedia: () => {
+            if (!mediaTab) return;
+            mediaTab.deferredForceRefresh = true;
+            if (mediaTab.isMediaTabActive()) {
+                runWhenIdle(() => mediaTab.refreshMedia({ incremental: true }));
+            }
+        },
+        applyActiveAppend: ownedRequest => applyAppendedMessages(ownedRequest, addedCount, startIndex)
+    });
 }
 
 async function handleUpdate(chatId, messageId, timestamp = null, messageData = null) {

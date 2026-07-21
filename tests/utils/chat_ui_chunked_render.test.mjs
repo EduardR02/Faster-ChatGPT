@@ -6,7 +6,8 @@ import { TabManager } from '../../src/js/tab_manager.js';
 import {
     createLiveChatRequest,
     fetchAndApplyAppendedMessages,
-    fetchAndApplyMessageUpdate
+    fetchAndApplyMessageUpdate,
+    handlePersistedAppend
 } from '../../src/js/history_live_updates.js';
 
 const deferred = () => {
@@ -344,6 +345,36 @@ describe('chunked chat rendering', () => {
 
         expect(await applying).toBe(false);
         expect(mutations).toEqual([]);
+        expect(currentChat).toBe(chatB);
+    });
+
+    test('persisted append wrapper keeps global side effects when active ownership changes', async () => {
+        const refreshed = deferred();
+        const chatA = { chatId: 1, messages: [] };
+        const chatB = { chatId: 2, messages: [] };
+        let currentChat = chatA;
+        let activeChatId = 1;
+        const effects = [];
+        const request = createLiveChatRequest(1, () => currentChat, () => activeChatId);
+        const handling = handlePersistedAppend({
+            request,
+            getChat: () => currentChat,
+            getActiveChatId: () => activeChatId,
+            refreshHistory: async () => {
+                effects.push('history');
+                await refreshed.promise;
+            },
+            updateSearch: () => effects.push('search'),
+            invalidateMedia: () => effects.push('media'),
+            applyActiveAppend: () => effects.push('active')
+        });
+
+        currentChat = chatB;
+        activeChatId = 2;
+        refreshed.resolve();
+
+        expect(await handling).toBe(false);
+        expect(effects).toEqual(['history', 'search', 'media']);
         expect(currentChat).toBe(chatB);
     });
 
