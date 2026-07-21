@@ -7,6 +7,7 @@ let cachedPageContextAt = 0;
 const PAGE_CONTEXT_CACHE_TTL_MS = 5000;
 let shouldAutoPageContext = false;
 let pageContextRequestId = 0;
+let selectionRequestId = 0;
 const PAGE_CONTEXT_REQUEST_NONCE_KEY = 'page_context_request_nonce';
 
 const getWebpageContextModule = () => {
@@ -93,16 +94,23 @@ async function handleMouseUp(event) {
 
     if (selection && selection !== lastSelection && hasModifierKey) {
         lastSelection = selection;
-        
-        await chrome.runtime.sendMessage({ type: "open_side_panel" });
+        const requestId = ++selectionRequestId;
+        const response = await chrome.runtime.sendMessage({ type: "open_side_panel" }).catch(() => null);
+        if (!response?.ok || requestId !== selectionRequestId) {
+            if (requestId === selectionRequestId) lastSelection = "";
+            return;
+        }
+
         chrome.runtime.sendMessage({ 
             type: "new_selection", 
             text: selection, 
-            url: window.location.href 
+            url: window.location.href,
+            targetWindowId: response.windowId
         });
         
     } else if (!selection && lastSelection) {
         lastSelection = "";
+        selectionRequestId++;
         
         chrome.storage.local.get("close_on_deselect", result => {
             if (result.close_on_deselect) {

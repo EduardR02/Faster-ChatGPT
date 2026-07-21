@@ -7,11 +7,12 @@ import { SidepanelChatUI } from './chat_ui.js';
 import { DragDropManager } from './drag_drop_manager.js';
 import { VoiceManager } from './voice_manager.js';
 import { createStateProxy } from './state_proxy.js';
+import { openSidePanelWithHandoff } from './sidepanel_handoff.js';
 
 // Configuration constants
 const STARTUP_WINDOW_MS = 2000;  // Time window to consider closing empty startup tabs
 const NEW_TAB_URL = 'chrome://newtab';
-const POPOUT_READY_TIMEOUT_MS = 3000;
+const POPOUT_READY_TIMEOUT_MS = 5000;
 const CONTINUATION_RENDER_TAIL_MESSAGES = 80;
 
 // Arena and Council mode toggle icons
@@ -21,6 +22,52 @@ const ICON = {
     COUNCIL_OFF: '\u{2726}', // ✦ Black Four Pointed Star - council mode disabled
     COUNCIL_ON: '\u{2042}'   // ⁂ Asterism - council mode enabled
 };
+
+export function waitForCreatedTabReceiver(createTab, expectedUrl, timeoutMs = POPOUT_READY_TIMEOUT_MS) {
+    let targetTabId = null;
+    let settled = false;
+    let timeoutId;
+    const readyTabIds = new Set();
+
+    return new Promise((resolve, reject) => {
+        const cleanup = () => {
+            chrome.runtime.onMessage.removeListener(listener);
+            clearTimeout(timeoutId);
+        };
+        const finish = (callback) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            callback();
+        };
+        const listener = (message, sender) => {
+            const tabId = sender?.tab?.id;
+            if (message.type !== 'sidepanel_ready' || sender?.url !== expectedUrl || !Number.isInteger(tabId)) return;
+            readyTabIds.add(tabId);
+            if (tabId === targetTabId) finish(() => resolve(sender.tab));
+        };
+
+        chrome.runtime.onMessage.addListener(listener);
+        timeoutId = setTimeout(() => finish(() => reject(new Error('Popped-out chat did not become ready'))), timeoutMs);
+
+        let createRequest;
+        try {
+            createRequest = createTab();
+        } catch (error) {
+            finish(() => reject(error));
+            return;
+        }
+
+        Promise.resolve(createRequest).then(tab => {
+            if (!Number.isInteger(tab?.id)) {
+                finish(() => reject(new Error('Popped-out chat tab was not created')));
+                return;
+            }
+            targetTabId = tab.id;
+            if (readyTabIds.has(targetTabId)) finish(() => resolve(tab));
+        }, error => finish(() => reject(error)));
+    });
+}
 
 export class SidepanelApp {
     constructor() {
@@ -37,6 +84,10 @@ export class SidepanelApp {
         this.restoredTabLoadTimers = new Map();
         this.startupAt = Date.now();
         this.startupNewTabId = null;
+        this.hostContextReady = false;
+        this.hostWindowId = null;
+        this.hostTabId = null;
+        this.receiverReady = false;
 
         // Cached DOM elements (reduces repeated queries)
         this.textInput = document.getElementById('textInput');
@@ -640,12 +691,21 @@ export class SidepanelApp {
 
     setupMessageListeners() {
         chrome.runtime.onMessage.addListener(message => {
+            if (message.type === 'probe_sidepanel_ready') {
+                if (this.receiverReady && this.hostTabId == null && message.windowId === this.hostWindowId) {
+                    this.announceReceiverReady();
+                }
+                return;
+            }
+
             if (message.type === 'chat_renamed') {
                 return this.handleChatRenamed(message.chatId, message.title);
             }
 
             if (!this.stateManager.isOn()) return;
             
+            if (!this.isHandoffTarget(message)) return;
+
             if (message.type === 'new_selection') {
                 this.handleNewSelection(message.text, message.url);
             } else if (message.type === 'new_chat') {
@@ -654,6 +714,34 @@ export class SidepanelApp {
                 this.handleReconstructChat(message.options);
             }
         });
+    }
+
+    setHostContext(windowId, tabId) {
+        this.hostWindowId = windowId;
+        this.hostTabId = tabId;
+        this.hostContextReady = true;
+    }
+
+    isHandoffTarget(message) {
+        if (message.targetTabId != null) {
+            return this.hostContextReady && message.targetTabId === this.hostTabId;
+        }
+        if (message.targetWindowId != null) {
+            return this.hostContextReady && this.hostTabId == null && message.targetWindowId === this.hostWindowId;
+        }
+        return true;
+    }
+
+    announceReceiverReady() {
+        chrome.runtime.sendMessage({
+            type: 'sidepanel_ready',
+            windowId: this.hostWindowId
+        }).catch(() => {});
+    }
+
+    markReceiverReady() {
+        this.receiverReady = true;
+        this.announceReceiverReady();
     }
 
     handleChatRenamed(chatId, newTitle) {
@@ -923,52 +1011,45 @@ export class SidepanelApp {
         if (activeTabState.isSidePanel) {
             // Panel -> Tab
             const sidePanelUrl = chrome.runtime.getURL('src/html/sidepanel.html');
-            chrome.tabs.create({ url: sidePanelUrl });
-            
-            // Wait for new sidepanel instance to signal ready
-            await new Promise(resolve => {
-                let timeoutId;
-                const cleanup = () => {
-                    chrome.runtime.onMessage.removeListener(readyMessageListener);
-                    clearTimeout(timeoutId);
-                    resolve();
-                };
-                const readyMessageListener = (message) => { 
-                    if (message.type === "sidepanel_ready") { 
-                        cleanup();
-                    } 
-                };
-                chrome.runtime.onMessage.addListener(readyMessageListener);
-                timeoutId = setTimeout(cleanup, POPOUT_READY_TIMEOUT_MS);
-            });
-            
-            chrome.runtime.sendMessage({ 
-                type: "reconstruct_chat", 
-                options: reconstructOptions 
-            });
-            window.close();
+            try {
+                const targetTab = await waitForCreatedTabReceiver(
+                    () => chrome.tabs.create({ url: sidePanelUrl }),
+                    sidePanelUrl
+                );
+                await chrome.runtime.sendMessage({
+                    type: "reconstruct_chat",
+                    options: reconstructOptions,
+                    targetTabId: targetTab.id
+                });
+                window.close();
+                return true;
+            } catch (error) {
+                activeChatUI?.addErrorMessage(error?.message || 'Failed to pop out chat.');
+                return false;
+            }
             
         } else {
             // Tab -> Panel
-            const [{ length: currentWindowTabCount }, { isOpen: isSidepanelCurrentlyOpen }] = await Promise.all([
-                chrome.tabs.query({ windowId: chrome.windows.WINDOW_ID_CURRENT }), 
-                chrome.runtime.sendMessage({ type: "is_sidepanel_open" })
-            ]);
-            
-            if (!isSidepanelCurrentlyOpen) {
-                await chrome.runtime.sendMessage({ type: "open_side_panel" });
-            }
-            
-            chrome.runtime.sendMessage({ 
-                type: "reconstruct_chat", 
-                options: reconstructOptions 
+            const openRequest = openSidePanelWithHandoff({
+                type: "reconstruct_chat",
+                options: reconstructOptions
             });
+            const [response, currentWindowTabs] = await Promise.all([
+                openRequest,
+                chrome.tabs.query({ windowId: chrome.windows.WINDOW_ID_CURRENT })
+            ]);
+            if (!response.ok) {
+                activeChatUI?.addErrorMessage(response.error || 'Failed to open side panel.');
+                return false;
+            }
+            const currentWindowTabCount = currentWindowTabs.length;
             
             // Create fallback tab if this was the last one
             if (currentWindowTabCount === 1) {
                 await chrome.tabs.create({ url: NEW_TAB_URL });
             }
             window.close();
+            return true;
         }
     }
 
@@ -995,7 +1076,12 @@ export class SidepanelApp {
 if (typeof document !== 'undefined') {
     document.addEventListener('DOMContentLoaded', async () => {
         const app = new SidepanelApp();
+        const [currentWindow, currentTab] = await Promise.all([
+            chrome.windows.getCurrent(),
+            chrome.tabs.getCurrent()
+        ]);
+        app.setHostContext(currentWindow.id, currentTab?.id ?? null);
         await app.readyPromise;
-        chrome.runtime.sendMessage({ type: "sidepanel_ready" });
+        app.markReceiverReady();
     });
 }

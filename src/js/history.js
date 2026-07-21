@@ -8,6 +8,7 @@ import { normaliseForSearch } from './search_utils.js';
 import { copyChatMarkdownToClipboard, saveChatMarkdownToFile } from './markdown_export.js';
 import { runHistoryMarkdownAction } from './history_markdown_action.js';
 import { attachHistoryPopupEscape, attachHistoryPopupTrigger, focusHistoryPopupTrigger } from './history_popup_trigger.js';
+import { openSidePanelWithHandoff } from './sidepanel_handoff.js';
 import {
     createLiveChatRequest,
     fetchAndApplyAppendedMessages,
@@ -309,9 +310,10 @@ const popupMenu = new PopupMenu(renameManager, chatStorage);
 
 const chatUI = new HistoryChatUI({
     stateManager,
-    continueFunc: (index, subIndex, modelChoice) => 
-        chrome.runtime.sendMessage({ type: "open_side_panel" }).then(() => 
-            chrome.runtime.sendMessage({ type: "reconstruct_chat", options: { chatId: chatCore.getChatId(), index, secondaryIndex: subIndex, modelChoice } })),
+    continueFunc: (index, subIndex, modelChoice) => openSidePanelWithHandoff({
+        type: "reconstruct_chat",
+        options: { chatId: chatCore.getChatId(), index, secondaryIndex: subIndex, modelChoice }
+    }),
     loadHistoryItems: async (limit, offset) => {
         const items = await chatStorage.getChatMetadata(limit, offset);
         items.forEach(item => cacheMeta(item));

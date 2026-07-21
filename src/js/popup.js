@@ -1,9 +1,34 @@
 import { ModeEnum, getMode, setMode, isOn, getLifetimeTokens } from "./storage_utils.js";
+import { openSidePanelWithHandoff } from "./sidepanel_handoff.js";
 
 const getElement = (id) => document.getElementById(id);
+let currentWindowPromise;
+let currentWindowId;
+const getCurrentWindowId = () => {
+    currentWindowPromise ||= chrome.windows.getCurrent().then(window => {
+        currentWindowId = window.id;
+        return currentWindowId;
+    });
+    return currentWindowPromise;
+};
+let currentMode;
+let modeLoaded = false;
+let currentModePromise;
+const getCurrentMode = () => {
+    currentModePromise ||= new Promise(resolve => getMode(mode => {
+        currentMode = mode;
+        modeLoaded = true;
+        resolve(mode);
+    }));
+    return currentModePromise;
+};
+
+void getCurrentWindowId().catch(() => {});
+void getCurrentMode();
 
 document.addEventListener('DOMContentLoaded', () => {
     const modeButton = getElement("buttonMode");
+    const chatButton = getElement("buttonChat");
     const tokensDisplay = getElement("tokensValue");
 
     // Mode Toggle
@@ -18,7 +43,11 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.runtime.openOptionsPage();
     };
     
-    getElement("buttonChat").onclick = openSidePanel;
+    chatButton.disabled = true;
+    chatButton.onclick = openSidePanel;
+    void Promise.all([getCurrentWindowId(), getCurrentMode()])
+        .then(() => { chatButton.disabled = false; })
+        .catch(() => {});
     
     getElement("buttonHistory").onclick = () => {
         const historyUrl = chrome.runtime.getURL('src/html/history.html');
@@ -30,7 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
         tokensDisplay.innerText = `${tokens.input} | ${tokens.output}`;
     });
     
-    getMode(updateUI);
+    void getCurrentMode().then(updateUI);
 });
 
 function updateUI(mode) {
@@ -55,34 +84,36 @@ function updateUI(mode) {
     });
 }
 
-async function openSidePanel() {
-    const modeOn = await new Promise(resolve => getMode(mode => resolve(isOn(mode))));
-    if (!modeOn) return;
+export async function openSidePanel() {
+    if (!modeLoaded) await getCurrentMode();
+    if (!isOn(currentMode)) return false;
 
-    const { isOpen } = await chrome.runtime.sendMessage({ type: "is_sidepanel_open" });
-    const wasClosed = !isOpen;
-
-    // Open sidepanel via background (which has proper permissions)
-    await chrome.runtime.sendMessage({ type: "open_side_panel" });
-    
-    // Optional: notify of a new chat
-    chrome.runtime.sendMessage({ type: "new_chat" }).catch(() => {});
-    
-    // Close the popup only if we opened the panel
-    if (wasClosed) {
-        window.close();
+    let response;
+    try {
+        const windowId = currentWindowId ?? await getCurrentWindowId();
+        response = await openSidePanelWithHandoff({ type: "new_chat" }, windowId);
+    } catch (error) {
+        response = { ok: false, error: error?.message || String(error) };
     }
+    if (!response.ok) {
+        console.error("Failed to open side panel:", response.error || "Unknown error");
+        return false;
+    }
+
+    window.close();
+    return true;
 }
 
 function toggleMode(callback) {
     chrome.storage.local.get('mode', (result) => {
-        const currentMode = result.mode;
+        const storedMode = result.mode;
         const totalModes = Object.keys(ModeEnum).length;
         
-        const nextMode = currentMode !== undefined 
-            ? (currentMode + 1) % totalModes 
+        const nextMode = storedMode !== undefined
+            ? (storedMode + 1) % totalModes
             : ModeEnum.Off;
             
+        currentMode = nextMode;
         setMode(nextMode); 
         callback(nextMode);
     });
