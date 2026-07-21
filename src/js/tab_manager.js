@@ -8,6 +8,24 @@ const STORAGE_KEY = 'sidekick_open_tabs';
 const MAX_TABS = 20;
 const PERSIST_DEBOUNCE_MS = 250;
 
+const indexModelProviders = (models) => {
+    const providers = new Map();
+    for (const [provider, providerModels] of Object.entries(models || {})) {
+        for (const modelId of Object.keys(providerModels)) {
+            if (!providers.has(modelId)) providers.set(modelId, provider);
+        }
+    }
+    return providers;
+};
+
+const firstAvailableModel = (models, excludedModel) => {
+    for (const providerModels of Object.values(models || {})) {
+        const model = Object.keys(providerModels).find(modelId => modelId !== excludedModel);
+        if (model) return model;
+    }
+    return '';
+};
+
 /**
  * Manages multiple chat tabs in the sidepanel.
  */
@@ -21,12 +39,17 @@ export class TabManager {
             defaultContinueFunc: null,
             persistTimer: null,
             isDirty: false,
-            isRestoring: false
+            isRestoring: false,
+            modelProviders: new Map()
         });
 
         this.initTabBar();
         
         if (this.globalState) {
+            this.globalState.subscribeToSetting('models', models => this.reconcileModels(models));
+            this.globalState.runOnReady?.(() => {
+                this.modelProviders = indexModelProviders(this.globalState.getSetting('models'));
+            });
             this.globalState.subscribeToSetting('persist_tabs', (enabled) => {
                 if (enabled === false) this.clearPersistedTabs();
                 else this.schedulePersist();
@@ -136,6 +159,19 @@ export class TabManager {
 
     createTabStateProxy(state) {
         return createStateProxy(state, this.globalState);
+    }
+
+    reconcileModels(models) {
+        const nextProviders = indexModelProviders(models);
+
+        for (const { tabState } of this.tabs.values()) {
+            const currentModel = tabState.getCurrentModel();
+            const providerChanged = this.modelProviders.get(currentModel) !== nextProviders.get(currentModel);
+            if (!providerChanged) continue;
+            tabState.setCurrentModel(firstAvailableModel(models, currentModel));
+        }
+
+        this.modelProviders = nextProviders;
     }
 
     renderTabButton(tab) {

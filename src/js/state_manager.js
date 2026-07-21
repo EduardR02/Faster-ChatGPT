@@ -230,13 +230,16 @@ export class SettingsStateManager extends SettingsManager {
 
     removeModel(apiName, targetProvider = null) {
         const models = this.state.settings.models;
+        const resolvedProvider = Object.keys(models).find(provider => apiName in models[provider]);
         let found = false;
+        let removedProvider = null;
 
         for (const provider in models) {
             if (targetProvider && provider !== targetProvider) continue;
             if (apiName in models[provider]) {
                 delete models[provider][apiName];
                 found = true;
+                removedProvider = provider;
                 break;
             }
         }
@@ -245,15 +248,16 @@ export class SettingsStateManager extends SettingsManager {
 
         const settingUpdates = { models };
         const modelStillAvailable = Object.values(models).some(providerModels => apiName in providerModels);
+        const providerChanged = removedProvider === resolvedProvider;
 
-        if (modelStillAvailable) {
+        if (modelStillAvailable && !providerChanged) {
             this.updateSettingsPersistent(settingUpdates);
             return;
         }
 
         // Handle fallout of model removal - check both persisted and pending
         if (this.state.settings.current_model === apiName) {
-            settingUpdates.current_model = this.getFirstAvailableModel();
+            settingUpdates.current_model = this.getFirstAvailableModel(apiName);
         }
         if (this.pendingChanges.current_model === apiName) {
             delete this.pendingChanges.current_model;
@@ -276,7 +280,7 @@ export class SettingsStateManager extends SettingsManager {
         }
 
         if (this.state.settings.council_collector_model === apiName) {
-            settingUpdates.council_collector_model = this.getFirstAvailableModel();
+            settingUpdates.council_collector_model = this.getFirstAvailableModel(apiName);
         }
         if (this.pendingChanges.council_collector_model === apiName) {
             delete this.pendingChanges.council_collector_model;
@@ -285,6 +289,9 @@ export class SettingsStateManager extends SettingsManager {
         const arenaModels = this.state.settings.arena_models;
         if (arenaModels?.includes(apiName)) {
             settingUpdates.arena_models = arenaModels.filter(modelId => modelId !== apiName);
+            if (settingUpdates.arena_models.length < 2 && this.state.settings.arena_mode) {
+                settingUpdates.arena_mode = false;
+            }
         }
         if (this.pendingChanges.arena_models?.includes(apiName)) {
             this.pendingChanges.arena_models = this.pendingChanges.arena_models.filter(m => m !== apiName);
@@ -293,10 +300,16 @@ export class SettingsStateManager extends SettingsManager {
                 delete this.pendingChanges.arena_mode;
             }
         }
+        if ((settingUpdates.arena_models || arenaModels)?.length < 2 && !this.pendingChanges.arena_models) {
+            delete this.pendingChanges.arena_mode;
+        }
 
         const councilModels = this.state.settings.council_models;
         if (councilModels?.includes(apiName)) {
             settingUpdates.council_models = councilModels.filter(modelId => modelId !== apiName);
+            if (settingUpdates.council_models.length < 2 && this.state.settings.council_mode) {
+                settingUpdates.council_mode = false;
+            }
         }
         if (this.pendingChanges.council_models?.includes(apiName)) {
             this.pendingChanges.council_models = this.pendingChanges.council_models.filter(m => m !== apiName);
@@ -305,14 +318,18 @@ export class SettingsStateManager extends SettingsManager {
                 delete this.pendingChanges.council_mode;
             }
         }
+        if ((settingUpdates.council_models || councilModels)?.length < 2 && !this.pendingChanges.council_models) {
+            delete this.pendingChanges.council_mode;
+        }
 
         this.updateSettingsPersistent(settingUpdates);
     }
 
-    getFirstAvailableModel() {
+    getFirstAvailableModel(excludedModel = null) {
         for (const provider in this.state.settings.models) {
             const modelIds = Object.keys(this.state.settings.models[provider]);
-            if (modelIds.length > 0) return modelIds[0];
+            const modelId = modelIds.find(id => id !== excludedModel);
+            if (modelId) return modelId;
         }
         return null;
     }

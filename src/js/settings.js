@@ -378,6 +378,10 @@ export class SettingsUI {
                 }
             }
         }
+
+        const invalidMultiSelection = (currentMode === 'arena' || currentMode === 'council') &&
+            document.querySelectorAll('input[name="model_select"]:checked').length < 2;
+        document.getElementById('models-label').classList.toggle('settings-error', invalidMultiSelection);
     }
 
     getCurrentMode() {
@@ -517,6 +521,15 @@ export class SettingsUI {
         modelsLabel.classList.remove('settings-error');
         displayNameInput.value = '';
         apiNameInput.value = '';
+
+        let disabledSelectedMode = false;
+        for (const mode of ['arena', 'council']) {
+            const enabled = !!this.stateManager.getSetting(`${mode}_mode`);
+            document.getElementById(`${mode}_mode`).checked = enabled;
+            if (!enabled && document.getElementById(`${mode}_select`).checked) disabledSelectedMode = true;
+        }
+        if (disabledSelectedMode) this.setSelectMode(null);
+
         this.updateCheckboxes();
     }
 

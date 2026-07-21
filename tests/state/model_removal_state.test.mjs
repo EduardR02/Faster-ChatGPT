@@ -31,6 +31,8 @@ describe('SettingsStateManager model removal', () => {
       council_collector_model: 'Remove-Me',
       arena_models: ['Remove-Me', 'claude'],
       council_models: ['Remove-Me', 'survivor'],
+      arena_mode: true,
+      council_mode: true,
       api_keys: apiKeys
     });
 
@@ -39,7 +41,7 @@ describe('SettingsStateManager model removal', () => {
     const stored = await chrome.storage.local.get([
       'models', 'current_model', 'auto_rename', 'auto_rename_model',
       'transcription_model', 'council_collector_model', 'arena_models',
-      'council_models', 'api_keys'
+      'council_models', 'arena_mode', 'council_mode', 'api_keys'
     ]);
     expect(stored.models).toEqual({
       openai: { survivor: 'Survivor' },
@@ -52,6 +54,8 @@ describe('SettingsStateManager model removal', () => {
     expect(stored.council_collector_model).toBe('survivor');
     expect(stored.arena_models).toEqual(['claude']);
     expect(stored.council_models).toEqual(['survivor']);
+    expect(stored.arena_mode).toBe(false);
+    expect(stored.council_mode).toBe(false);
     expect(stored.api_keys).toEqual(apiKeys);
   });
 
@@ -74,5 +78,23 @@ describe('SettingsStateManager model removal', () => {
     });
     expect(stored.current_model).toBe('shared');
     expect(stored.arena_models).toEqual(['shared', 'claude']);
+  });
+
+  test('does not fall through to another provider when removing the resolved shared identifier', async () => {
+    const manager = await createManager({
+      models: {
+        openai: { shared: 'OpenAI Shared' },
+        anthropic: { shared: 'Anthropic Shared', claude: 'Claude' }
+      },
+      current_model: 'shared',
+      council_collector_model: 'shared'
+    });
+
+    manager.removeModel('shared', 'openai');
+
+    const stored = await chrome.storage.local.get(['models', 'current_model', 'council_collector_model']);
+    expect(stored.models.anthropic.shared).toBe('Anthropic Shared');
+    expect(stored.current_model).toBe('claude');
+    expect(stored.council_collector_model).toBe('claude');
   });
 });

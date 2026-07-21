@@ -16,7 +16,7 @@ const resolveEnteredModel = (models, displayName, apiName) => {
 
         for (const [value, readField] of fields) {
             const storedValue = readField(model);
-            if (storedValue.toLocaleLowerCase() !== value.toLocaleLowerCase()) {
+            if (storedValue.toLowerCase() !== value.toLowerCase()) {
                 isMatch = false;
                 break;
             }

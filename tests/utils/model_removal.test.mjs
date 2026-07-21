@@ -35,6 +35,16 @@ describe('model removal resolution', () => {
     });
   });
 
+  test('does not depend on locale-sensitive case conversion', () => {
+    const original = String.prototype.toLocaleLowerCase;
+    String.prototype.toLocaleLowerCase = () => { throw new Error('locale conversion used'); };
+    try {
+      expect(resolve({ apiName: 'SURVIVOR' })?.apiName).toBe('survivor');
+    } finally {
+      String.prototype.toLocaleLowerCase = original;
+    }
+  });
+
   test('prefers exact case and rejects an unresolved case-insensitive ambiguity', () => {
     expect(resolve({ apiName: 'GPT-Case' })?.displayName).toBe('Primary Model');
     expect(resolve({ apiName: 'GPT-CASE' })).toBeNull();

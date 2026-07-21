@@ -6,6 +6,8 @@ const settingsMarkup = () => `
   <label id="models-label">Model:</label>
   <input id="model-display-name-input">
   <input id="model-api-name-input">
+  <input id="arena_mode" type="checkbox">
+  <input id="council_mode" type="checkbox">
   <input id="arena_select" type="checkbox">
   <input id="council_select" type="checkbox">
   <input id="collector_select" type="checkbox">
@@ -16,24 +18,33 @@ const settingsMarkup = () => `
     <label class="model-label" for="Remove-Me">Remove Me</label>
     <input id="survivor" name="model_select" data-provider="openai" type="radio">
     <label class="model-label" for="survivor">Survivor</label>
+    <input id="third" name="model_select" data-provider="openai" type="radio">
+    <label class="model-label" for="third">Third</label>
   </div></div>
 `;
 
-const createSettings = async () => {
+const createSettings = async (overrides = {}) => {
   const { document } = parseHTML(settingsMarkup());
   document.getElementsByName = name => document.querySelectorAll(`[name="${name}"]`);
   globalThis.document = document;
   globalThis.chrome = createChromeMock();
-  await chrome.storage.local.set({
-    models: { openai: { 'Remove-Me': 'Remove Me', survivor: 'Survivor' } },
+  const storedSettings = {
+    models: { openai: { 'Remove-Me': 'Remove Me', survivor: 'Survivor', third: 'Third' } },
     current_model: 'Remove-Me',
-    api_keys: { openai: 'secret' }
-  });
+    api_keys: { openai: 'secret' },
+    arena_mode: false,
+    council_mode: false,
+    ...overrides
+  };
+  await chrome.storage.local.set(storedSettings);
   const { SettingsUI } = await import('../../src/js/settings.js');
   const { SettingsStateManager } = await import('../../src/js/state_manager.js');
   const settings = Object.create(SettingsUI.prototype);
   settings.stateManager = new SettingsStateManager();
+  settings.selectModes = ['arena', 'council', 'collector', 'rename', 'transcription'];
   await new Promise(resolve => settings.stateManager.runOnReady(resolve));
+  document.getElementById('arena_mode').checked = storedSettings.arena_mode;
+  document.getElementById('council_mode').checked = storedSettings.council_mode;
   return { document, settings };
 };
 
@@ -46,7 +57,7 @@ describe('SettingsUI model removal', () => {
     const stored = await chrome.storage.local.get(['models', 'current_model', 'api_keys']);
     expect(document.getElementById('Remove-Me')).toBeNull();
     expect(document.getElementById('survivor').checked).toBe(true);
-    expect(stored.models).toEqual({ openai: { survivor: 'Survivor' } });
+    expect(stored.models).toEqual({ openai: { survivor: 'Survivor', third: 'Third' } });
     expect(stored.current_model).toBe('survivor');
     expect(stored.api_keys).toEqual({ openai: 'secret' });
   });
@@ -63,4 +74,34 @@ describe('SettingsUI model removal', () => {
     expect(document.getElementById('survivor')).not.toBeNull();
     expect(document.getElementById('models-label').classList.contains('settings-error')).toBe(true);
   });
+
+  for (const mode of ['arena', 'council']) {
+    test(`typed removal disables an invalid active ${mode} mode and restores normal checks`, async () => {
+      const modeKey = `${mode}_mode`;
+      const modelsKey = `${mode}_models`;
+      const { document, settings } = await createSettings({
+        current_model: 'third',
+        [modeKey]: true,
+        [modelsKey]: ['Remove-Me', 'survivor']
+      });
+      document.getElementById(`${mode}_select`).checked = true;
+      for (const modelId of ['Remove-Me', 'survivor']) {
+        const input = document.getElementById(modelId);
+        input.type = 'checkbox';
+        input.checked = true;
+      }
+      document.getElementById('model-api-name-input').value = 'remove-me';
+
+      await settings.removeModel();
+
+      const stored = await chrome.storage.local.get([modeKey, modelsKey]);
+      expect(stored[modeKey]).toBe(false);
+      expect(stored[modelsKey]).toEqual(['survivor']);
+      expect(document.getElementById(modeKey).checked).toBe(false);
+      expect(document.getElementById(`${mode}_select`).checked).toBe(false);
+      expect(document.getElementById('survivor').checked).toBe(false);
+      expect(document.getElementById('third').checked).toBe(true);
+      expect(document.getElementById('models-label').classList.contains('settings-error')).toBe(false);
+    });
+  }
 });
