@@ -1,7 +1,7 @@
 import { SettingsStateManager } from './state_manager.js';
 import { createElementWithClass, autoResizeTextfieldListener, updateTextfieldHeight } from "./ui_utils.js";
 import { ArenaRatingManager } from "./ArenaRatingManager.js";
-import { computeLeaderboard, renderLeaderboard, resolveDisplayNames } from "./arena_leaderboard.js";
+import { computeLeaderboard, renderLeaderboard, renderLeaderboardError, resolveDisplayNames } from "./arena_leaderboard.js";
 
 const apiDisplayNames = {
     anthropic: 'Anthropic',
@@ -80,7 +80,7 @@ class SettingsUI {
         addListener('api_key_input', 'input', (event) => this.handleApiKey(event));
         
         addListener('button-delete-arena', 'click', (event) => {
-            this.handleArenaReset(event.target);
+            this.handleArenaReset(event.currentTarget);
         });
         
         addListener('button-reindex', 'click', (event) => {
@@ -169,7 +169,9 @@ class SettingsUI {
     initArenaLeaderboard() {
         this.arenaRatingManager = new ArenaRatingManager();
         this.arenaReady = this.arenaRatingManager.initDB();
-        this.arenaReady.then(() => this.renderArenaLeaderboard());
+        this.arenaReady
+            .then(() => this.renderArenaLeaderboard())
+            .catch(() => this.renderArenaLeaderboardError());
     }
 
     async renderArenaLeaderboard() {
@@ -178,6 +180,11 @@ class SettingsUI {
         const matches = await this.arenaRatingManager.getHistory();
         const entries = computeLeaderboard(matches, this.arenaRatingManager.cachedRatings);
         renderLeaderboard(container, entries, resolveDisplayNames(this.stateManager.getSetting('models')));
+    }
+
+    renderArenaLeaderboardError() {
+        const container = document.getElementById('arena-leaderboard');
+        if (container) renderLeaderboardError(container);
     }
 
     initMicrophone() {
@@ -573,19 +580,27 @@ class SettingsUI {
         };
     }
 
-    handleArenaReset(button) {
+    async handleArenaReset(button) {
         if (!button.classList.contains('confirm')) { 
             button.classList.add('confirm'); 
             button.textContent = 'Are you sure? '; 
             return; 
         }
-        
-        this.arenaReady
-            .then(() => this.arenaRatingManager.wipe())
-            .then(() => this.renderArenaLeaderboard());
 
         button.classList.remove('confirm');
-        button.textContent = 'Reset Arena Matches ';
+        button.disabled = true;
+        button.textContent = 'Resetting… ';
+
+        try {
+            await this.arenaReady;
+            await this.arenaRatingManager.wipe();
+            await this.renderArenaLeaderboard();
+            button.textContent = 'Reset Arena Matches ';
+        } catch {
+            button.textContent = 'Reset Failed ';
+        } finally {
+            button.disabled = false;
+        }
     }
 
     initPromptUI() { 

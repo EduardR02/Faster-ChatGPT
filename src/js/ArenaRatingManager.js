@@ -148,6 +148,10 @@ export class ArenaRatingManager {
 
     async addMatchAndUpdate(modelA, modelB, result) {
         await this.saveMatch(modelA, modelB, result);
+        // Another extension context may have reset the shared cache since this
+        // manager initialized. Refresh only at the write boundary so stale
+        // in-memory ratings can never recreate data that was wiped.
+        await this.loadRatings();
         return this.calculateElo([{ model_a: modelA, model_b: modelB, result }]);
     }
 

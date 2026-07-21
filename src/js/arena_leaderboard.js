@@ -111,3 +111,12 @@ export const renderLeaderboard = (container, entries, displayNames = {}) => {
 
     container.appendChild(table);
 };
+
+export const renderLeaderboardError = (container) => {
+    container.replaceChildren(createElementWithClass(
+        'div',
+        'arena-leaderboard-empty',
+        'Could not load arena leaderboard.'
+    ));
+    container.dataset.state = 'error';
+};

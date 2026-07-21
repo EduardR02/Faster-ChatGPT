@@ -1,6 +1,11 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { parseHTML } from 'linkedom';
-import { computeLeaderboard, renderLeaderboard, resolveDisplayNames } from '../../src/js/arena_leaderboard.js';
+import {
+  computeLeaderboard,
+  renderLeaderboard,
+  renderLeaderboardError,
+  resolveDisplayNames
+} from '../../src/js/arena_leaderboard.js';
 
 describe('resolveDisplayNames', () => {
   test('flattens provider map into apiName -> displayName', () => {
@@ -73,13 +78,20 @@ describe('computeLeaderboard', () => {
   test('sorts by rating descending, then matches, then model id', () => {
     const ratings = {
       high: { rating: 1200, count: 5 },
-      midBusy: { rating: 1100, count: 10 },
-      midIdle: { rating: 1100, count: 2 },
+      midBusy: { rating: 1100, count: 1 },
+      midIdle: { rating: 1100, count: 20 },
       low: { rating: 900, count: 8 }
     };
-    const entries = computeLeaderboard([], ratings);
+    const matches = [
+      { model_a: 'midBusy', model_b: 'high', result: 'model_a' },
+      { model_a: 'midBusy', model_b: 'low', result: 'model_a' },
+      { model_a: 'midIdle', model_b: 'high', result: 'model_a' }
+    ];
+    const entries = computeLeaderboard(matches, ratings);
 
     expect(entries.map(e => e.modelId)).toEqual(['high', 'midBusy', 'midIdle', 'low']);
+    expect(entries.find(e => e.modelId === 'midBusy').matches).toBe(2);
+    expect(entries.find(e => e.modelId === 'midIdle').matches).toBe(1);
   });
 
   test('does not mutate the input matches', () => {
@@ -116,6 +128,17 @@ describe('renderLeaderboard', () => {
     expect(container.dataset.state).toBe('populated');
     expect(container.querySelectorAll('.arena-leaderboard-empty')).toHaveLength(0);
     expect(container.querySelectorAll('tbody tr')).toHaveLength(2);
+  });
+
+  test('error state replaces the loading placeholder', () => {
+    container.innerHTML = '<div class="arena-leaderboard-empty">Loading…</div>';
+    container.dataset.state = 'loading';
+
+    renderLeaderboardError(container);
+
+    expect(container.dataset.state).toBe('error');
+    expect(container.textContent).toContain('Could not load');
+    expect(container.textContent).not.toContain('Loading');
   });
 
   test('populated state renders ranked rows with display names and formatted values', () => {
