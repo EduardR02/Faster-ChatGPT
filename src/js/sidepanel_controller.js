@@ -3,6 +3,7 @@ import { StreamWriter, StreamWriterSimple } from './StreamWriter.js';
 import { Footer } from './Footer.js';
 import { ArenaRatingManager } from './ArenaRatingManager.js';
 import { SidepanelChatCore } from './chat_core.js';
+import { resolveConfiguredModelIds } from './model_selection.js';
 
 /**
  * orchestrates the interaction between the Sidepanel UI, Chat Core, and API.
@@ -570,7 +571,10 @@ export class SidepanelController {
         this.state.updateThinkingMode();
 
         if (this.state.isCouncilModeActive) {
-            const councilModels = this.state.getSetting('council_models') || [];
+            const councilModels = resolveConfiguredModelIds(
+                this.state.getSetting('council_models'),
+                this.state.getSetting('models')
+            );
             const collectorModel = this.state.getSetting('council_collector_model') || this.state.getSetting('current_model');
             
             if (councilModels.length < 2) {
@@ -581,7 +585,10 @@ export class SidepanelController {
         }
 
         if (this.state.isArenaModeActive) {
-            const enabledArenaModels = this.state.getSetting('arena_models');
+            const enabledArenaModels = resolveConfiguredModelIds(
+                this.state.getSetting('arena_models'),
+                this.state.getSetting('models')
+            );
             
             if (enabledArenaModels.length < 2) {
                 return this.chatUI.addErrorMessage("Enable at least 2 models for Arena.");

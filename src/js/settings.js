@@ -3,6 +3,7 @@ import { createElementWithClass, autoResizeTextfieldListener, updateTextfieldHei
 import { ArenaRatingManager } from "./ArenaRatingManager.js";
 import { computeLeaderboard, renderLeaderboard, renderLeaderboardError, resolveDisplayNames } from "./arena_leaderboard.js";
 import { resolveModelRemoval } from "./model_removal.js";
+import { resolveConfiguredModelIds } from "./model_selection.js";
 
 const apiDisplayNames = {
     anthropic: 'Anthropic',
@@ -233,12 +234,15 @@ export class SettingsUI {
         if (currentMode === 'arena' || currentMode === 'council') {
             const checkedModels = document.querySelectorAll('input[name="model_select"]:checked');
             const modelsLabel = document.getElementById('models-label');
+            const modelIds = resolveConfiguredModelIds(
+                Array.from(checkedModels, element => element.id),
+                this.stateManager.getSetting('models')
+            );
             
-            const hasEnoughModels = checkedModels.length >= 2;
+            const hasEnoughModels = modelIds.length >= 2;
             modelsLabel.classList.toggle('settings-error', !hasEnoughModels);
             
             if (hasEnoughModels) {
-                const modelIds = Array.from(checkedModels).map(el => el.id);
                 const targetKey = currentMode === 'arena' ? 'arena_models' : 'council_models';
                 this.stateManager.queueSettingChange(targetKey, modelIds);
             }
@@ -380,7 +384,10 @@ export class SettingsUI {
         }
 
         const invalidMultiSelection = (currentMode === 'arena' || currentMode === 'council') &&
-            Array.from(modelInputs).filter(input => input.checked).length < 2;
+            resolveConfiguredModelIds(
+                Array.from(modelInputs).filter(input => input.checked).map(input => input.id),
+                this.stateManager.getSetting('models')
+            ).length < 2;
         document.getElementById('models-label').classList.toggle('settings-error', invalidMultiSelection);
     }
 
@@ -536,8 +543,11 @@ export class SettingsUI {
     save() {
         const currentMode = this.getCurrentMode();
         if (currentMode === 'arena' || currentMode === 'council') {
-            const checkedCount = document.querySelectorAll('input[name="model_select"]:checked').length;
-            if (checkedCount < 2) {
+            const checkedModels = Array.from(
+                document.querySelectorAll('input[name="model_select"]:checked'),
+                input => input.id
+            );
+            if (resolveConfiguredModelIds(checkedModels, this.stateManager.getSetting('models')).length < 2) {
                 document.getElementById('models-label').classList.add('settings-error');
                 return;
             }

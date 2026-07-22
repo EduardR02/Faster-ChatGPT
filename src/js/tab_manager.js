@@ -3,6 +3,7 @@ import { SidepanelChatUI } from './chat_ui.js';
 import { SidepanelController } from './sidepanel_controller.js';
 import { createElementWithClass } from './ui_utils.js';
 import { createStateProxy } from './state_proxy.js';
+import { hasValidMultiModelSelection } from './model_selection.js';
 
 const STORAGE_KEY = 'sidekick_open_tabs';
 const MAX_TABS = 20;
@@ -52,8 +53,6 @@ export class TabManager {
             });
             this.globalState.subscribeToSetting('arena_models', arenaModels => this.reconcileModes({ arenaModels }));
             this.globalState.subscribeToSetting('council_models', councilModels => this.reconcileModes({ councilModels }));
-            this.globalState.subscribeToSetting('arena_mode', arenaEnabled => this.reconcileModes({ arenaEnabled }));
-            this.globalState.subscribeToSetting('council_mode', councilEnabled => this.reconcileModes({ councilEnabled }));
             this.globalState.runOnReady?.(() => {
                 this.modelProviders = indexModelProviders(this.globalState.getSetting('models'));
             });
@@ -193,15 +192,10 @@ export class TabManager {
 
     reconcileModes(overrides = {}) {
         const models = overrides.models ?? this.globalState.getSetting('models') ?? {};
-        const availableModels = indexModelProviders(models);
-        const hasValidModels = selectedModels =>
-            new Set((selectedModels || []).filter(modelId => availableModels.has(modelId))).size >= 2;
-        const arenaEnabled = overrides.arenaEnabled ?? this.globalState.getSetting('arena_mode');
-        const councilEnabled = overrides.councilEnabled ?? this.globalState.getSetting('council_mode');
         const arenaModels = overrides.arenaModels ?? this.globalState.getSetting('arena_models');
         const councilModels = overrides.councilModels ?? this.globalState.getSetting('council_models');
-        const arenaValid = !!arenaEnabled && hasValidModels(arenaModels);
-        const councilValid = !!councilEnabled && hasValidModels(councilModels);
+        const arenaValid = hasValidMultiModelSelection(arenaModels, models);
+        const councilValid = hasValidMultiModelSelection(councilModels, models);
         const activeTabState = this.getActiveTabState();
         let activeModeChanged = false;
 
@@ -217,8 +211,8 @@ export class TabManager {
         }
 
         const modeUpdates = {};
-        if (arenaEnabled && !arenaValid) modeUpdates.arena_mode = false;
-        if (councilEnabled && !councilValid) modeUpdates.council_mode = false;
+        if (this.globalState.getSetting('arena_mode') && !arenaValid) modeUpdates.arena_mode = false;
+        if (this.globalState.getSetting('council_mode') && !councilValid) modeUpdates.council_mode = false;
         if (Object.keys(modeUpdates).length > 0) this.globalState.updateSettingsLocal(modeUpdates);
         if (activeModeChanged) this.onTabStateReconciled?.(activeTabState);
     }

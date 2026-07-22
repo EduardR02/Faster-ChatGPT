@@ -143,6 +143,120 @@ describe('model removal across sidepanel tabs', () => {
     expect(sidepanelState.getSetting('current_model')).toBe('claude');
   });
 
+  test('global mode switches and model additions preserve independent tab-local modes until removal invalidates them', async () => {
+    const initial = {
+      models: {
+        openai: { 'arena-a': 'Arena A', 'arena-b': 'Arena B' },
+        anthropic: { 'council-a': 'Council A', 'council-b': 'Council B' }
+      },
+      current_model: 'arena-b',
+      arena_mode: true,
+      arena_models: ['arena-a', 'arena-b'],
+      council_mode: true,
+      council_models: ['council-a', 'council-b']
+    };
+    const context = await loadSidepanel(initial);
+    const { document, sidepanelState, settingsState, TabState, tabManager } = context;
+    const arenaTab = addTab(document, tabManager, TabState, 'arena', 'arena-b');
+    const councilTab = addTab(document, tabManager, TabState, 'council', 'council-b');
+    const normalTab = addTab(document, tabManager, TabState, 'normal', 'arena-b');
+    arenaTab.tabState.initArenaResponse('arena-a', 'arena-b');
+    councilTab.tabState.clearArenaState();
+    councilTab.tabState.initCouncilResponse(['council-a', 'council-b'], 'council-b');
+    normalTab.tabState.clearArenaState();
+    normalTab.tabState.clearCouncilState();
+    tabManager.activeTabId = councilTab.id;
+    councilTab.container.classList.add('active');
+
+    sidepanelState.handleStorageChanges({
+      arena_mode: { oldValue: true, newValue: false },
+      council_mode: { oldValue: false, newValue: true }
+    });
+    expect(arenaTab.tabState.isArenaModeActive).toBe(true);
+    expect(councilTab.tabState.isCouncilModeActive).toBe(true);
+    expect(normalTab.tabState.isArenaModeActive).toBe(false);
+
+    const modelsWithAddition = structuredClone(initial.models);
+    modelsWithAddition.openai.extra = 'Extra';
+    sidepanelState.handleStorageChanges({
+      models: { oldValue: initial.models, newValue: modelsWithAddition }
+    });
+    expect(arenaTab.tabState.isArenaModeActive).toBe(true);
+    expect(councilTab.tabState.isCouncilModeActive).toBe(true);
+
+    let previous = await chrome.storage.local.get(['models', 'arena_mode', 'arena_models']);
+    settingsState.removeModel('arena-a', 'openai');
+    let current = await chrome.storage.local.get(['models', 'arena_mode', 'arena_models']);
+    applyStorageChanges(sidepanelState, previous, current, ['models', 'arena_models', 'arena_mode']);
+    expect(arenaTab.tabState.isArenaModeActive).toBe(false);
+    expect(councilTab.tabState.isCouncilModeActive).toBe(true);
+
+    previous = await chrome.storage.local.get(['models', 'council_mode', 'council_models']);
+    settingsState.removeModel('council-a', 'anthropic');
+    current = await chrome.storage.local.get(['models', 'council_mode', 'council_models']);
+    applyStorageChanges(sidepanelState, previous, current, ['council_mode', 'models', 'council_models']);
+    expect(councilTab.tabState.isCouncilModeActive).toBe(false);
+    expect(normalTab.tabState.isCouncilModeActive).toBe(false);
+  });
+
+  test('new tabs reject persisted duplicate-only mode selections and controllers receive unique resolvable IDs', async () => {
+    const initial = {
+      models: {
+        openai: { shared: 'OpenAI Shared', other: 'Other' },
+        anthropic: { shared: 'Anthropic Shared' }
+      },
+      current_model: 'other',
+      arena_mode: true,
+      arena_models: ['shared', 'shared'],
+      council_mode: true,
+      council_models: ['shared', 'shared']
+    };
+    const context = await loadSidepanel(initial);
+    const { document, sidepanelState, TabState, tabManager } = context;
+    const tab = addTab(document, tabManager, TabState, 'startup');
+    expect(tab.tabState.isArenaModeActive).toBe(false);
+    expect(tab.tabState.isCouncilModeActive).toBe(false);
+
+    const { SidepanelController } = await import('../../src/js/sidepanel_controller.js');
+    const calls = [];
+    const controller = Object.create(SidepanelController.prototype);
+    controller.state = {
+      isCouncilModeActive: true,
+      isArenaModeActive: false,
+      updateThinkingMode: () => {},
+      getSetting: key => ({
+        models: initial.models,
+        council_models: ['shared', 'shared', 'other'],
+        council_collector_model: 'other',
+        current_model: 'other'
+      })[key]
+    };
+    controller.chatUI = { initScrollListener: () => {}, addErrorMessage: message => calls.push(message) };
+    controller.runCouncilFlow = (models, collector) => calls.push({ models, collector });
+
+    await controller.initApiCall();
+
+    expect(calls).toEqual([{ models: ['shared', 'other'], collector: 'other' }]);
+
+    calls.length = 0;
+    controller.state.isCouncilModeActive = false;
+    controller.state.isArenaModeActive = true;
+    controller.state.getSetting = key => ({
+      models: initial.models,
+      arena_models: ['shared', 'shared', 'missing', 'other']
+    })[key];
+    controller.getRandomArenaModels = models => {
+      calls.push(models);
+      return models;
+    };
+    controller.runArenaFlow = (modelA, modelB) => calls.push([modelA, modelB]);
+
+    await controller.initApiCall();
+
+    expect(calls).toEqual([['shared', 'other'], ['shared', 'other']]);
+    expect(sidepanelState.getSetting('current_model')).toBe('other');
+  });
+
   for (const mode of ['arena', 'council']) {
     test(`storage listeners clear invalid ${mode} state from every tab and active controls`, async () => {
       const modeKey = `${mode}_mode`;

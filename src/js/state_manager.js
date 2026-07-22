@@ -1,4 +1,5 @@
 import { ModeEnum } from './storage_utils.js';
+import { resolveConfiguredModelIds } from './model_selection.js';
 import {
     THINKING_STATE,
     initializeArenaCouncilState,
@@ -251,41 +252,39 @@ export class SettingsStateManager extends SettingsManager {
         const settingUpdates = { models };
         const modelStillAvailable = Object.values(models).some(providerModels => apiName in providerModels);
         const providerChanged = removedProvider === resolvedProvider;
-
-        if (modelStillAvailable && !providerChanged) {
-            this.updateSettingsPersistent(settingUpdates);
-            return;
-        }
+        const identifierInvalidated = !modelStillAvailable || providerChanged;
 
         // Handle fallout of model removal - check both persisted and pending
-        if (this.state.settings.current_model === apiName) {
-            settingUpdates.current_model = this.getFirstAvailableModel(apiName);
-        }
-        if (this.pendingChanges.current_model === apiName) {
-            delete this.pendingChanges.current_model;
-        }
+        if (identifierInvalidated) {
+            if (this.state.settings.current_model === apiName) {
+                settingUpdates.current_model = this.getFirstAvailableModel(apiName);
+            }
+            if (this.pendingChanges.current_model === apiName) {
+                delete this.pendingChanges.current_model;
+            }
 
-        if (this.state.settings.auto_rename_model === apiName) {
-            settingUpdates.auto_rename_model = null;
-            settingUpdates.auto_rename = false;
-        }
-        if (this.pendingChanges.auto_rename_model === apiName) {
-            delete this.pendingChanges.auto_rename_model;
-            delete this.pendingChanges.auto_rename;
-        }
+            if (this.state.settings.auto_rename_model === apiName) {
+                settingUpdates.auto_rename_model = null;
+                settingUpdates.auto_rename = false;
+            }
+            if (this.pendingChanges.auto_rename_model === apiName) {
+                delete this.pendingChanges.auto_rename_model;
+                delete this.pendingChanges.auto_rename;
+            }
 
-        if (this.state.settings.transcription_model === apiName) {
-            settingUpdates.transcription_model = null;
-        }
-        if (this.pendingChanges.transcription_model === apiName) {
-            delete this.pendingChanges.transcription_model;
-        }
+            if (this.state.settings.transcription_model === apiName) {
+                settingUpdates.transcription_model = null;
+            }
+            if (this.pendingChanges.transcription_model === apiName) {
+                delete this.pendingChanges.transcription_model;
+            }
 
-        if (this.state.settings.council_collector_model === apiName) {
-            settingUpdates.council_collector_model = this.getFirstAvailableModel(apiName);
-        }
-        if (this.pendingChanges.council_collector_model === apiName) {
-            delete this.pendingChanges.council_collector_model;
+            if (this.state.settings.council_collector_model === apiName) {
+                settingUpdates.council_collector_model = this.getFirstAvailableModel(apiName);
+            }
+            if (this.pendingChanges.council_collector_model === apiName) {
+                delete this.pendingChanges.council_collector_model;
+            }
         }
 
         for (const mode of ['arena', 'council']) {
@@ -293,12 +292,22 @@ export class SettingsStateManager extends SettingsManager {
             const modeKey = `${mode}_mode`;
             const persistedModels = this.state.settings[modelsKey];
             const pendingModels = this.pendingChanges[modelsKey];
-            if (!persistedModels?.includes(apiName) && pendingModels === undefined) continue;
-
             const selectedModels = pendingModels ?? persistedModels ?? [];
-            const remainingModels = selectedModels.filter(modelId => modelId !== apiName);
+            const candidateModels = identifierInvalidated
+                ? selectedModels.filter(modelId => modelId !== apiName)
+                : selectedModels;
+            const remainingModels = [...new Set(candidateModels)];
+            const selectionNeedsUpdate = pendingModels !== undefined ||
+                persistedModels?.includes(apiName) ||
+                remainingModels.length !== selectedModels.length;
+            if (!selectionNeedsUpdate) continue;
+
             settingUpdates[modelsKey] = remainingModels;
-            settingUpdates[modeKey] = !!this.getSetting(modeKey) && remainingModels.length >= 2;
+            const modeEnabled = this.getSetting(modeKey);
+            if (modeEnabled !== undefined) {
+                settingUpdates[modeKey] = !!modeEnabled &&
+                    resolveConfiguredModelIds(remainingModels, models).length >= 2;
+            }
             delete this.pendingChanges[modelsKey];
             delete this.pendingChanges[modeKey];
         }

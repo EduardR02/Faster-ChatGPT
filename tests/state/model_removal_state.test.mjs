@@ -97,4 +97,30 @@ describe('SettingsStateManager model removal', () => {
     expect(stored.current_model).toBe('claude');
     expect(stored.council_collector_model).toBe('claude');
   });
+
+  test('normalizes duplicate provider identifiers in persisted and pending mode selections', async () => {
+    const manager = await createManager({
+      models: {
+        openai: { shared: 'OpenAI Shared', survivor: 'Survivor' },
+        anthropic: { shared: 'Anthropic Shared' }
+      },
+      current_model: 'shared',
+      arena_mode: true,
+      arena_models: ['shared', 'survivor'],
+      council_mode: true,
+      council_models: ['shared', 'shared']
+    });
+    manager.queueSettingChange('arena_models', ['shared', 'shared', 'survivor']);
+
+    manager.removeModel('shared', 'anthropic');
+
+    const stored = await chrome.storage.local.get([
+      'models', 'current_model', 'arena_mode', 'arena_models', 'council_mode', 'council_models'
+    ]);
+    expect(stored.current_model).toBe('shared');
+    expect(stored.arena_models).toEqual(['shared', 'survivor']);
+    expect(stored.arena_mode).toBe(true);
+    expect(stored.council_models).toEqual(['shared']);
+    expect(stored.council_mode).toBe(false);
+  });
 });

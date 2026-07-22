@@ -4,6 +4,7 @@ import {
     applyArenaCouncilStateMixin,
     applyInteractiveStateMixin
 } from './conversation_state.js';
+import { hasValidMultiModelSelection } from './model_selection.js';
 
 /**
  * Encapsulates the state of an individual chat tab.
@@ -17,9 +18,12 @@ export class TabState {
         this.chatId = null;
         this.isSidePanel = true;
 
+        const models = globalState.getSetting('models');
         initializeArenaCouncilState(this.state, {
-            isArenaModeActive: !!globalState.getSetting('arena_mode'),
-            isCouncilModeActive: !!globalState.getSetting('council_mode')
+            isArenaModeActive: !!globalState.getSetting('arena_mode') &&
+                hasValidMultiModelSelection(globalState.getSetting('arena_models'), models),
+            isCouncilModeActive: !!globalState.getSetting('council_mode') &&
+                hasValidMultiModelSelection(globalState.getSetting('council_models'), models)
         });
         initializeInteractiveState(this.state);
     }
@@ -37,9 +41,12 @@ export class TabState {
     }
 
     getModeDefaultsForReset() {
+        const models = this.globalState.getSetting('models');
         return {
-            arena_mode: !!this.globalState.getSetting('arena_mode'),
-            council_mode: !!this.globalState.getSetting('council_mode')
+            arena_mode: !!this.globalState.getSetting('arena_mode') &&
+                hasValidMultiModelSelection(this.globalState.getSetting('arena_models'), models),
+            council_mode: !!this.globalState.getSetting('council_mode') &&
+                hasValidMultiModelSelection(this.globalState.getSetting('council_models'), models)
         };
     }
 

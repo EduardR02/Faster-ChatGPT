@@ -75,6 +75,40 @@ describe('SettingsUI model removal', () => {
     expect(document.getElementById('models-label').classList.contains('settings-error')).toBe(true);
   });
 
+  test('deduplicates provider-shared identifiers before validating and queueing selections', async () => {
+    const { document, settings } = await createSettings();
+    settings.stateManager.state.settings.models = {
+      openai: { shared: 'OpenAI Shared', third: 'Third' },
+      anthropic: { shared: 'Anthropic Shared' }
+    };
+    const firstShared = document.getElementById('Remove-Me');
+    const secondShared = document.getElementById('survivor');
+    firstShared.id = 'shared';
+    firstShared.dataset.provider = 'openai';
+    secondShared.id = 'shared';
+    secondShared.dataset.provider = 'anthropic';
+    for (const input of [firstShared, secondShared]) {
+      input.type = 'checkbox';
+      input.checked = true;
+      input.setAttribute('checked', '');
+    }
+    document.getElementById('arena_select').checked = true;
+
+    settings.handleModel(secondShared);
+
+    expect(settings.stateManager.pendingChanges.arena_models).toBeUndefined();
+    expect(document.getElementById('models-label').classList.contains('settings-error')).toBe(true);
+
+    const third = document.getElementById('third');
+    third.type = 'checkbox';
+    third.checked = true;
+    third.setAttribute('checked', '');
+    settings.handleModel(third);
+
+    expect(settings.stateManager.pendingChanges.arena_models).toEqual(['shared', 'third']);
+    expect(document.getElementById('models-label').classList.contains('settings-error')).toBe(false);
+  });
+
   for (const mode of ['arena', 'council']) {
     test(`typed removal disables an invalid active ${mode} mode and restores normal checks`, async () => {
       const modeKey = `${mode}_mode`;
