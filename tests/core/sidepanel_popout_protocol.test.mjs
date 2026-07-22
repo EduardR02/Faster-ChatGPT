@@ -48,6 +48,7 @@ globalThis.chrome = chromeMock;
 
 const { SidepanelApp, waitForCreatedTabReceiver } = await import('../../src/js/sidepanel.js');
 const sidepanelUrl = 'chrome-extension://test/src/html/sidepanel.html';
+const token = label => `${label}:${'x'.repeat(32)}`;
 
 beforeEach(() => {
     globalThis.chrome = chromeMock;
@@ -67,19 +68,19 @@ describe('pop-out receiver readiness', () => {
         const created = deferred();
         const waiting = waitForCreatedTabReceiver(() => {
             runtimeMessages.emit(
-                { type: 'sidepanel_ready', windowId: 8, documentId: 'tab-64' },
-                { tab: { id: 64 }, url: sidepanelUrl, documentId: 'tab-64' }
+                { type: 'sidepanel_ready', windowId: 8, receiverToken: token('tab-64') },
+                { tab: { id: 64 }, url: sidepanelUrl }
             );
             return created.promise;
         }, sidepanelUrl, 100);
 
         runtimeMessages.emit(
-            { type: 'sidepanel_ready', windowId: 8, documentId: 'tab-999' },
-            { tab: { id: 999 }, url: sidepanelUrl, documentId: 'tab-999' }
+            { type: 'sidepanel_ready', windowId: 8, receiverToken: token('tab-999') },
+            { tab: { id: 999 }, url: sidepanelUrl }
         );
         created.resolve({ id: 64 });
 
-        expect(await waiting).toEqual({ tab: { id: 64 }, documentId: 'tab-64' });
+        expect(await waiting).toEqual({ tab: { id: 64 }, receiverToken: token('tab-64') });
         expect(runtimeMessages.listeners.size).toBe(0);
     });
 
@@ -96,20 +97,59 @@ describe('pop-out receiver readiness', () => {
 });
 
 describe('handoff receiver targeting', () => {
+    test('initialized sidepanel registers and announces its in-memory receiver token', async () => {
+        const messages = [];
+        globalThis.chrome = {
+            ...chromeMock,
+            runtime: {
+                ...chromeMock.runtime,
+                sendMessage: async message => {
+                    messages.push(message);
+                    if (message.type === 'register_sidepanel_receiver') {
+                        return { ok: true, receiverToken: message.receiverToken };
+                    }
+                }
+            }
+        };
+        const panel = Object.create(SidepanelApp.prototype);
+        panel.setHostContext(11, null);
+        panel.receiverToken = token('panel-11');
+        panel.receiverReady = false;
+
+        await panel.markReceiverReady();
+        await Promise.resolve();
+
+        expect(panel.receiverReady).toBe(true);
+        expect(messages).toEqual([
+            {
+                type: 'register_sidepanel_receiver',
+                windowId: 11,
+                receiverToken: token('panel-11')
+            },
+            {
+                type: 'sidepanel_ready',
+                windowId: 11,
+                receiverToken: token('panel-11')
+            }
+        ]);
+    });
+
     test('side panels and popped-out tabs accept only their concrete target', () => {
         const panel = Object.create(SidepanelApp.prototype);
         panel.setHostContext(12, null);
-        panel.hostDocumentId = 'panel-12';
+        panel.receiverToken = token('panel-12');
+        panel.receiverReady = true;
         const poppedOut = Object.create(SidepanelApp.prototype);
         poppedOut.setHostContext(12, 88);
-        poppedOut.hostDocumentId = 'tab-88';
+        poppedOut.receiverToken = token('tab-88');
+        poppedOut.receiverReady = true;
 
-        expect(panel.isHandoffTarget({ targetWindowId: 12, targetDocumentId: 'panel-12' })).toBe(true);
-        expect(panel.isHandoffTarget({ targetWindowId: 12, targetDocumentId: 'closed-panel' })).toBe(false);
+        expect(panel.isHandoffTarget({ targetWindowId: 12, targetReceiverToken: token('panel-12') })).toBe(true);
+        expect(panel.isHandoffTarget({ targetWindowId: 12, targetReceiverToken: token('closed-panel') })).toBe(false);
         expect(panel.isHandoffTarget({ targetWindowId: 13 })).toBe(false);
         expect(poppedOut.isHandoffTarget({ targetWindowId: 12 })).toBe(false);
-        expect(poppedOut.isHandoffTarget({ targetTabId: 88 })).toBe(true);
-        expect(poppedOut.isHandoffTarget({ targetTabId: 89 })).toBe(false);
+        expect(poppedOut.isHandoffTarget({ targetTabId: 88, targetReceiverToken: token('tab-88') })).toBe(true);
+        expect(poppedOut.isHandoffTarget({ targetTabId: 89, targetReceiverToken: token('tab-88') })).toBe(false);
     });
 
     test('only the targeted receiver responds after asynchronous processing completes', async () => {
@@ -117,7 +157,7 @@ describe('handoff receiver targeting', () => {
         const calls = [];
         const panel = Object.create(SidepanelApp.prototype);
         panel.setHostContext(12, null);
-        panel.hostDocumentId = 'panel-12';
+        panel.receiverToken = token('panel-12');
         panel.receiverReady = true;
         panel.stateManager = { isOn: () => true };
         panel.handleReconstructChat = options => {
@@ -128,7 +168,7 @@ describe('handoff receiver targeting', () => {
 
         const poppedOut = Object.create(SidepanelApp.prototype);
         poppedOut.setHostContext(12, 88);
-        poppedOut.hostDocumentId = 'tab-88';
+        poppedOut.receiverToken = token('tab-88');
         poppedOut.receiverReady = true;
         poppedOut.stateManager = { isOn: () => true };
         poppedOut.handleReconstructChat = () => { calls.push(['popped-out']); };
@@ -136,7 +176,7 @@ describe('handoff receiver targeting', () => {
 
         const otherWindow = Object.create(SidepanelApp.prototype);
         otherWindow.setHostContext(13, null);
-        otherWindow.hostDocumentId = 'panel-13';
+        otherWindow.receiverToken = token('panel-13');
         otherWindow.receiverReady = true;
         otherWindow.stateManager = { isOn: () => true };
         otherWindow.handleReconstructChat = () => { calls.push(['other-window']); };
@@ -147,7 +187,7 @@ describe('handoff receiver targeting', () => {
             type: 'reconstruct_chat',
             options: { chatId: 7 },
             targetWindowId: 12,
-            targetDocumentId: 'panel-12'
+            targetReceiverToken: token('panel-12')
         }).then(response => {
             acknowledged = true;
             return response;
@@ -163,7 +203,8 @@ describe('handoff receiver targeting', () => {
     test('target receiver errors are returned as explicit rejection acknowledgements', async () => {
         const panel = Object.create(SidepanelApp.prototype);
         panel.setHostContext(13, null);
-        panel.hostDocumentId = 'panel-13';
+        panel.receiverToken = token('panel-13');
+        panel.receiverReady = true;
         panel.stateManager = { isOn: () => true };
         panel.handleNewChat = async () => { throw new Error('reconstruction failed'); };
         panel.setupMessageListeners();
@@ -171,8 +212,54 @@ describe('handoff receiver targeting', () => {
         expect(await runtimeMessages.send({
             type: 'new_chat',
             targetWindowId: 13,
-            targetDocumentId: 'panel-13'
+            targetReceiverToken: token('panel-13')
         })).toEqual({ ok: false, error: 'reconstruction failed' });
+    });
+
+    test('panel-to-tab transfer removes the ready tab when reconstruction is rejected', async () => {
+        const errors = [];
+        let sourceClosed = false;
+        globalThis.window = { close: () => { sourceClosed = true; } };
+        globalThis.chrome = {
+            ...chromeMock,
+            runtime: {
+                ...chromeMock.runtime,
+                getURL: path => `chrome-extension://test/${path}`,
+                sendMessage: async () => ({ ok: false, error: 'target rejected reconstruction' })
+            },
+            tabs: {
+                ...chromeMock.tabs,
+                create: async () => {
+                    runtimeMessages.emit(
+                        { type: 'sidepanel_ready', windowId: 12, receiverToken: token('tab-70') },
+                        { tab: { id: 70, windowId: 12 }, url: sidepanelUrl }
+                    );
+                    return { id: 70 };
+                }
+            }
+        };
+
+        const app = Object.create(SidepanelApp.prototype);
+        const chatCore = {
+            getChatId: () => 6,
+            getLength: () => 2,
+            getWebpageContext: () => null,
+            isWebpageContextDismissed: () => false,
+            getLatestMessage: () => ({ role: 'assistant', contents: [['answer']] }),
+            getSystemPrompt: () => 'system'
+        };
+        app.getReadyActiveTab = async () => ({
+            id: 'source',
+            controller: { chatCore, collectPendingUserMessage: () => null },
+            tabState: { isSidePanel: true },
+            chatUI: { addErrorMessage: message => errors.push(message) }
+        });
+        app.tabManager = { getTabCount: () => 1 };
+
+        expect(await app.handlePopoutToggle()).toBe(false);
+        expect(removedTabs).toEqual([70]);
+        expect(errors).toEqual(['target rejected reconstruction']);
+        expect(sourceClosed).toBe(false);
     });
 
     test('tab-to-panel transfer keeps the source intact if the ready target closes before handoff', async () => {
@@ -187,7 +274,7 @@ describe('handoff receiver targeting', () => {
                 sendMessage: async message => {
                     sent.push(message);
                     if (message.type === 'open_side_panel') {
-                        return { ok: true, windowId: 20, documentId: 'closed-panel' };
+                        return { ok: true, windowId: 20, receiverToken: token('closed-panel') };
                     }
                     return undefined;
                 },
@@ -226,7 +313,7 @@ describe('handoff receiver targeting', () => {
                 type: 'reconstruct_chat',
                 options: expect.any(Object),
                 targetWindowId: 20,
-                targetDocumentId: 'closed-panel'
+                targetReceiverToken: token('closed-panel')
             }
         ]);
         expect(errors).toEqual(['Side panel did not acknowledge the handoff']);
@@ -244,7 +331,7 @@ describe('handoff receiver targeting', () => {
                 sendMessage: message => {
                     events.push(message.type);
                     if (message.type === 'open_side_panel') {
-                        return Promise.resolve({ ok: true, windowId: 21, documentId: 'panel-21' });
+                        return Promise.resolve({ ok: true, windowId: 21, receiverToken: token('panel-21') });
                     }
                     return delivery.promise;
                 },

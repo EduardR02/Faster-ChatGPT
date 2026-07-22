@@ -66,7 +66,7 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
             const response = await chrome.runtime.sendMessage({
                 type: "new_chat",
                 targetWindowId: target.windowId,
-                targetDocumentId: target.documentId
+                targetReceiverToken: target.receiverToken
             });
             if (!response?.ok) throw new Error(response?.error || "Side panel rejected new chat");
         } catch (error) {
@@ -92,11 +92,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return true;
 
         case "register_sidepanel_receiver":
-            if (!isSidepanelDocument(sender) || !isConcreteWindowId(message.windowId)) {
+            if (
+                !isSidepanelPage(sender)
+                || sender.tab != null
+                || !isConcreteWindowId(message.windowId)
+                || !isReceiverToken(message.receiverToken)
+            ) {
                 sendResponse({ ok: false });
                 return false;
             }
-            sendResponse({ ok: true, documentId: sender.documentId });
+            sendResponse({ ok: true, receiverToken: message.receiverToken });
             return false;
 
         case "close_side_panel":
@@ -219,12 +224,13 @@ async function resolveTargetWindowId(tab, requestedWindowId) {
     return focusedWindow.id;
 }
 
-const isSidepanelDocument = sender => !!sender?.documentId && sender.url === PANEL_PATH;
+const isSidepanelPage = sender => sender?.url === PANEL_PATH;
+const isReceiverToken = token => typeof token === "string" && token.length >= 32;
 const isReadyMessageFromTarget = (message, sender, windowId) => (
     message.type === "sidepanel_ready"
     && message.windowId === windowId
-    && message.documentId === sender?.documentId
-    && isSidepanelDocument(sender)
+    && isReceiverToken(message.receiverToken)
+    && isSidepanelPage(sender)
     && sender.tab == null
 );
 
@@ -250,7 +256,7 @@ function createPanelReadyWaiter(windowId, timeoutMs) {
     const listener = (message, sender) => {
         if (message.type !== "sidepanel_ready" || message.windowId !== windowId) return;
         if (isReadyMessageFromTarget(message, sender, windowId)) {
-            complete(() => finish(sender.documentId));
+            complete(() => finish(message.receiverToken));
         }
     };
 
@@ -276,8 +282,8 @@ async function openPanelInWindow(windowId, timeoutMs) {
             windowId
         }).catch(() => {});
 
-        const [, , documentId] = await Promise.all([enableRequest, openRequest, readiness.promise]);
-        return { windowId, documentId };
+        const [, , receiverToken] = await Promise.all([enableRequest, openRequest, readiness.promise]);
+        return { windowId, receiverToken };
     } catch (error) {
         readiness.cancel();
         throw error;

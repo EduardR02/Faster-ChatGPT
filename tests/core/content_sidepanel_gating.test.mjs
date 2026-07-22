@@ -7,6 +7,7 @@ const documentListeners = new Map();
 const messages = [];
 let openResponse = { ok: false, error: 'blocked' };
 let selection = 'selected text';
+const receiverToken = `selection-panel:${'x'.repeat(32)}`;
 
 globalThis.document = {
     title: 'Example',
@@ -59,7 +60,7 @@ describe('content selection side panel gating', () => {
         expect(messages).toEqual([{ type: 'open_side_panel' }]);
 
         messages.length = 0;
-        openResponse = { ok: true, windowId: 14, documentId: 'selection-panel' };
+        openResponse = { ok: true, windowId: 14, receiverToken };
         await mouseup({ ctrlKey: true, metaKey: false });
         expect(messages).toEqual([
             { type: 'open_side_panel' },
@@ -68,7 +69,7 @@ describe('content selection side panel gating', () => {
                 text: 'selected text',
                 url: 'https://example.com/page',
                 targetWindowId: 14,
-                targetDocumentId: 'selection-panel'
+                targetReceiverToken: receiverToken
             }
         ]);
 

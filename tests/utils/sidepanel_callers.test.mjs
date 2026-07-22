@@ -12,6 +12,7 @@ const originalDocument = globalThis.document;
 const originalWindow = globalThis.window;
 const chromeMock = createChromeMock();
 const domListeners = new Map();
+const token = label => `${label}:${'x'.repeat(32)}`;
 
 chromeMock.windows = { getCurrent: async () => ({ id: 77 }) };
 chromeMock.runtime.sendMessage = async () => {};
@@ -61,7 +62,7 @@ describe('caller handoff gating', () => {
         chromeMock.runtime.sendMessage = async message => {
             messages.push(message);
             if (message.type === 'open_side_panel') {
-                return { ok: true, windowId: 19, documentId: 'panel-19' };
+                return { ok: true, windowId: 19, receiverToken: token('panel-19') };
             }
             return { ok: true };
         };
@@ -69,7 +70,7 @@ describe('caller handoff gating', () => {
         expect(await openSidePanelWithHandoff({ type: 'reconstruct_chat', options: { chatId: 3 } })).toEqual({
             ok: true,
             windowId: 19,
-            documentId: 'panel-19'
+            receiverToken: token('panel-19')
         });
         expect(messages).toEqual([
             { type: 'open_side_panel' },
@@ -77,7 +78,7 @@ describe('caller handoff gating', () => {
                 type: 'reconstruct_chat',
                 options: { chatId: 3 },
                 targetWindowId: 19,
-                targetDocumentId: 'panel-19'
+                targetReceiverToken: token('panel-19')
             }
         ]);
     });
@@ -87,7 +88,7 @@ describe('caller handoff gating', () => {
         chromeMock.runtime.sendMessage = async message => {
             messages.push(message);
             if (message.type === 'open_side_panel') {
-                return { ok: true, windowId: 20, documentId: 'closed-panel' };
+                return { ok: true, windowId: 20, receiverToken: token('closed-panel') };
             }
             return undefined;
         };
@@ -96,9 +97,9 @@ describe('caller handoff gating', () => {
             ok: false,
             error: 'Side panel did not acknowledge the handoff',
             windowId: 20,
-            documentId: 'closed-panel'
+            receiverToken: token('closed-panel')
         });
-        expect(messages[1].targetDocumentId).toBe('closed-panel');
+        expect(messages[1].targetReceiverToken).toBe(token('closed-panel'));
     });
 });
 
@@ -119,7 +120,7 @@ describe('popup close ordering', () => {
         expect(events).toEqual(['open_side_panel']);
 
         events.push('panel-ready-and-open');
-        openResponse.resolve({ ok: true, windowId: 77, documentId: 'popup-panel' });
+        openResponse.resolve({ ok: true, windowId: 77, receiverToken: token('popup-panel') });
         await new Promise(resolve => setTimeout(resolve, 0));
         expect(events).toEqual([
             'open_side_panel',

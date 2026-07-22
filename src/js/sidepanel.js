@@ -56,12 +56,12 @@ export function waitForCreatedTabReceiver(createTab, expectedUrl, timeoutMs = PO
                 message.type !== 'sidepanel_ready'
                 || sender?.url !== expectedUrl
                 || !Number.isInteger(tabId)
-                || !sender.documentId
-                || message.documentId !== sender.documentId
+                || typeof message.receiverToken !== 'string'
+                || message.receiverToken.length < 32
             ) return;
-            readyTabs.set(tabId, sender.documentId);
+            readyTabs.set(tabId, message.receiverToken);
             if (tabId === targetTabId) {
-                finish(() => resolve({ tab: sender.tab, documentId: sender.documentId }));
+                finish(() => resolve({ tab: sender.tab, receiverToken: message.receiverToken }));
             }
         };
 
@@ -90,8 +90,8 @@ export function waitForCreatedTabReceiver(createTab, expectedUrl, timeoutMs = PO
                 return;
             }
             targetTabId = tab.id;
-            const documentId = readyTabs.get(targetTabId);
-            if (documentId) finish(() => resolve({ tab, documentId }));
+            const receiverToken = readyTabs.get(targetTabId);
+            if (receiverToken) finish(() => resolve({ tab, receiverToken }));
         }, error => finish(() => reject(error)));
     });
 }
@@ -114,7 +114,7 @@ export class SidepanelApp {
         this.hostContextReady = false;
         this.hostWindowId = null;
         this.hostTabId = null;
-        this.hostDocumentId = null;
+        this.receiverToken = crypto.randomUUID();
         this.receiverReady = false;
         this.popoutTransferPromise = null;
 
@@ -767,7 +767,7 @@ export class SidepanelApp {
     }
 
     isHandoffTarget(message) {
-        if (message.targetDocumentId != null && message.targetDocumentId !== this.hostDocumentId) {
+        if (!this.receiverReady || message.targetReceiverToken !== this.receiverToken) {
             return false;
         }
         if (message.targetTabId != null) {
@@ -783,20 +783,21 @@ export class SidepanelApp {
         chrome.runtime.sendMessage({
             type: 'sidepanel_ready',
             windowId: this.hostWindowId,
-            documentId: this.hostDocumentId
+            receiverToken: this.receiverToken
         }).catch(() => {});
     }
 
     async markReceiverReady() {
-        const registration = await chrome.runtime.sendMessage({
-            type: 'register_sidepanel_receiver',
-            windowId: this.hostWindowId,
-            tabId: this.hostTabId
-        });
-        if (!registration?.ok || !registration.documentId) {
-            throw new Error('Could not register side panel receiver');
+        if (this.hostTabId == null) {
+            const registration = await chrome.runtime.sendMessage({
+                type: 'register_sidepanel_receiver',
+                windowId: this.hostWindowId,
+                receiverToken: this.receiverToken
+            });
+            if (!registration?.ok || registration.receiverToken !== this.receiverToken) {
+                throw new Error('Could not register side panel receiver');
+            }
         }
-        this.hostDocumentId = registration.documentId;
         this.receiverReady = true;
         this.announceReceiverReady();
     }
@@ -1082,8 +1083,9 @@ export class SidepanelApp {
         if (activeTabState.isSidePanel) {
             // Panel -> Tab
             const sidePanelUrl = chrome.runtime.getURL('src/html/sidepanel.html');
+            let target = null;
             try {
-                const target = await waitForCreatedTabReceiver(
+                target = await waitForCreatedTabReceiver(
                     () => chrome.tabs.create({ url: sidePanelUrl }),
                     sidePanelUrl
                 );
@@ -1091,15 +1093,16 @@ export class SidepanelApp {
                     type: "reconstruct_chat",
                     options: reconstructOptions,
                     targetTabId: target.tab.id,
-                    targetDocumentId: target.documentId
+                    targetReceiverToken: target.receiverToken
                 });
                 if (!delivery?.ok) throw new Error(delivery?.error || 'Popped-out chat rejected the handoff');
-                window.close();
-                return true;
             } catch (error) {
+                if (target) await chrome.tabs.remove(target.tab.id).catch(() => {});
                 activeChatUI?.addErrorMessage(error?.message || 'Failed to pop out chat.');
                 return false;
             }
+            window.close();
+            return true;
             
         } else {
             // Tab -> Panel

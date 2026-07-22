@@ -37,11 +37,11 @@ const originalChrome = globalThis.chrome;
 const runtimeMessages = new MockChromeEvent();
 const commandEvents = new MockChromeEvent();
 const panelUrl = 'chrome-extension://test/src/html/sidepanel.html';
+const token = label => `${label}:${'x'.repeat(32)}`;
 const realSidepanelContext = {
     contextType: 'SIDE_PANEL',
     documentUrl: panelUrl,
-    windowId: -1,
-    documentId: 'real-panel'
+    windowId: -1
 };
 let getContextsCalls = 0;
 let sentMessages = [];
@@ -87,10 +87,10 @@ const { openPanel } = await import('../../src/js/background.js');
 const permanentRuntimeListeners = new Set(runtimeMessages.listeners);
 const backgroundMessageListener = [...permanentRuntimeListeners][0];
 
-const announceReady = (windowId, documentId, tab = null) => {
-    const sender = { documentId, url: panelUrl };
+const announceReady = (windowId, receiverToken, tab = null) => {
+    const sender = { url: panelUrl };
     if (tab) sender.tab = tab;
-    runtimeMessages.emit({ type: 'sidepanel_ready', windowId, documentId }, sender);
+    runtimeMessages.emit({ type: 'sidepanel_ready', windowId, receiverToken }, sender);
 };
 
 beforeEach(() => {
@@ -111,15 +111,15 @@ afterAll(() => {
 });
 
 describe('targeted side panel readiness', () => {
-    test('registers sender document identity without relying on the context window ID', async () => {
+    test('registers a receiver token without relying on sender document or context window IDs', async () => {
         const responseRequest = deferred();
         expect(backgroundMessageListener(
-            { type: 'register_sidepanel_receiver', windowId: 16 },
-            { documentId: 'panel-16', url: panelUrl },
+            { type: 'register_sidepanel_receiver', windowId: 16, receiverToken: token('panel-16') },
+            { url: panelUrl },
             responseRequest.resolve
         )).toBe(false);
 
-        expect(await responseRequest.promise).toEqual({ ok: true, documentId: 'panel-16' });
+        expect(await responseRequest.promise).toEqual({ ok: true, receiverToken: token('panel-16') });
         expect(realSidepanelContext.windowId).toBe(-1);
         expect(getContextsCalls).toBe(0);
     });
@@ -132,7 +132,7 @@ describe('targeted side panel readiness', () => {
             events.push(`open:${windowId}`);
             expect(runtimeMessages.listeners.size).toBe(permanentRuntimeListeners.size + 1);
             restored = true;
-            announceReady(windowId, 'cold-panel');
+            announceReady(windowId, token('cold-panel'));
             return openRequest.promise;
         };
 
@@ -149,7 +149,7 @@ describe('targeted side panel readiness', () => {
         expect(events).toEqual(['open:17']);
 
         openRequest.resolve();
-        expect(await opening).toEqual({ windowId: 17, documentId: 'cold-panel' });
+        expect(await opening).toEqual({ windowId: 17, receiverToken: token('cold-panel') });
         expect(events).toEqual(['open:17', 'complete']);
         expect(runtimeMessages.listeners.size).toBe(permanentRuntimeListeners.size);
     });
@@ -157,13 +157,13 @@ describe('targeted side panel readiness', () => {
     test('probes an already-ready panel for an immediate warm handoff after worker restart', async () => {
         probeHandler = message => {
             if (message.type === 'probe_sidepanel_ready' && message.windowId === 23) {
-                announceReady(23, 'warm-panel');
+                announceReady(23, token('warm-panel'));
             }
         };
 
         expect(await openPanel({ windowId: 23 }, null, 100)).toEqual({
             windowId: 23,
-            documentId: 'warm-panel'
+            receiverToken: token('warm-panel')
         });
         expect(openedWindowIds).toEqual([23]);
         expect(realSidepanelContext.windowId).toBe(-1);
@@ -176,15 +176,15 @@ describe('targeted side panel readiness', () => {
         const first = openPanel({ windowId: 31 }, null, 100).then(() => { firstComplete = true; });
         const second = openPanel({ windowId: 32 }, null, 100).then(() => { secondComplete = true; });
 
-        announceReady(99, 'other-window');
-        announceReady(31, 'popped-out', { id: 300, windowId: 31 });
-        announceReady(32, 'panel-32');
+        announceReady(99, token('other-window'));
+        announceReady(31, token('popped-out'), { id: 300, windowId: 31 });
+        announceReady(32, token('panel-32'));
         await new Promise(resolve => setTimeout(resolve, 0));
 
         expect(firstComplete).toBe(false);
         expect(secondComplete).toBe(true);
 
-        announceReady(31, 'panel-31');
+        announceReady(31, token('panel-31'));
         await Promise.all([first, second]);
         expect(openedWindowIds).toEqual([31, 32]);
         expect(runtimeMessages.listeners.size).toBe(permanentRuntimeListeners.size);
@@ -193,7 +193,7 @@ describe('targeted side panel readiness', () => {
     test('uses only concrete target IDs, including the focused-window fallback', async () => {
         const completeWhenProbed = message => {
             if (message.type !== 'probe_sidepanel_ready') return;
-            announceReady(message.windowId, `panel-${message.windowId}`);
+            announceReady(message.windowId, token(`panel-${message.windowId}`));
         };
         probeHandler = completeWhenProbed;
 
@@ -202,10 +202,10 @@ describe('targeted side panel readiness', () => {
         expect(openedWindowIds).not.toContain(-2);
     });
 
-    test('commands target the ready document and await its acknowledgement', async () => {
+    test('commands target the ready receiver token and await its acknowledgement', async () => {
         probeHandler = message => {
             if (message.type === 'probe_sidepanel_ready') {
-                announceReady(message.windowId, 'command-panel');
+                announceReady(message.windowId, token('command-panel'));
             }
         };
         messageHandler = message => message.type === 'new_chat' ? { ok: true } : undefined;
@@ -216,7 +216,7 @@ describe('targeted side panel readiness', () => {
         expect(sentMessages.at(-1)).toEqual({
             type: 'new_chat',
             targetWindowId: 35,
-            targetDocumentId: 'command-panel'
+            targetReceiverToken: token('command-panel')
         });
     });
 });

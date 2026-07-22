@@ -106,7 +106,7 @@ async function handleMouseUp(event) {
             text: selection, 
             url: window.location.href,
             targetWindowId: response.windowId,
-            targetDocumentId: response.documentId
+            targetReceiverToken: response.receiverToken
         }).catch(() => null);
         if (!delivery?.ok && requestId === selectionRequestId) lastSelection = "";
         
