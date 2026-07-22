@@ -1,5 +1,5 @@
 import { ModeEnum } from './storage_utils.js';
-import { resolveConfiguredModelIds } from './model_selection.js';
+import { findFirstAvailableModel, resolveConfiguredModelIds } from './model_selection.js';
 import {
     THINKING_STATE,
     initializeArenaCouncilState,
@@ -316,12 +316,7 @@ export class SettingsStateManager extends SettingsManager {
     }
 
     getFirstAvailableModel(excludedModel = null) {
-        for (const provider in this.state.settings.models) {
-            const modelIds = Object.keys(this.state.settings.models[provider]);
-            const modelId = modelIds.find(id => id !== excludedModel);
-            if (modelId) return modelId;
-        }
-        return null;
+        return findFirstAvailableModel(this.state.settings.models, excludedModel);
     }
 
     async getPrompt(type) {

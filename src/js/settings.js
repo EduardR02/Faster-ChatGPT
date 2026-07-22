@@ -479,7 +479,7 @@ export class SettingsUI {
         targetRow.append(input, label);
     }
 
-    async removeModel() {
+    removeModel() {
         const displayNameInput = document.getElementById('model-display-name-input');
         const apiNameInput = document.getElementById('model-api-name-input');
         const displayName = displayNameInput.value.trim();

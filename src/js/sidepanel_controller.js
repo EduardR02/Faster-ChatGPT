@@ -322,7 +322,12 @@ export class SidepanelController {
 
         const activeArenaModels = this.state.getArenaModels();
         if (['model_a', 'model_b', 'draw', 'draw(bothbad)'].includes(choice)) {
-            await this.arenaRating.addMatchAndUpdate(activeArenaModels[0], activeArenaModels[1], choice);
+            try {
+                await this.arenaRating.addMatchAndUpdate(activeArenaModels[0], activeArenaModels[1], choice);
+            } catch (error) {
+                // Rating persistence must not wedge arena resolution; fall back to cached ratings.
+                console.error('Arena rating update failed:', error);
+            }
         }
 
         const modelEloRatings = [

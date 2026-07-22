@@ -101,7 +101,6 @@ export async function fetchAndApplyAppendedMessages({
     const messages = takeContiguousMessages(fetchedMessages, appendWindow.startIndex);
     if (!messages.length) return false;
 
-    if (!ownsRequest()) return false;
     applyUI(messages, appendWindow.startIndex, request.chatId);
     if (!ownsRequest()) return false;
     applyCore(messages);
@@ -134,7 +133,6 @@ export async function fetchAndApplyMessageUpdate({
         return applyMissingRange(request, missingRange, message);
     }
 
-    if (!ownsRequest()) return false;
     beforeRefresh();
     await refreshHistory(message);
     if (!ownsRequest()) return false;

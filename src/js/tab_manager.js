@@ -3,7 +3,7 @@ import { SidepanelChatUI } from './chat_ui.js';
 import { SidepanelController } from './sidepanel_controller.js';
 import { createElementWithClass } from './ui_utils.js';
 import { createStateProxy } from './state_proxy.js';
-import { hasValidMultiModelSelection } from './model_selection.js';
+import { findFirstAvailableModel, hasValidMultiModelSelection } from './model_selection.js';
 
 const STORAGE_KEY = 'sidekick_open_tabs';
 const MAX_TABS = 20;
@@ -17,14 +17,6 @@ const indexModelProviders = (models) => {
         }
     }
     return providers;
-};
-
-const firstAvailableModel = (models, excludedModel) => {
-    for (const providerModels of Object.values(models || {})) {
-        const model = Object.keys(providerModels).find(modelId => modelId !== excludedModel);
-        if (model) return model;
-    }
-    return '';
 };
 
 /**
@@ -176,7 +168,7 @@ export class TabManager {
             const currentModel = tabState.getCurrentModel();
             const providerChanged = this.modelProviders.get(currentModel) !== nextProviders.get(currentModel);
             if (!providerChanged) continue;
-            tabState.setCurrentModel(firstAvailableModel(models, currentModel));
+            tabState.setCurrentModel(findFirstAvailableModel(models, currentModel) ?? '');
             if (tabState === activeTabState) activeModelChanged = true;
         }
 

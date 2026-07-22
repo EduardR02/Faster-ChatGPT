@@ -24,6 +24,12 @@ export const attachHistoryPopupEscape = (popup, close) => {
         event.stopPropagation();
         close();
     });
+    // Mouse-opened popups keep focus outside the popup, so Escape only reaches the document.
+    popup.ownerDocument.addEventListener('keydown', event => {
+        if (event.key !== 'Escape' || !popup.classList.contains('active')) return;
+        event.preventDefault();
+        close();
+    });
 };
 
 export const focusHistoryPopupTrigger = (historyItem) => {

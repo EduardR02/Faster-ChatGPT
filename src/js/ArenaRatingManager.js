@@ -10,6 +10,7 @@ export class ArenaRatingManager {
             db: null, 
             cachedRatings: {},
             ratingsWrite: Promise.resolve(),
+            pendingWrite: Promise.resolve(),
             lockName: `arena-ratings:${dbName}:${storeName}:${cacheKey}`
         });
     }
@@ -131,7 +132,13 @@ export class ArenaRatingManager {
         });
 
         this.cachedRatings = ratings;
-        this.ratingsWrite = chrome.storage.local.set({ [this.cacheKey]: ratings });
+        this.pendingWrite = chrome.storage.local.set({ [this.cacheKey]: ratings });
+        // The ordering promise must never reject: the triggering operation observes
+        // write failures via pendingWrite, but a rejected write must not poison
+        // later add/recalculate/wipe calls awaiting ratingsWrite.
+        this.ratingsWrite = this.pendingWrite.catch(error => {
+            console.error('Failed to persist arena ratings:', error);
+        });
         return ratings;
     }
 
@@ -159,7 +166,7 @@ export class ArenaRatingManager {
             await this.saveMatch(modelA, modelB, result);
             await this.loadRatings();
             const ratings = this.calculateElo([{ model_a: modelA, model_b: modelB, result }]);
-            await this.ratingsWrite;
+            await this.pendingWrite;
             return ratings;
         });
     }
@@ -174,7 +181,7 @@ export class ArenaRatingManager {
             const matchHistory = await this.getHistory();
             this.cachedRatings = {};
             const ratings = this.calculateElo(matchHistory);
-            await this.ratingsWrite;
+            await this.pendingWrite;
             return ratings;
         });
     }
