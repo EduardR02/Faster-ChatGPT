@@ -109,6 +109,7 @@ export class SidepanelApp {
         this.openedForReconstruct = false;
         this.deferRestoredTabSwitchLoads = false;
         this.restoredTabLoadTimers = new Map();
+        this.pageContextRequests = new Map();
         this.startupAt = Date.now();
         this.startupNewTabId = null;
         this.hostContextReady = false;
@@ -220,13 +221,35 @@ export class SidepanelApp {
     async attachPageContextToTab(tabId, webpageContext = undefined) {
         if (!tabId) return;
 
-        let tab = this.tabManager.getTab(tabId);
+        const tab = this.tabManager.getTab(tabId);
         if (!tab?.controller) return;
+        const requestToken = Symbol('page-context-request');
+        this.pageContextRequests.set(tabId, requestToken);
 
-        if (tab.reconstruction !== null) {
-            const ready = await this.ensureTabReady(tabId);
-            if (!ready || this.tabManager.getTab(tabId) !== tab) return;
+        try {
+            if (tab.reconstruction !== null) {
+                const ready = await this.ensureTabReady(tabId);
+                if (!ready) return;
+            }
+
+            await tab.controller.maybeAttachCurrentPageContext(
+                'chat',
+                webpageContext,
+                () => this.canApplyPageContext(tabId, tab, requestToken)
+            );
+        } finally {
+            if (this.pageContextRequests.get(tabId) === requestToken) {
+                this.pageContextRequests.delete(tabId);
+            }
         }
+    }
+
+    canApplyPageContext(tabId, tab, requestToken) {
+        if (
+            this.pageContextRequests.get(tabId) !== requestToken
+            || this.tabManager.getTab(tabId) !== tab
+            || tab.reconstruction !== null
+        ) return false;
 
         const chatCore = tab.controller.chatCore;
         const currentText = this.getActiveTab()?.id === tabId
@@ -238,10 +261,13 @@ export class SidepanelApp {
         const hasContext = chatCore.hasWebpageContext();
 
         if (hasTypedText || hasPendingMedia || hasStarted || hasContext) {
-            return;
+            return false;
         }
+        return true;
+    }
 
-        await tab.controller.maybeAttachCurrentPageContext('chat', webpageContext);
+    cancelPageContextRequest(tabId) {
+        this.pageContextRequests.delete(tabId);
     }
 
     async initializeFreshChatTab(tabId, options = {}) {
@@ -251,6 +277,7 @@ export class SidepanelApp {
         const { controller, chatUI, tabState } = tab;
         if (!controller || !chatUI || !tabState) return false;
 
+        this.cancelPageContextRequest(tab.id);
         const title = options.title || 'New Chat';
         tabState.chatId = null;
         controller.initStates(title);
@@ -258,7 +285,7 @@ export class SidepanelApp {
         this.tabManager.updateTabTitle(tab.id, title);
 
         if (options.attachPageContext !== false) {
-            await this.attachPageContextToTab(tab.id);
+            void this.attachPageContextToTab(tab.id);
         }
 
         if (options.loadPrompt) {
@@ -624,6 +651,7 @@ export class SidepanelApp {
 
     handleTabClose(tabId) {
         this.cancelRestoredTabLoad(tabId);
+        this.cancelPageContextRequest(tabId);
         this.voiceManager.handleTabClose(tabId); 
         this.tabTextareaContent.delete(tabId); 
     }
@@ -819,6 +847,7 @@ export class SidepanelApp {
         const activeTabState = this.getActiveTabState();
         
         if (!activeController || !activeChatUI) return false;
+        this.cancelPageContextRequest(this.getActiveTab()?.id);
         if (activeTabState) {
             activeTabState.chatId = null;
         }
@@ -880,6 +909,7 @@ export class SidepanelApp {
         if (isFullChat) {
             const existingTab = this.findFullChatTab(reconstructOptions.chatId);
             if (existingTab) {
+                this.cancelPageContextRequest(existingTab.id);
                 if (this.startupNewTabId && this.startupNewTabId !== existingTab.id && Date.now() - this.startupAt < STARTUP_WINDOW_MS && this.isTabReallyEmpty(this.startupNewTabId)) {
                     this.tabManager.closeTab(this.startupNewTabId);
                     this.startupNewTabId = null;
@@ -900,6 +930,7 @@ export class SidepanelApp {
             return false;
         }
 
+        this.cancelPageContextRequest(targetTab.id);
         const pending = { status: 'pending', options: reconstructOptions };
         targetTab.reconstruction = pending;
         return this.ensureTabReady(targetTab.id);

@@ -89,26 +89,34 @@ export class SidepanelController {
         return true;
     }
 
-    async maybeAttachCurrentPageContext(mode, providedContext = undefined) {
+    async maybeAttachCurrentPageContext(mode, providedContext = undefined, canApply = () => true) {
         if (
             mode !== 'chat'
+            || !this.state.getSetting('auto_page_context')
+            || this.chatCore.isWebpageContextDismissed()
+            || this.chatCore.hasWebpageContext()
+            || !canApply()
+        ) {
+            return;
+        }
+
+        let webpageContext = providedContext;
+        if (providedContext === undefined) {
+            webpageContext = await this.requestCurrentPageContext();
+            if (webpageContext === undefined) {
+                return;
+            }
+        }
+
+        if (
+            !canApply()
             || !this.state.getSetting('auto_page_context')
             || this.chatCore.isWebpageContextDismissed()
             || this.chatCore.hasWebpageContext()
         ) {
             return;
         }
-
-        if (providedContext === undefined) {
-            const webpageContext = await this.requestCurrentPageContext();
-            if (webpageContext === undefined) {
-                return;
-            }
-            this.applyWebpageContext(webpageContext);
-            return;
-        }
-
-        this.applyWebpageContext(providedContext);
+        this.applyWebpageContext(webpageContext);
     }
 
     async makeApiCall(modelId, isRegeneration = false, options = {}) {
