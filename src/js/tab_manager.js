@@ -46,7 +46,14 @@ export class TabManager {
         this.initTabBar();
         
         if (this.globalState) {
-            this.globalState.subscribeToSetting('models', models => this.reconcileModels(models));
+            this.globalState.subscribeToSetting('models', models => {
+                this.reconcileModels(models);
+                this.reconcileModes({ models });
+            });
+            this.globalState.subscribeToSetting('arena_models', arenaModels => this.reconcileModes({ arenaModels }));
+            this.globalState.subscribeToSetting('council_models', councilModels => this.reconcileModes({ councilModels }));
+            this.globalState.subscribeToSetting('arena_mode', arenaEnabled => this.reconcileModes({ arenaEnabled }));
+            this.globalState.subscribeToSetting('council_mode', councilEnabled => this.reconcileModes({ councilEnabled }));
             this.globalState.runOnReady?.(() => {
                 this.modelProviders = indexModelProviders(this.globalState.getSetting('models'));
             });
@@ -163,15 +170,57 @@ export class TabManager {
 
     reconcileModels(models) {
         const nextProviders = indexModelProviders(models);
+        const activeTabState = this.getActiveTabState();
+        let activeModelChanged = false;
 
         for (const { tabState } of this.tabs.values()) {
             const currentModel = tabState.getCurrentModel();
             const providerChanged = this.modelProviders.get(currentModel) !== nextProviders.get(currentModel);
             if (!providerChanged) continue;
             tabState.setCurrentModel(firstAvailableModel(models, currentModel));
+            if (tabState === activeTabState) activeModelChanged = true;
         }
 
         this.modelProviders = nextProviders;
+
+        if (activeModelChanged) {
+            const currentModel = activeTabState.getCurrentModel() || null;
+            if (this.globalState.getSetting('current_model') !== currentModel) {
+                this.globalState.updateSettingsLocal({ current_model: currentModel });
+            }
+        }
+    }
+
+    reconcileModes(overrides = {}) {
+        const models = overrides.models ?? this.globalState.getSetting('models') ?? {};
+        const availableModels = indexModelProviders(models);
+        const hasValidModels = selectedModels =>
+            new Set((selectedModels || []).filter(modelId => availableModels.has(modelId))).size >= 2;
+        const arenaEnabled = overrides.arenaEnabled ?? this.globalState.getSetting('arena_mode');
+        const councilEnabled = overrides.councilEnabled ?? this.globalState.getSetting('council_mode');
+        const arenaModels = overrides.arenaModels ?? this.globalState.getSetting('arena_models');
+        const councilModels = overrides.councilModels ?? this.globalState.getSetting('council_models');
+        const arenaValid = !!arenaEnabled && hasValidModels(arenaModels);
+        const councilValid = !!councilEnabled && hasValidModels(councilModels);
+        const activeTabState = this.getActiveTabState();
+        let activeModeChanged = false;
+
+        for (const { tabState } of this.tabs.values()) {
+            if (!arenaValid && tabState.isArenaModeActive) {
+                tabState.clearArenaState();
+                if (tabState === activeTabState) activeModeChanged = true;
+            }
+            if (!councilValid && tabState.isCouncilModeActive) {
+                tabState.clearCouncilState();
+                if (tabState === activeTabState) activeModeChanged = true;
+            }
+        }
+
+        const modeUpdates = {};
+        if (arenaEnabled && !arenaValid) modeUpdates.arena_mode = false;
+        if (councilEnabled && !councilValid) modeUpdates.council_mode = false;
+        if (Object.keys(modeUpdates).length > 0) this.globalState.updateSettingsLocal(modeUpdates);
+        if (activeModeChanged) this.onTabStateReconciled?.(activeTabState);
     }
 
     renderTabButton(tab) {

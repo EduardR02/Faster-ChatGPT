@@ -380,7 +380,7 @@ export class SettingsUI {
         }
 
         const invalidMultiSelection = (currentMode === 'arena' || currentMode === 'council') &&
-            document.querySelectorAll('input[name="model_select"]:checked').length < 2;
+            Array.from(modelInputs).filter(input => input.checked).length < 2;
         document.getElementById('models-label').classList.toggle('settings-error', invalidMultiSelection);
     }
 

@@ -115,7 +115,9 @@ export class SettingsManager {
                     current = current[key];
                 }
             });
+        }
 
+        for (const [settingPath, value] of Object.entries(settingUpdates)) {
             this.listeners.get(settingPath)?.forEach(callback => callback(value));
         }
     }
@@ -286,40 +288,19 @@ export class SettingsStateManager extends SettingsManager {
             delete this.pendingChanges.council_collector_model;
         }
 
-        const arenaModels = this.state.settings.arena_models;
-        if (arenaModels?.includes(apiName)) {
-            settingUpdates.arena_models = arenaModels.filter(modelId => modelId !== apiName);
-            if (settingUpdates.arena_models.length < 2 && this.state.settings.arena_mode) {
-                settingUpdates.arena_mode = false;
-            }
-        }
-        if (this.pendingChanges.arena_models?.includes(apiName)) {
-            this.pendingChanges.arena_models = this.pendingChanges.arena_models.filter(m => m !== apiName);
-            if (this.pendingChanges.arena_models.length < 2) {
-                delete this.pendingChanges.arena_models;
-                delete this.pendingChanges.arena_mode;
-            }
-        }
-        if ((settingUpdates.arena_models || arenaModels)?.length < 2 && !this.pendingChanges.arena_models) {
-            delete this.pendingChanges.arena_mode;
-        }
+        for (const mode of ['arena', 'council']) {
+            const modelsKey = `${mode}_models`;
+            const modeKey = `${mode}_mode`;
+            const persistedModels = this.state.settings[modelsKey];
+            const pendingModels = this.pendingChanges[modelsKey];
+            if (!persistedModels?.includes(apiName) && pendingModels === undefined) continue;
 
-        const councilModels = this.state.settings.council_models;
-        if (councilModels?.includes(apiName)) {
-            settingUpdates.council_models = councilModels.filter(modelId => modelId !== apiName);
-            if (settingUpdates.council_models.length < 2 && this.state.settings.council_mode) {
-                settingUpdates.council_mode = false;
-            }
-        }
-        if (this.pendingChanges.council_models?.includes(apiName)) {
-            this.pendingChanges.council_models = this.pendingChanges.council_models.filter(m => m !== apiName);
-            if (this.pendingChanges.council_models.length < 2) {
-                delete this.pendingChanges.council_models;
-                delete this.pendingChanges.council_mode;
-            }
-        }
-        if ((settingUpdates.council_models || councilModels)?.length < 2 && !this.pendingChanges.council_models) {
-            delete this.pendingChanges.council_mode;
+            const selectedModels = pendingModels ?? persistedModels ?? [];
+            const remainingModels = selectedModels.filter(modelId => modelId !== apiName);
+            settingUpdates[modelsKey] = remainingModels;
+            settingUpdates[modeKey] = !!this.getSetting(modeKey) && remainingModels.length >= 2;
+            delete this.pendingChanges[modelsKey];
+            delete this.pendingChanges[modeKey];
         }
 
         this.updateSettingsPersistent(settingUpdates);

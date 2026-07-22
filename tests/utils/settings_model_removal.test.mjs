@@ -82,8 +82,9 @@ describe('SettingsUI model removal', () => {
       const { document, settings } = await createSettings({
         current_model: 'third',
         [modeKey]: true,
-        [modelsKey]: ['Remove-Me', 'survivor']
+        [modelsKey]: ['Remove-Me', 'third']
       });
+      settings.stateManager.queueSettingChange(modelsKey, ['Remove-Me', 'survivor']);
       document.getElementById(`${mode}_select`).checked = true;
       for (const modelId of ['Remove-Me', 'survivor']) {
         const input = document.getElementById(modelId);
@@ -100,6 +101,39 @@ describe('SettingsUI model removal', () => {
       expect(document.getElementById(modeKey).checked).toBe(false);
       expect(document.getElementById(`${mode}_select`).checked).toBe(false);
       expect(document.getElementById('survivor').checked).toBe(false);
+      expect(document.getElementById('third').checked).toBe(true);
+      expect(document.getElementById('models-label').classList.contains('settings-error')).toBe(false);
+    });
+
+    test(`typed removal persists a valid pending ${mode} selection and keeps the mode enabled`, async () => {
+      const modeKey = `${mode}_mode`;
+      const modelsKey = `${mode}_models`;
+      const { document, settings } = await createSettings({
+        current_model: 'survivor',
+        [modeKey]: false,
+        [modelsKey]: ['Remove-Me', 'survivor']
+      });
+      settings.stateManager.queueSettingChange(modeKey, true);
+      settings.stateManager.queueSettingChange(modelsKey, ['Remove-Me', 'survivor', 'third']);
+      document.getElementById(modeKey).checked = true;
+      document.getElementById(`${mode}_select`).checked = true;
+      for (const modelId of ['Remove-Me', 'survivor', 'third']) {
+        const input = document.getElementById(modelId);
+        input.type = 'checkbox';
+        input.checked = true;
+      }
+      document.getElementById('model-api-name-input').value = 'remove-me';
+
+      await settings.removeModel();
+
+      const stored = await chrome.storage.local.get([modeKey, modelsKey]);
+      expect(stored[modeKey]).toBe(true);
+      expect(stored[modelsKey]).toEqual(['survivor', 'third']);
+      expect(settings.stateManager.pendingChanges[modeKey]).toBeUndefined();
+      expect(settings.stateManager.pendingChanges[modelsKey]).toBeUndefined();
+      expect(document.getElementById(modeKey).checked).toBe(true);
+      expect(document.getElementById(`${mode}_select`).checked).toBe(true);
+      expect(document.getElementById('survivor').checked).toBe(true);
       expect(document.getElementById('third').checked).toBe(true);
       expect(document.getElementById('models-label').classList.contains('settings-error')).toBe(false);
     });

@@ -51,6 +51,7 @@ export class SidepanelApp {
             tabContentContainer: document.getElementById('tab-content-area'),
             onTabSwitch: (newTab, oldTabId) => this.handleTabSwitch(newTab, oldTabId),
             onTabClose: (tabId) => this.handleTabClose(tabId),
+            onTabStateReconciled: tabState => this.updateHeaderControls(tabState),
             onNewTabRequested: () => { void this.handleNewChat({ forceNewTab: true }); }
         });
 
