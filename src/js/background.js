@@ -62,8 +62,13 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 chrome.commands.onCommand.addListener(async (command, tab) => {
     if (command === "new-chat") {
         try {
-            const windowId = await openPanel(tab);
-            chrome.runtime.sendMessage({ type: "new_chat", targetWindowId: windowId }).catch(() => {});
+            const target = await openPanel(tab);
+            const response = await chrome.runtime.sendMessage({
+                type: "new_chat",
+                targetWindowId: target.windowId,
+                targetDocumentId: target.documentId
+            });
+            if (!response?.ok) throw new Error(response?.error || "Side panel rejected new chat");
         } catch (error) {
             console.error("Failed to open side panel:", error);
         }
@@ -82,16 +87,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return true;
         case "open_side_panel":
             openPanel(sender?.tab, message.windowId)
-                .then(windowId => sendResponse({ ok: true, windowId }))
+                .then(target => sendResponse({ ok: true, ...target }))
                 .catch(error => sendResponse({ ok: false, error: error?.message || String(error) }));
             return true;
 
-        case "is_sidepanel_open":
-            resolveTargetWindowId(sender?.tab, message.windowId)
-                .then(isSidePanelOpen)
-                .then(isOpen => sendResponse({ isOpen }))
-                .catch(() => sendResponse({ isOpen: false }));
-            return true;
+        case "register_sidepanel_receiver":
+            if (!isSidepanelDocument(sender) || !isConcreteWindowId(message.windowId)) {
+                sendResponse({ ok: false });
+                return false;
+            }
+            sendResponse({ ok: true, documentId: sender.documentId });
+            return false;
 
         case "close_side_panel":
             chrome.sidePanel.setOptions({ 
@@ -213,20 +219,14 @@ async function resolveTargetWindowId(tab, requestedWindowId) {
     return focusedWindow.id;
 }
 
-const getPanelContexts = windowId => chrome.runtime.getContexts({
-    contextTypes: ["SIDE_PANEL"],
-    documentUrls: [PANEL_PATH],
-    windowIds: [windowId]
-});
-
-async function isReadyMessageFromTarget(message, sender, windowId) {
-    if (message.type !== "sidepanel_ready" || message.windowId !== windowId || !sender?.documentId) {
-        return false;
-    }
-
-    const contexts = await getPanelContexts(windowId);
-    return contexts.some(context => context.documentId === sender.documentId);
-}
+const isSidepanelDocument = sender => !!sender?.documentId && sender.url === PANEL_PATH;
+const isReadyMessageFromTarget = (message, sender, windowId) => (
+    message.type === "sidepanel_ready"
+    && message.windowId === windowId
+    && message.documentId === sender?.documentId
+    && isSidepanelDocument(sender)
+    && sender.tab == null
+);
 
 function createPanelReadyWaiter(windowId, timeoutMs) {
     let settled = false;
@@ -249,9 +249,9 @@ function createPanelReadyWaiter(windowId, timeoutMs) {
     });
     const listener = (message, sender) => {
         if (message.type !== "sidepanel_ready" || message.windowId !== windowId) return;
-        void isReadyMessageFromTarget(message, sender, windowId).then(isTarget => {
-            if (isTarget) complete(() => finish(true));
-        });
+        if (isReadyMessageFromTarget(message, sender, windowId)) {
+            complete(() => finish(sender.documentId));
+        }
     };
 
     chrome.runtime.onMessage.addListener(listener);
@@ -276,8 +276,8 @@ async function openPanelInWindow(windowId, timeoutMs) {
             windowId
         }).catch(() => {});
 
-        await Promise.all([enableRequest, openRequest, readiness.promise]);
-        return windowId;
+        const [, , documentId] = await Promise.all([enableRequest, openRequest, readiness.promise]);
+        return { windowId, documentId };
     } catch (error) {
         readiness.cancel();
         throw error;
@@ -291,9 +291,4 @@ export function openPanel(tab, requestedWindowId, timeoutMs = PANEL_READY_TIMEOU
     }
     return resolveTargetWindowId(tab, requestedWindowId)
         .then(resolvedWindowId => openPanelInWindow(resolvedWindowId, timeoutMs));
-}
-
-async function isSidePanelOpen(windowId) {
-    const contexts = await getPanelContexts(windowId);
-    return contexts.length > 0;
 }

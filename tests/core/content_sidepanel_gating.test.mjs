@@ -28,7 +28,7 @@ globalThis.chrome = {
             }
             messages.push(message);
             if (message.type === 'open_side_panel') return Promise.resolve(openResponse);
-            return Promise.resolve();
+            return Promise.resolve({ ok: true });
         }
     },
     storage: {
@@ -59,7 +59,7 @@ describe('content selection side panel gating', () => {
         expect(messages).toEqual([{ type: 'open_side_panel' }]);
 
         messages.length = 0;
-        openResponse = { ok: true, windowId: 14 };
+        openResponse = { ok: true, windowId: 14, documentId: 'selection-panel' };
         await mouseup({ ctrlKey: true, metaKey: false });
         expect(messages).toEqual([
             { type: 'open_side_panel' },
@@ -67,7 +67,8 @@ describe('content selection side panel gating', () => {
                 type: 'new_selection',
                 text: 'selected text',
                 url: 'https://example.com/page',
-                targetWindowId: 14
+                targetWindowId: 14,
+                targetDocumentId: 'selection-panel'
             }
         ]);
 

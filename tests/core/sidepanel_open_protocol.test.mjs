@@ -37,23 +37,25 @@ const originalChrome = globalThis.chrome;
 const runtimeMessages = new MockChromeEvent();
 const commandEvents = new MockChromeEvent();
 const panelUrl = 'chrome-extension://test/src/html/sidepanel.html';
-let contexts = [];
-let contextFilters = [];
+const realSidepanelContext = {
+    contextType: 'SIDE_PANEL',
+    documentUrl: panelUrl,
+    windowId: -1,
+    documentId: 'real-panel'
+};
+let getContextsCalls = 0;
 let sentMessages = [];
 let openedWindowIds = [];
 let probeHandler = null;
+let messageHandler = null;
 
 const chromeMock = {
     runtime: {
         OnInstalledReason: { INSTALL: 'install', UPDATE: 'update' },
         getURL: path => `chrome-extension://test/${path}`,
-        getContexts: async filter => {
-            contextFilters.push(filter);
-            return contexts.filter(context => (
-                filter.contextTypes.includes(context.contextType)
-                && filter.documentUrls.includes(context.documentUrl)
-                && filter.windowIds.includes(context.windowId)
-            ));
+        getContexts: async () => {
+            getContextsCalls++;
+            return [realSidepanelContext];
         },
         onInstalled: new MockChromeEvent(),
         onMessage: runtimeMessages,
@@ -61,6 +63,7 @@ const chromeMock = {
         sendMessage: async message => {
             sentMessages.push(message);
             probeHandler?.(message);
+            return messageHandler?.(message);
         }
     },
     commands: { onCommand: commandEvents },
@@ -84,26 +87,19 @@ const { openPanel } = await import('../../src/js/background.js');
 const permanentRuntimeListeners = new Set(runtimeMessages.listeners);
 const backgroundMessageListener = [...permanentRuntimeListeners][0];
 
-const setReadyContext = (windowId, documentId) => {
-    contexts.push({
-        contextType: 'SIDE_PANEL',
-        documentUrl: panelUrl,
-        windowId,
-        documentId
-    });
-};
-
-const announceReady = (windowId, documentId) => {
-    runtimeMessages.emit({ type: 'sidepanel_ready', windowId }, { documentId });
+const announceReady = (windowId, documentId, tab = null) => {
+    const sender = { documentId, url: panelUrl };
+    if (tab) sender.tab = tab;
+    runtimeMessages.emit({ type: 'sidepanel_ready', windowId, documentId }, sender);
 };
 
 beforeEach(() => {
     runtimeMessages.listeners = new Set(permanentRuntimeListeners);
-    contexts = [];
-    contextFilters = [];
+    getContextsCalls = 0;
     sentMessages = [];
     openedWindowIds = [];
     probeHandler = null;
+    messageHandler = null;
     chromeMock.sidePanel.setOptions = async () => {};
     chromeMock.sidePanel.open = async ({ windowId }) => { openedWindowIds.push(windowId); };
     chromeMock.windows.getLastFocused = async () => ({ id: 91 });
@@ -115,6 +111,19 @@ afterAll(() => {
 });
 
 describe('targeted side panel readiness', () => {
+    test('registers sender document identity without relying on the context window ID', async () => {
+        const responseRequest = deferred();
+        expect(backgroundMessageListener(
+            { type: 'register_sidepanel_receiver', windowId: 16 },
+            { documentId: 'panel-16', url: panelUrl },
+            responseRequest.resolve
+        )).toBe(false);
+
+        expect(await responseRequest.promise).toEqual({ ok: true, documentId: 'panel-16' });
+        expect(realSidepanelContext.windowId).toBe(-1);
+        expect(getContextsCalls).toBe(0);
+    });
+
     test('subscribes before a cold open and waits for restored-shell readiness and open success', async () => {
         const openRequest = deferred();
         const events = [];
@@ -122,17 +131,16 @@ describe('targeted side panel readiness', () => {
         chromeMock.sidePanel.open = ({ windowId }) => {
             events.push(`open:${windowId}`);
             expect(runtimeMessages.listeners.size).toBe(permanentRuntimeListeners.size + 1);
-            setReadyContext(windowId, 'cold-panel');
             restored = true;
             announceReady(windowId, 'cold-panel');
             return openRequest.promise;
         };
 
         let completed = false;
-        const opening = openPanel({ windowId: 17 }, null, 100).then(windowId => {
+        const opening = openPanel({ windowId: 17 }, null, 100).then(target => {
             completed = true;
             events.push('complete');
-            return windowId;
+            return target;
         });
         await flush();
 
@@ -141,45 +149,35 @@ describe('targeted side panel readiness', () => {
         expect(events).toEqual(['open:17']);
 
         openRequest.resolve();
-        expect(await opening).toBe(17);
+        expect(await opening).toEqual({ windowId: 17, documentId: 'cold-panel' });
         expect(events).toEqual(['open:17', 'complete']);
         expect(runtimeMessages.listeners.size).toBe(permanentRuntimeListeners.size);
     });
 
     test('probes an already-ready panel for an immediate warm handoff after worker restart', async () => {
-        setReadyContext(23, 'warm-panel');
         probeHandler = message => {
             if (message.type === 'probe_sidepanel_ready' && message.windowId === 23) {
                 announceReady(23, 'warm-panel');
             }
         };
 
-        expect(await openPanel({ windowId: 23 }, null, 100)).toBe(23);
+        expect(await openPanel({ windowId: 23 }, null, 100)).toEqual({
+            windowId: 23,
+            documentId: 'warm-panel'
+        });
         expect(openedWindowIds).toEqual([23]);
-        expect(contextFilters).toEqual([{
-            contextTypes: ['SIDE_PANEL'],
-            documentUrls: [panelUrl],
-            windowIds: [23]
-        }]);
+        expect(realSidepanelContext.windowId).toBe(-1);
+        expect(getContextsCalls).toBe(0);
     });
 
     test('keeps concurrent windows isolated from unrelated and popped-out readiness', async () => {
-        setReadyContext(31, 'panel-31');
-        setReadyContext(32, 'panel-32');
-        contexts.push({
-            contextType: 'TAB',
-            documentUrl: panelUrl,
-            windowId: 31,
-            documentId: 'popped-out'
-        });
-
         let firstComplete = false;
         let secondComplete = false;
         const first = openPanel({ windowId: 31 }, null, 100).then(() => { firstComplete = true; });
         const second = openPanel({ windowId: 32 }, null, 100).then(() => { secondComplete = true; });
 
         announceReady(99, 'other-window');
-        announceReady(31, 'popped-out');
+        announceReady(31, 'popped-out', { id: 300, windowId: 31 });
         announceReady(32, 'panel-32');
         await new Promise(resolve => setTimeout(resolve, 0));
 
@@ -195,7 +193,6 @@ describe('targeted side panel readiness', () => {
     test('uses only concrete target IDs, including the focused-window fallback', async () => {
         const completeWhenProbed = message => {
             if (message.type !== 'probe_sidepanel_ready') return;
-            setReadyContext(message.windowId, `panel-${message.windowId}`);
             announceReady(message.windowId, `panel-${message.windowId}`);
         };
         probeHandler = completeWhenProbed;
@@ -203,6 +200,24 @@ describe('targeted side panel readiness', () => {
         await openPanel(null, -2, 100);
         expect(openedWindowIds).toEqual([91]);
         expect(openedWindowIds).not.toContain(-2);
+    });
+
+    test('commands target the ready document and await its acknowledgement', async () => {
+        probeHandler = message => {
+            if (message.type === 'probe_sidepanel_ready') {
+                announceReady(message.windowId, 'command-panel');
+            }
+        };
+        messageHandler = message => message.type === 'new_chat' ? { ok: true } : undefined;
+
+        const commandListener = [...commandEvents.listeners][0];
+        await commandListener('new-chat', { windowId: 35 });
+
+        expect(sentMessages.at(-1)).toEqual({
+            type: 'new_chat',
+            targetWindowId: 35,
+            targetDocumentId: 'command-panel'
+        });
     });
 });
 

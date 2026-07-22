@@ -8,10 +8,19 @@ export async function openSidePanelWithHandoff(message, windowId = null) {
             return response || { ok: false, error: 'Side panel did not open' };
         }
 
-        await chrome.runtime.sendMessage({
+        const delivery = await chrome.runtime.sendMessage({
             ...message,
-            targetWindowId: response.windowId
+            targetWindowId: response.windowId,
+            targetDocumentId: response.documentId
         });
+        if (!delivery?.ok) {
+            return {
+                ok: false,
+                error: delivery?.error || 'Side panel did not acknowledge the handoff',
+                windowId: response.windowId,
+                documentId: response.documentId
+            };
+        }
         return response;
     } catch (error) {
         return { ok: false, error: error?.message || String(error) };

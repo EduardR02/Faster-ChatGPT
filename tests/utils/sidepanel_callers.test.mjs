@@ -60,17 +60,45 @@ describe('caller handoff gating', () => {
         const messages = [];
         chromeMock.runtime.sendMessage = async message => {
             messages.push(message);
-            if (message.type === 'open_side_panel') return { ok: true, windowId: 19 };
+            if (message.type === 'open_side_panel') {
+                return { ok: true, windowId: 19, documentId: 'panel-19' };
+            }
+            return { ok: true };
         };
 
         expect(await openSidePanelWithHandoff({ type: 'reconstruct_chat', options: { chatId: 3 } })).toEqual({
             ok: true,
-            windowId: 19
+            windowId: 19,
+            documentId: 'panel-19'
         });
         expect(messages).toEqual([
             { type: 'open_side_panel' },
-            { type: 'reconstruct_chat', options: { chatId: 3 }, targetWindowId: 19 }
+            {
+                type: 'reconstruct_chat',
+                options: { chatId: 3 },
+                targetWindowId: 19,
+                targetDocumentId: 'panel-19'
+            }
         ]);
+    });
+
+    test('fails when the ready document closes or rejects before acknowledging delivery', async () => {
+        const messages = [];
+        chromeMock.runtime.sendMessage = async message => {
+            messages.push(message);
+            if (message.type === 'open_side_panel') {
+                return { ok: true, windowId: 20, documentId: 'closed-panel' };
+            }
+            return undefined;
+        };
+
+        expect(await openSidePanelWithHandoff({ type: 'new_chat' })).toEqual({
+            ok: false,
+            error: 'Side panel did not acknowledge the handoff',
+            windowId: 20,
+            documentId: 'closed-panel'
+        });
+        expect(messages[1].targetDocumentId).toBe('closed-panel');
     });
 });
 
@@ -78,10 +106,11 @@ describe('popup close ordering', () => {
     test('closes only after target readiness/open success and new_chat delivery', async () => {
         const events = [];
         const openResponse = deferred();
+        const deliveryResponse = deferred();
         chromeMock.runtime.sendMessage = message => {
             events.push(message.type);
             if (message.type === 'open_side_panel') return openResponse.promise;
-            return Promise.resolve();
+            return deliveryResponse.promise;
         };
         globalThis.window.close = () => events.push('close');
 
@@ -90,12 +119,22 @@ describe('popup close ordering', () => {
         expect(events).toEqual(['open_side_panel']);
 
         events.push('panel-ready-and-open');
-        openResponse.resolve({ ok: true, windowId: 77 });
+        openResponse.resolve({ ok: true, windowId: 77, documentId: 'popup-panel' });
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(events).toEqual([
+            'open_side_panel',
+            'panel-ready-and-open',
+            'new_chat'
+        ]);
+
+        events.push('new-chat-processed');
+        deliveryResponse.resolve({ ok: true });
         expect(await opening).toBe(true);
         expect(events).toEqual([
             'open_side_panel',
             'panel-ready-and-open',
             'new_chat',
+            'new-chat-processed',
             'close'
         ]);
     });

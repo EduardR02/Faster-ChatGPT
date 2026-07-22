@@ -101,12 +101,14 @@ async function handleMouseUp(event) {
             return;
         }
 
-        chrome.runtime.sendMessage({ 
+        const delivery = await chrome.runtime.sendMessage({
             type: "new_selection", 
             text: selection, 
             url: window.location.href,
-            targetWindowId: response.windowId
-        });
+            targetWindowId: response.windowId,
+            targetDocumentId: response.documentId
+        }).catch(() => null);
+        if (!delivery?.ok && requestId === selectionRequestId) lastSelection = "";
         
     } else if (!selection && lastSelection) {
         lastSelection = "";
