@@ -222,12 +222,13 @@ describe('SidepanelStateManager - State Machine Transitions', () => {
       expect(manager.getReasoningEffort()).toBe('low');
     });
 
-    test('defaults Opus 4.6 to high regardless of global setting', () => {
+    test('defaults adaptive Opus versions to high regardless of global setting', () => {
       manager.state.reasoningEffort = undefined;
       manager.state.settings.reasoning_effort = 'medium';
-      manager.getCurrentModel = () => 'claude-opus-4-6';
-
-      expect(manager.getReasoningEffort()).toBe('high');
+      for (const model of ['claude-opus-4-6', 'claude-opus-5', 'claude-opus-10']) {
+        manager.getCurrentModel = () => model;
+        expect(manager.getReasoningEffort()).toBe('high');
+      }
     });
 
     test('uses global setting for non-Opus models', () => {

@@ -1,6 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test';
 import {
-    AnthropicProvider,
     DEFAULT_MODELS,
     GeminiProvider,
     KimiProvider,
@@ -36,6 +35,7 @@ describe('new default model registry', () => {
         }));
         expect(DEFAULT_MODELS.anthropic['claude-opus-4-8']).toBe('Claude Opus 4.8');
         expect(DEFAULT_MODELS.anthropic['claude-fable-5']).toBe('Claude Fable 5');
+        expect(DEFAULT_MODELS.anthropic['claude-opus-5']).toBe('Claude Opus 5');
         expect(DEFAULT_MODELS.kimi['kimi-k3']).toBe('Kimi K3');
         expect(DEFAULT_MODELS.kimi['kimi-k2.6']).toBe('Kimi 2.6');
         expect(DEFAULT_MODELS.gemini['gemini-3.5-flash']).toBe('Gemini 3.5 Flash');
@@ -83,44 +83,6 @@ describe('OpenAI GPT-5.6 compatibility', () => {
     test('normalizes GPT-5.6-only efforts before sending older GPT-5 requests', () => {
         expect(createBody(provider, 'gpt-5.2', { reasoningEffort: 'max' }).reasoning.effort).toBe('medium');
         expect(createBody(provider, 'gpt-5.2', { reasoningEffort: 'none' }).reasoning.effort).toBe('medium');
-    });
-});
-
-describe('Anthropic adaptive thinking compatibility', () => {
-    const provider = new AnthropicProvider();
-
-    test('exposes model-specific adaptive effort lists', () => {
-        const extended = ['low', 'medium', 'high', 'xhigh', 'max'];
-        expect(provider.getReasoningEfforts('claude-opus-4-8')).toEqual(extended);
-        expect(provider.getReasoningEfforts('claude-opus-4-7')).toEqual(extended);
-        expect(provider.getReasoningEfforts('claude-fable-5')).toEqual(extended);
-        expect(provider.getReasoningEfforts('claude-opus-4-6')).toEqual(['low', 'medium', 'high', 'max']);
-    });
-
-    test('Opus 4.8 uses summarized adaptive thinking and 128k output', () => {
-        const body = createBody(provider, 'claude-opus-4-8', { reasoningEffort: 'xhigh' });
-
-        expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
-        expect(body.output_config).toEqual({ effort: 'xhigh' });
-        expect(body.max_tokens).toBe(MaxTokens.anthropic_fable);
-        expect(body.temperature).toBeUndefined();
-    });
-
-    test('Fable stays always-on with explicit adaptive thinking and 128k output', () => {
-        const body = createBody(provider, 'claude-fable-5', {
-            reasoningEffort: 'xhigh',
-            shouldThink: false
-        });
-
-        expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
-        expect(body.output_config).toEqual({ effort: 'xhigh' });
-        expect(body.max_tokens).toBe(MaxTokens.anthropic_fable);
-    });
-
-    test('normalizes old values according to each Opus version', () => {
-        expect(createBody(provider, 'claude-opus-4-7', { reasoningEffort: 'xhigh' }).output_config.effort).toBe('xhigh');
-        expect(createBody(provider, 'claude-opus-4-6', { reasoningEffort: 'xhigh' }).output_config.effort).toBe('max');
-        expect(createBody(provider, 'claude-opus-4-8', { reasoningEffort: 'minimal' }).output_config.effort).toBe('low');
     });
 });
 

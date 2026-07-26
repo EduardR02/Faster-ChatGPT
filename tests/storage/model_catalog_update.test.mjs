@@ -32,7 +32,15 @@ describe('model catalog update', () => {
         expect(storage.models.openai['custom-openai']).toBe('Custom OpenAI');
         expect(storage.models.anthropic['claude-fable-5']).toBe('My Fable Label');
         expect(storage.models.custom).toEqual({ 'private-model': 'Private Model' });
-        expect(storage.model_catalog_version).toBe(1);
+        expect(storage.model_catalog_version).toBe(2);
+    });
+
+    test('upgrades an existing version 1 catalog with Opus 5', async () => {
+        storage.model_catalog_version = 1;
+
+        expect(await mergeNewDefaultModels()).toBe(true);
+        expect(storage.models.anthropic['claude-opus-5']).toBe('Claude Opus 5');
+        expect(storage.model_catalog_version).toBe(2);
     });
 
     test('runs only once and leaves the current catalog untouched afterward', async () => {

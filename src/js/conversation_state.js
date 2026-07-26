@@ -1,3 +1,5 @@
+import { isAnthropicOpusAtLeast } from './LLMProviders.js';
+
 export const CHAT_STATE = { NORMAL: 0, INCOGNITO: 1, CONVERTED: 2 };
 export const THINKING_STATE = { INACTIVE: 0, THINKING: 1, SOLVING: 2 };
 export const REASONING_EFFORT_OPTIONS = ['minimal', 'low', 'medium', 'high', 'xhigh'];
@@ -245,8 +247,7 @@ const interactiveStateMixin = {
         if (sessionEffort) return sessionEffort;
 
         const model = this.getCurrentModel?.() || '';
-        const opusMatch = model.match(/opus-4-(\d+)/);
-        if (opusMatch && parseInt(opusMatch[1], 10) >= 6) return 'high';
+        if (isAnthropicOpusAtLeast(model, 4, 6)) return 'high';
 
         return this.getSetting('reasoning_effort') || 'high';
     },

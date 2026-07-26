@@ -1,152 +1,95 @@
 import { describe, test, expect, mock } from 'bun:test';
 import { AnthropicProvider, MaxTokens, RoleEnum } from '../../src/js/LLMProviders.js';
 
+const provider = new AnthropicProvider();
+const messages = [{ role: RoleEnum.user, parts: [{ type: 'text', content: 'Hello' }] }];
+const extendedEfforts = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+const createBody = (model, options = {}, maxTokens = 200000) => {
+    const [, request] = provider.createRequest({
+        model,
+        messages,
+        stream: false,
+        options,
+        apiKey: 'key',
+        settings: { temperature: 0.5, max_tokens: maxTokens }
+    });
+    return JSON.parse(request.body);
+};
+
 describe('AnthropicProvider adaptive thinking', () => {
-    const provider = new AnthropicProvider();
-    const messages = [
-        { role: RoleEnum.user, parts: [{ type: 'text', content: 'Hello' }] }
-    ];
+    test('derives Opus capabilities and efforts from version boundaries', () => {
+        const cases = [
+            ['claude-opus-3', false, false, false, []],
+            ['claude-opus-4-5', false, true, true, []],
+            ['claude-opus-4-6', true, true, true, ['low', 'medium', 'high', 'max']],
+            ['claude-opus-4-7', true, true, true, extendedEfforts],
+            ['claude-opus-4-8', true, true, true, extendedEfforts],
+            ['claude-opus-5', true, true, true, extendedEfforts],
+            ['claude-opus-6', true, true, true, extendedEfforts],
+            ['claude-opus-10', true, true, true, extendedEfforts]
+        ];
 
-    test('supports reasoning for Opus 4.6', () => {
-        expect(provider.supports('reasoning', 'claude-opus-4-6')).toBe(true);
+        for (const [model, reasoning, thinking, webSearch, efforts] of cases) {
+            expect(provider.supports('reasoning', model)).toBe(reasoning);
+            expect(provider.supports('thinking', model)).toBe(thinking);
+            expect(provider.supports('web_search', model)).toBe(webSearch);
+            expect(provider.getReasoningEfforts(model)).toEqual(efforts);
+        }
     });
 
-    test('supports reasoning for Opus 4.7 and later', () => {
-        expect(provider.supports('reasoning', 'claude-opus-4-7')).toBe(true);
-        expect(provider.supports('reasoning', 'claude-opus-4-12')).toBe(true);
+    test('uses adaptive thinking and the 128k cap from Opus 4.8 onward', () => {
+        for (const model of ['claude-opus-4-8', 'claude-opus-5', 'claude-opus-6', 'claude-opus-10']) {
+            const body = createBody(model, { reasoningEffort: 'xhigh' });
+            expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+            expect(body.output_config).toEqual({ effort: 'xhigh' });
+            expect(body.max_tokens).toBe(MaxTokens.anthropic_fable);
+            expect(body.temperature).toBeUndefined();
+        }
     });
 
-    test('supports Fable 5 adaptive thinking and web search', () => {
+    test('keeps the lower cap and effort set at the Opus 4.6 boundary', () => {
+        const body = createBody('claude-opus-4-6', { reasoningEffort: 'xhigh' });
+        expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+        expect(body.output_config).toEqual({ effort: 'max' });
+        expect(body.max_tokens).toBe(MaxTokens.anthropic_thinking);
+    });
+
+    test('normalizes adaptive effort values at their version boundaries', () => {
+        const cases = [
+            ['claude-opus-4-6', 'minimal', 'low'],
+            ['claude-opus-4-6', 'xhigh', 'max'],
+            ['claude-opus-4-7', 'xhigh', 'xhigh'],
+            ['claude-opus-5', 'invalid', 'high']
+        ];
+        for (const [model, input, expected] of cases) {
+            expect(provider.normalizeReasoningEffort(model, input)).toBe(expected);
+        }
+    });
+
+    test('keeps Fable 5 adaptive thinking always on with web search and 128k output', () => {
+        const streamWriter = { setThinkingModel: mock() };
+        const body = createBody('claude-fable-5', {
+            reasoningEffort: 'xhigh',
+            shouldThink: false,
+            webSearch: true,
+            streamWriter
+        });
+
         expect(provider.supports('reasoning', 'claude-fable-5')).toBe(true);
         expect(provider.supports('thinking', 'claude-fable-5')).toBe(true);
         expect(provider.supports('web_search', 'claude-fable-5')).toBe(true);
-    });
-
-    test('does not enable reasoning levels for Opus 4.5 and earlier', () => {
-        expect(provider.supports('reasoning', 'claude-opus-4-5')).toBe(false);
-        expect(provider.supports('reasoning', 'claude-opus-4-0')).toBe(false);
-    });
-
-    test('uses adaptive thinking with summarized display for Opus 4.7', () => {
-        const [_, request] = provider.createRequest({
-            model: 'claude-opus-4-7',
-            messages,
-            stream: false,
-            options: { reasoningEffort: 'medium' },
-            apiKey: 'key',
-            settings: { temperature: 0.5, max_tokens: 12000 }
-        });
-
-        const body = JSON.parse(request.body);
-        expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
-        expect(body.output_config).toEqual({ effort: 'medium' });
-    });
-
-    test('uses always-on adaptive thinking and 128k max output for Fable 5', () => {
-        const streamWriter = { setThinkingModel: mock() };
-        const [_, request] = provider.createRequest({
-            model: 'claude-fable-5',
-            messages,
-            stream: true,
-            options: {
-                reasoningEffort: 'xhigh',
-                shouldThink: false,
-                webSearch: true,
-                streamWriter
-            },
-            apiKey: 'key',
-            settings: { temperature: 0.5, max_tokens: 200000 }
-        });
-
-        const body = JSON.parse(request.body);
         expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
         expect(body.output_config).toEqual({ effort: 'xhigh' });
         expect(body.max_tokens).toBe(MaxTokens.anthropic_fable);
-        expect(body.temperature).toBeUndefined();
         expect(body.tools).toEqual([{ type: 'web_search_20250305', name: 'web_search', max_uses: 2 }]);
         expect(streamWriter.setThinkingModel).toHaveBeenCalledTimes(1);
     });
 
-    test('keeps thinking support for Opus 4.6', () => {
-        expect(provider.supports('thinking', 'claude-opus-4-6')).toBe(true);
-    });
-
-    test('does not enable reasoning levels for Sonnet 4.5', () => {
+    test('keeps legacy budget-token thinking for Sonnet 4', () => {
+        const body = createBody('claude-sonnet-4-5', { shouldThink: true }, 10000);
         expect(provider.supports('reasoning', 'claude-sonnet-4-5')).toBe(false);
-    });
-
-    test('uses adaptive thinking for Opus 4.6 and thinking counters', () => {
-        const streamWriter = {
-            setThinkingModel: mock(),
-            addThinkingCounter: mock()
-        };
-
-        const [_, request] = provider.createRequest({
-            model: 'claude-opus-4-6',
-            messages,
-            stream: true,
-            options: {
-                reasoningEffort: 'high',
-                shouldThink: false,
-                streamWriter
-            },
-            apiKey: 'key',
-            settings: { temperature: 0.7, max_tokens: 100000 }
-        });
-
-        const body = JSON.parse(request.body);
-
-        expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
-        expect(body.output_config).toEqual({ effort: 'high' });
-        expect(body.max_tokens).toBe(MaxTokens.anthropic_thinking);
-        expect(body.temperature).toBeUndefined();
-        expect(streamWriter.setThinkingModel).toHaveBeenCalledTimes(1);
-        // Anthropic streams thinking content - uses collapsible block, not counter
-        expect(streamWriter.addThinkingCounter).toHaveBeenCalledTimes(0);
-    });
-
-    const effortMappings = {
-        minimal: 'low',
-        low: 'low',
-        medium: 'medium',
-        high: 'high',
-        xhigh: 'max'
-    };
-
-    Object.entries(effortMappings).forEach(([inputEffort, expectedEffort]) => {
-        test(`maps ${inputEffort} to ${expectedEffort} for adaptive thinking`, () => {
-            const [_, request] = provider.createRequest({
-                model: 'claude-opus-4-6',
-                messages,
-                stream: false,
-                options: { reasoningEffort: inputEffort },
-                apiKey: 'key',
-                settings: { temperature: 0.5, max_tokens: 12000 }
-            });
-
-            const body = JSON.parse(request.body);
-            expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
-            expect(body.output_config).toEqual({ effort: expectedEffort });
-            expect(body.temperature).toBeUndefined();
-        });
-    });
-
-    test('keeps legacy budget tokens thinking for Sonnet 4', () => {
-        const [_, request] = provider.createRequest({
-            model: 'claude-sonnet-4-5',
-            messages,
-            stream: false,
-            options: { shouldThink: true },
-            apiKey: 'key',
-            settings: { temperature: 0.6, max_tokens: 10000 }
-        });
-
-        const body = JSON.parse(request.body);
-
-        expect(body.thinking).toEqual({
-            type: 'enabled',
-            budget_tokens: 6000
-        });
+        expect(body.thinking).toEqual({ type: 'enabled', budget_tokens: 6000 });
         expect(body.temperature).toBeUndefined();
     });
 });

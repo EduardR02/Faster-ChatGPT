@@ -33,7 +33,7 @@ export const MaxTokens = {
 
 export const NEW_DEFAULT_MODELS = {
     openai: { "gpt-5.6-sol": "GPT-5.6 Sol", "gpt-5.6-terra": "GPT-5.6 Terra", "gpt-5.6-luna": "GPT-5.6 Luna" },
-    anthropic: { "claude-fable-5": "Claude Fable 5", "claude-opus-4-8": "Claude Opus 4.8" },
+    anthropic: { "claude-fable-5": "Claude Fable 5", "claude-opus-4-8": "Claude Opus 4.8", "claude-opus-5": "Claude Opus 5" },
     gemini: { "gemini-3.5-flash": "Gemini 3.5 Flash" },
     kimi: { "kimi-k3": "Kimi K3" }
 };
@@ -47,6 +47,14 @@ export const DEFAULT_MODELS = {
     grok: { "grok-4": "Grok 4", "grok-4.1-fast-reasoning": "Grok 4.1 Fast Reasoning" },
     kimi: { ...NEW_DEFAULT_MODELS.kimi, "kimi-k2.6": "Kimi 2.6", "kimi-k2-thinking": "Kimi 2 Thinking" },
     llamacpp: { "local-model": "Local Model" }
+};
+
+export const isAnthropicOpusAtLeast = (model, major, minor = 0) => {
+    const match = model.match(/^claude-opus-(\d+)(?:-(\d+))?(?:-|$)/);
+    if (!match) return false;
+    const modelMajor = Number(match[1]);
+    const modelMinor = Number(match[2] || 0);
+    return modelMajor > major || (modelMajor === major && modelMinor >= minor);
 };
 
 export class BaseProvider {
@@ -409,21 +417,18 @@ export class AnthropicProvider extends BaseProvider {
     }
 
     supports(feature, model) {
-        const thinkingModels = ['3-7-sonnet', 'sonnet-4', 'opus-4', 'fable-5'];
-
         if (feature === 'reasoning') {
-            if (model === 'claude-fable-5') return true;
-            const match = model.match(/opus-4-(\d+)/);
-            return !!match && parseInt(match[1], 10) >= 6;
+            return model === 'claude-fable-5' || isAnthropicOpusAtLeast(model, 4, 6);
         }
         
         if (feature === 'thinking') {
-            return thinkingModels.some(substring => model.includes(substring));
+            return ['3-7-sonnet', 'sonnet-4', 'fable-5'].some(name => model.includes(name)) ||
+                isAnthropicOpusAtLeast(model, 4);
         }
         
         if (feature === 'web_search') {
-            const webModels = ['3-7-sonnet', '3-5-sonnet-latest', '3-5-haiku-latest', 'sonnet-4', 'opus-4', 'fable-5'];
-            return webModels.some(substring => model.includes(substring));
+            return ['3-7-sonnet', '3-5-sonnet-latest', '3-5-haiku-latest', 'sonnet-4', 'fable-5']
+                .some(name => model.includes(name)) || isAnthropicOpusAtLeast(model, 4);
         }
         
         return super.supports(feature, model);
@@ -431,11 +436,8 @@ export class AnthropicProvider extends BaseProvider {
 
     getReasoningEfforts(model) {
         if (model === 'claude-fable-5') return ['low', 'medium', 'high', 'xhigh', 'max'];
-        const match = model.match(/opus-4-(\d+)/);
-        if (!match) return [];
-        const version = parseInt(match[1], 10);
-        if (version >= 7) return ['low', 'medium', 'high', 'xhigh', 'max'];
-        if (version === 6) return ['low', 'medium', 'high', 'max'];
+        if (isAnthropicOpusAtLeast(model, 4, 7)) return ['low', 'medium', 'high', 'xhigh', 'max'];
+        if (isAnthropicOpusAtLeast(model, 4, 6)) return ['low', 'medium', 'high', 'max'];
         return [];
     }
 
@@ -480,7 +482,7 @@ export class AnthropicProvider extends BaseProvider {
                               this.supports('web_search', model);
         
         let maxLimit = this.maxTokens;
-        if (model === 'claude-fable-5' || model === 'claude-opus-4-8') {
+        if (model === 'claude-fable-5' || isAnthropicOpusAtLeast(model, 4, 8)) {
             maxLimit = MaxTokens.anthropic_fable;
         } else if (isThinking) {
             maxLimit = MaxTokens.anthropic_thinking;
