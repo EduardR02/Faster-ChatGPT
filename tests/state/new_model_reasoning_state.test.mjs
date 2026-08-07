@@ -50,6 +50,16 @@ describe('model-specific reasoning session state', () => {
         expect(manager.cycleReasoningEffort(['max'])).toBe('max');
     });
 
+    test('cycles the kimi-k3 three-level list low -> high -> max -> low', () => {
+        const manager = createTabState('medium');
+        const efforts = ['low', 'high', 'max'];
+
+        expect(manager.cycleReasoningEffort(efforts, 'low')).toBe('high');
+        expect(manager.cycleReasoningEffort(efforts, 'high')).toBe('max');
+        expect(manager.cycleReasoningEffort(efforts, 'max')).toBe('low');
+        expect(manager.getReasoningEffort()).toBe('low');
+    });
+
     test('cycles from a normalized effort instead of stale session state', () => {
         const manager = createTabState('max');
         const efforts = ['minimal', 'low', 'medium', 'high', 'xhigh'];

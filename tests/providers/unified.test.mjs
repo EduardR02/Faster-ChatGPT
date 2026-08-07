@@ -502,6 +502,57 @@ describe('DeepSeekProvider - Specifics', () => {
         expect(body.thinking).toEqual({ type: 'enabled' });
         expect(streamWriter.setThinkingModel).toHaveBeenCalledTimes(1);
     });
+
+    test('V4 models expose reasoning levels and always-on thinking', () => {
+        for (const model of ['deepseek-v4-flash', 'deepseek-v4-pro']) {
+            expect(provider.supports('reasoning', model)).toBe(true);
+            expect(provider.supports('thinking', model)).toBe(true);
+            expect(provider.supports('thinking_toggle', model)).toBe(false);
+            expect(provider.isThinkingDefaultOn(model)).toBe(true);
+            expect(provider.getReasoningEfforts(model)).toEqual(['low', 'high', 'max']);
+        }
+    });
+
+    test('V4 request sends thinking enabled with the selected effort', () => {
+        const streamWriter = { setThinkingModel: mock() };
+        const [_, request] = provider.createRequest({
+            model: 'deepseek-v4-flash',
+            messages: createConversation(),
+            stream: true,
+            options: { shouldThink: false, reasoningEffort: 'low', streamWriter },
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 10000 }
+        });
+        const body = JSON.parse(request.body);
+        expect(body.thinking).toEqual({ type: 'enabled' });
+        expect(body.reasoning_effort).toBe('low');
+        expect(streamWriter.setThinkingModel).toHaveBeenCalledTimes(1);
+    });
+
+    test('V4 defaults to high, omits temperature, and normalizes stale efforts', () => {
+        const [_, request] = provider.createRequest({
+            model: 'deepseek-v4-pro',
+            messages: createConversation(),
+            stream: true,
+            options: {},
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 10000 }
+        });
+        const body = JSON.parse(request.body);
+        expect(body.thinking).toEqual({ type: 'enabled' });
+        expect(body.reasoning_effort).toBe('high');
+        expect(body.temperature).toBeUndefined();
+
+        const staleBody = JSON.parse(provider.createRequest({
+            model: 'deepseek-v4-flash',
+            messages: createConversation(),
+            stream: true,
+            options: { reasoningEffort: 'medium' },
+            apiKey: 'key',
+            settings: { temperature: 0.7, max_tokens: 10000 }
+        })[1].body);
+        expect(staleBody.reasoning_effort).toBe('high');
+    });
 });
 
 describe('AnthropicProvider - Specifics', () => {

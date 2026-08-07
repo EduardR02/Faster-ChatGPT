@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test';
 import {
     DEFAULT_MODELS,
+    DeepSeekProvider,
     GeminiProvider,
     KimiProvider,
     MaxTokens,
@@ -8,6 +9,7 @@ import {
     RoleEnum
 } from '../../src/js/LLMProviders.js';
 import { ApiManager } from '../../src/js/api_manager.js';
+import { cycleOption } from '../../src/js/conversation_state.js';
 
 const messages = [
     { role: RoleEnum.user, parts: [{ type: 'text', content: 'Hello' }] }
@@ -40,6 +42,10 @@ describe('new default model registry', () => {
         expect(DEFAULT_MODELS.kimi['kimi-k2.6']).toBe('Kimi 2.6');
         expect(DEFAULT_MODELS.gemini['gemini-3.5-flash']).toBe('Gemini 3.5 Flash');
         expect(DEFAULT_MODELS.gemini['gemini-3-flash-preview']).toBe('Gemini 3 Flash');
+        expect(DEFAULT_MODELS.deepseek['deepseek-v4-flash']).toBe('DeepSeek V4 Flash');
+        expect(DEFAULT_MODELS.deepseek['deepseek-v4-pro']).toBe('DeepSeek V4 Pro');
+        expect(DEFAULT_MODELS.deepseek['deepseek-chat']).toBe('DeepSeek V3.2');
+        expect(DEFAULT_MODELS.deepseek['deepseek-reasoner']).toBe('DeepSeek V3.2 thinking');
     });
 });
 
@@ -117,13 +123,14 @@ describe('Gemini 3.5 Flash compatibility', () => {
 
 describe('Kimi K3 compatibility', () => {
     const provider = new KimiProvider();
+    const efforts = ['low', 'high', 'max'];
 
-    test('is always-on thinking with fixed max effort and native vision', () => {
+    test('is always-on thinking with selectable low/high/max effort and native vision', () => {
         expect(provider.supports('thinking', 'kimi-k3')).toBe(true);
         expect(provider.supports('reasoning', 'kimi-k3')).toBe(true);
         expect(provider.supports('thinking_toggle', 'kimi-k3')).toBe(false);
         expect(provider.isThinkingDefaultOn('kimi-k3')).toBe(true);
-        expect(provider.getReasoningEfforts('kimi-k3')).toEqual(['max']);
+        expect(provider.getReasoningEfforts('kimi-k3')).toEqual(efforts);
         expect(provider.supportsImageMessages()).toBe(true);
     });
 
@@ -137,10 +144,37 @@ describe('Kimi K3 compatibility', () => {
 
         expect(body.max_completion_tokens).toBe(MaxTokens.kimi_k3);
         expect(body.max_tokens).toBeUndefined();
-        expect(body.reasoning_effort).toBe('max');
+        expect(body.reasoning_effort).toBe('low');
         expect(body.temperature).toBeUndefined();
         expect(body.thinking).toBeUndefined();
         expect(streamWriter.setThinkingModel).toHaveBeenCalledTimes(1);
+    });
+
+    test('sends each selected effort through and never sends body.thinking', () => {
+        const streamWriter = { setThinkingModel: mock() };
+        for (const effort of efforts) {
+            const body = createBody(provider, 'kimi-k3', { reasoningEffort: effort, streamWriter });
+            expect(body.reasoning_effort).toBe(effort);
+            expect(body.thinking).toBeUndefined();
+        }
+        expect(streamWriter.setThinkingModel).toHaveBeenCalledTimes(efforts.length);
+    });
+
+    test('defaults to max and normalizes stale stored efforts to max', () => {
+        expect(createBody(provider, 'kimi-k3', {}).reasoning_effort).toBe('max');
+        for (const stale of ['medium', 'xhigh', 'minimal', 'invalid']) {
+            expect(createBody(provider, 'kimi-k3', { reasoningEffort: stale }).reasoning_effort).toBe('max');
+        }
+    });
+
+    test('cycles all three effort levels low -> high -> max -> low', () => {
+        let effort = 'low';
+        effort = cycleOption(effort, efforts);
+        expect(effort).toBe('high');
+        effort = cycleOption(effort, efforts);
+        expect(effort).toBe('max');
+        effort = cycleOption(effort, efforts);
+        expect(effort).toBe('low');
     });
 
     test('replays assistant thought parts as reasoning_content', () => {
@@ -174,6 +208,39 @@ describe('Kimi K3 compatibility', () => {
     });
 });
 
+describe('DeepSeek V4 compatibility', () => {
+    const provider = new DeepSeekProvider();
+    const efforts = ['low', 'high', 'max'];
+
+    test('exposes selectable reasoning levels and always-on thinking for V4 models', () => {
+        for (const model of ['deepseek-v4-flash', 'deepseek-v4-pro']) {
+            expect(provider.supports('reasoning', model)).toBe(true);
+            expect(provider.supports('thinking', model)).toBe(true);
+            expect(provider.supports('thinking_toggle', model)).toBe(false);
+            expect(provider.isThinkingDefaultOn(model)).toBe(true);
+            expect(provider.getReasoningEfforts(model)).toEqual(efforts);
+        }
+        expect(provider.supports('reasoning', 'deepseek-chat')).toBe(false);
+        expect(provider.supports('thinking_toggle', 'deepseek-chat')).toBe(true);
+        expect(provider.getReasoningEfforts('deepseek-reasoner')).toEqual([]);
+    });
+
+    test('sends thinking enabled and the selected reasoning effort for V4', () => {
+        for (const effort of efforts) {
+            const body = createBody(provider, 'deepseek-v4-flash', { reasoningEffort: effort });
+            expect(body.thinking).toEqual({ type: 'enabled' });
+            expect(body.reasoning_effort).toBe(effort);
+        }
+    });
+
+    test('defaults to high and normalizes stale stored efforts to high', () => {
+        expect(createBody(provider, 'deepseek-v4-pro', {}).reasoning_effort).toBe('high');
+        for (const stale of ['medium', 'xhigh', 'minimal', 'invalid']) {
+            expect(createBody(provider, 'deepseek-v4-flash', { reasoningEffort: stale }).reasoning_effort).toBe('high');
+        }
+    });
+});
+
 describe('ApiManager reasoning capability delegation', () => {
     test('delegates effort, normalization, and mode capability to the resolved provider', () => {
         const settings = {
@@ -191,7 +258,8 @@ describe('ApiManager reasoning capability delegation', () => {
         expect(api.getReasoningEfforts('gpt-5.6-sol')).toEqual(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
         expect(api.normalizeReasoningEffort('gpt-5.6-sol', 'minimal')).toBe('none');
         expect(api.hasReasoningModes('gpt-5.6-sol')).toBe(true);
-        expect(api.getReasoningEfforts('kimi-k3')).toEqual(['max']);
+        expect(api.getReasoningEfforts('kimi-k3')).toEqual(['low', 'high', 'max']);
+        expect(api.normalizeReasoningEffort('kimi-k3', 'medium')).toBe('max');
         expect(api.hasReasoningModes('kimi-k3')).toBe(false);
     });
 });

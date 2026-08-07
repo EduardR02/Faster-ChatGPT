@@ -35,6 +35,7 @@ export const NEW_DEFAULT_MODELS = {
     openai: { "gpt-5.6-sol": "GPT-5.6 Sol", "gpt-5.6-terra": "GPT-5.6 Terra", "gpt-5.6-luna": "GPT-5.6 Luna" },
     anthropic: { "claude-fable-5": "Claude Fable 5", "claude-opus-4-8": "Claude Opus 4.8", "claude-opus-5": "Claude Opus 5" },
     gemini: { "gemini-3.5-flash": "Gemini 3.5 Flash" },
+    deepseek: { "deepseek-v4-flash": "DeepSeek V4 Flash", "deepseek-v4-pro": "DeepSeek V4 Pro" },
     kimi: { "kimi-k3": "Kimi K3" }
 };
 
@@ -42,7 +43,7 @@ export const DEFAULT_MODELS = {
     openai: { "gpt-5.2": "GPT-5.2", "gpt-5.3-codex": "GPT-5.3 Codex", "gpt-5.2-mini": "GPT-5.2 mini", ...NEW_DEFAULT_MODELS.openai },
     anthropic: { ...NEW_DEFAULT_MODELS.anthropic, "claude-opus-4-6": "Claude Opus 4.6", "claude-4.5-opus": "Claude 4.5 Opus", "claude-sonnet-4-5": "Claude 4.5 Sonnet", "claude-4.5-haiku": "Claude 4.5 Haiku" },
     gemini: { ...NEW_DEFAULT_MODELS.gemini, "gemini-3-pro-preview": "Gemini 3 Pro", "gemini-3-flash-preview": "Gemini 3 Flash", "gemini-3-pro-image-preview": "Nano Banana Pro", "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite", "gemini-3.1-flash-image-preview": "Nano Banana 2" },
-    deepseek: { "deepseek-chat": "DeepSeek V3.2", "deepseek-reasoner": "DeepSeek V3.2 thinking" },
+    deepseek: { ...NEW_DEFAULT_MODELS.deepseek, "deepseek-chat": "DeepSeek V3.2", "deepseek-reasoner": "DeepSeek V3.2 thinking" },
     mistral: { "mistral-large-latest": "Mistral Large", "mistral-small-latest": "Mistral Small" },
     grok: { "grok-4": "Grok 4", "grok-4.1-fast-reasoning": "Grok 4.1 Fast Reasoning" },
     kimi: { ...NEW_DEFAULT_MODELS.kimi, "kimi-k2.6": "Kimi 2.6", "kimi-k2-thinking": "Kimi 2 Thinking" },
@@ -847,36 +848,53 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
         return 'https://api.deepseek.com/v1/chat/completions';
     }
 
+    isDeepSeekV4(model) {
+        return model?.startsWith('deepseek-v4') ?? false;
+    }
+
     beforeCreateRequest({ model, options }) {
-        const isThinking = model.includes('reasoner') || (options.shouldThink ?? options.getShouldThink?.() ?? false);
+        const isThinking = this.isDeepSeekV4(model) || model.includes('reasoner') || (options.shouldThink ?? options.getShouldThink?.() ?? false);
         if (isThinking && options.streamWriter) {
             options.streamWriter.setThinkingModel();
         }
     }
 
-    isThinkingDefaultOn(model) { return model.includes('reasoner'); }
+    isThinkingDefaultOn(model) { return model.includes('reasoner') || this.isDeepSeekV4(model); }
 
     supports(feature, model) {
-        if (feature === 'thinking_toggle') return !model.includes('reasoner');
+        if (feature === 'thinking_toggle') return !model.includes('reasoner') && !this.isDeepSeekV4(model);
         if (feature === 'thinking') return true;
+        if (feature === 'reasoning') return this.isDeepSeekV4(model);
         return super.supports(feature, model);
     }
 
-    getDeepSeekReasoningEffort({ options }) {
+    getReasoningEfforts(model) {
+        return this.isDeepSeekV4(model) ? ['low', 'high', 'max'] : [];
+    }
+
+    normalizeReasoningEffort(model, effort) {
+        if (!this.isDeepSeekV4(model)) return super.normalizeReasoningEffort(model, effort);
+        return this.getReasoningEfforts(model).includes(effort) ? effort : 'high';
+    }
+
+    getDeepSeekReasoningEffort({ model, options }) {
         const effort = options.reasoningEffort ?? options.getOpenAIReasoningEffort?.() ?? 'high';
+        if (this.isDeepSeekV4(model)) {
+            return this.normalizeReasoningEffort(model, effort);
+        }
         return effort === 'xhigh' || effort === 'max' ? 'max' : 'high';
     }
 
     extendRequestBody(body, { model, options }) {
-        const isThinking = model.includes('reasoner') || (options.shouldThink ?? options.getShouldThink?.() ?? false);
+        const isThinking = this.isDeepSeekV4(model) || model.includes('reasoner') || (options.shouldThink ?? options.getShouldThink?.() ?? false);
         body.thinking = { type: isThinking ? 'enabled' : 'disabled' };
         if (isThinking) {
-            body.reasoning_effort = this.getDeepSeekReasoningEffort({ options });
+            body.reasoning_effort = this.getDeepSeekReasoningEffort({ model, options });
         }
     }
 
     shouldIncludeTemperature({ model }) {
-        return !model.includes('reasoner');
+        return !model.includes('reasoner') && !this.isDeepSeekV4(model);
     }
 
     isUsageChunk(parsed) {
@@ -968,7 +986,12 @@ export class KimiProvider extends OpenAICompatibleProvider {
     }
 
     getReasoningEfforts(model) {
-        return model === 'kimi-k3' ? ['max'] : [];
+        return model === 'kimi-k3' ? ['low', 'high', 'max'] : [];
+    }
+
+    normalizeReasoningEffort(model, effort) {
+        if (model !== 'kimi-k3') return super.normalizeReasoningEffort(model, effort);
+        return this.getReasoningEfforts(model).includes(effort) ? effort : 'max';
     }
 
     formatMessages(messages, context) {
@@ -997,7 +1020,8 @@ export class KimiProvider extends OpenAICompatibleProvider {
     extendRequestBody(body, { model, options, settings }) {
         if (model === 'kimi-k3') {
             body.max_completion_tokens = Math.min(settings.max_tokens, MaxTokens.kimi_k3);
-            body.reasoning_effort = 'max';
+            const requestedEffort = options.reasoningEffort ?? options.getOpenAIReasoningEffort?.() ?? 'max';
+            body.reasoning_effort = this.normalizeReasoningEffort(model, requestedEffort);
             return;
         }
         if (model === 'kimi-k2.6') {
