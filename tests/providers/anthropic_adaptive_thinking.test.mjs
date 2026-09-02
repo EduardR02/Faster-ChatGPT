@@ -86,6 +86,25 @@ describe('AnthropicProvider adaptive thinking', () => {
         expect(streamWriter.setThinkingModel).toHaveBeenCalledTimes(1);
     });
 
+    test('recognizes future Fable versions without version-specific updates', () => {
+        for (const model of ['claude-fable-5-1', 'claude-fable-6']) {
+            const body = createBody(model, {
+                reasoningEffort: 'xhigh',
+                shouldThink: false,
+                webSearch: true
+            });
+
+            expect(provider.supports('reasoning', model)).toBe(true);
+            expect(provider.supports('thinking', model)).toBe(true);
+            expect(provider.supports('web_search', model)).toBe(true);
+            expect(provider.getReasoningEfforts(model)).toEqual(extendedEfforts);
+            expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+            expect(body.output_config).toEqual({ effort: 'xhigh' });
+            expect(body.max_tokens).toBe(MaxTokens.anthropic_fable);
+            expect(body.tools).toEqual([{ type: 'web_search_20250305', name: 'web_search', max_uses: 2 }]);
+        }
+    });
+
     test('keeps legacy budget-token thinking for Sonnet 4', () => {
         const body = createBody('claude-sonnet-4-5', { shouldThink: true }, 10000);
         expect(provider.supports('reasoning', 'claude-sonnet-4-5')).toBe(false);

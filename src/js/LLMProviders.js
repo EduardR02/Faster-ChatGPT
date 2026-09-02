@@ -58,6 +58,8 @@ export const isAnthropicOpusAtLeast = (model, major, minor = 0) => {
     return modelMajor > major || (modelMajor === major && modelMinor >= minor);
 };
 
+const isAnthropicFable = model => /^claude-fable-\d+(?:-|$)/.test(model);
+
 export class BaseProvider {
     constructor() {
         this.maxTemp = 1.0;
@@ -419,24 +421,25 @@ export class AnthropicProvider extends BaseProvider {
 
     supports(feature, model) {
         if (feature === 'reasoning') {
-            return model === 'claude-fable-5' || isAnthropicOpusAtLeast(model, 4, 6);
+            return isAnthropicFable(model) || isAnthropicOpusAtLeast(model, 4, 6);
         }
         
         if (feature === 'thinking') {
-            return ['3-7-sonnet', 'sonnet-4', 'fable-5'].some(name => model.includes(name)) ||
-                isAnthropicOpusAtLeast(model, 4);
+            return ['3-7-sonnet', 'sonnet-4'].some(name => model.includes(name)) ||
+                isAnthropicFable(model) || isAnthropicOpusAtLeast(model, 4);
         }
         
         if (feature === 'web_search') {
-            return ['3-7-sonnet', '3-5-sonnet-latest', '3-5-haiku-latest', 'sonnet-4', 'fable-5']
-                .some(name => model.includes(name)) || isAnthropicOpusAtLeast(model, 4);
+            return ['3-7-sonnet', '3-5-sonnet-latest', '3-5-haiku-latest', 'sonnet-4']
+                .some(name => model.includes(name)) || isAnthropicFable(model) ||
+                isAnthropicOpusAtLeast(model, 4);
         }
         
         return super.supports(feature, model);
     }
 
     getReasoningEfforts(model) {
-        if (model === 'claude-fable-5') return ['low', 'medium', 'high', 'xhigh', 'max'];
+        if (isAnthropicFable(model)) return ['low', 'medium', 'high', 'xhigh', 'max'];
         if (isAnthropicOpusAtLeast(model, 4, 7)) return ['low', 'medium', 'high', 'xhigh', 'max'];
         if (isAnthropicOpusAtLeast(model, 4, 6)) return ['low', 'medium', 'high', 'max'];
         return [];
@@ -483,7 +486,7 @@ export class AnthropicProvider extends BaseProvider {
                               this.supports('web_search', model);
         
         let maxLimit = this.maxTokens;
-        if (model === 'claude-fable-5' || isAnthropicOpusAtLeast(model, 4, 8)) {
+        if (isAnthropicFable(model) || isAnthropicOpusAtLeast(model, 4, 8)) {
             maxLimit = MaxTokens.anthropic_fable;
         } else if (isThinking) {
             maxLimit = MaxTokens.anthropic_thinking;
