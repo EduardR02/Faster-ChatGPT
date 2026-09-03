@@ -1,6 +1,6 @@
 # Sidekick LLM
 
-Chrome extension that gives you a side panel for talking to LLMs. Supports Claude, GPT, Gemini, DeepSeek, Grok, Mistral, Kimi, and local models. Uses your API keys directly — nothing goes through me.
+Chrome extension that gives you a side panel for talking to LLMs. Supports Claude, GPT, Gemini, DeepSeek, Grok, Mistral, Kimi, and local models. Connect a ChatGPT subscription for OpenAI chat or use provider API keys directly — nothing goes through an intermediary.
 
 **[Chrome Web Store](https://chromewebstore.google.com/detail/sidekick-llm/nlpcdeggdeeopcpeeopbjmmkeahojaod)**
 
@@ -71,11 +71,11 @@ LaTeX/math (Temml), syntax-highlighted code blocks with copy button, streaming m
 1. Download this repo as ZIP, unzip somewhere permanent
 2. `chrome://extensions` → enable Developer Mode
 3. Load Unpacked → select the folder
-4. Extension popup → Settings → add API keys
+4. Extension popup → Settings → connect ChatGPT and/or add provider API keys
 
 ## Security
 
-Your API keys stay local and go straight to provider APIs. No third-party server involved, ever. That said, keys are visible in browser dev tools (Network tab, JS runtime). If that bothers you, use keys with limited credits.
+Your API keys and ChatGPT OAuth tokens stay in `chrome.storage.local` and go straight to the selected provider. ChatGPT subscription authentication opens OpenAI's Codex account-approval page; while connected, OpenAI chat uses the subscription endpoint, while transcription still requires an API key. No third-party server is involved. Credentials are visible to extension code and browser developer tools.
 
 
 ## Future 

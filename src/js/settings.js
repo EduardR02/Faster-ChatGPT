@@ -4,6 +4,7 @@ import { ArenaRatingManager } from "./ArenaRatingManager.js";
 import { computeLeaderboard, renderLeaderboard, renderLeaderboardError, resolveDisplayNames } from "./arena_leaderboard.js";
 import { resolveModelRemoval } from "./model_removal.js";
 import { resolveConfiguredModelIds } from "./model_selection.js";
+import { isChatGPTCredentials, loginWithChatGPT } from './chatgpt_auth.js';
 
 const apiDisplayNames = {
     anthropic: 'Anthropic',
@@ -24,6 +25,7 @@ export class SettingsUI {
         this.currentAPIProvider = this.apiProviders[0];
         this.dummyRowsOnInit = 0;
         this.selectModes = ['arena', 'council', 'collector', 'rename', 'transcription'];
+        this.chatGPTAuthController = null;
 
         this.config = {
             inputs: { 
@@ -80,6 +82,7 @@ export class SettingsUI {
         addListener('transcription_select', 'change', () => this.handleSelect('transcription'));
         
         addListener('api_key_input', 'input', (event) => this.handleApiKey(event));
+        addListener('button-chatgpt-auth', 'click', () => this.toggleChatGPTAuth());
         
         addListener('button-delete-arena', 'click', (event) => {
             this.handleArenaReset(event.currentTarget);
@@ -162,6 +165,7 @@ export class SettingsUI {
         });
         
         this.setApiLabel();
+        this.renderChatGPTAuth();
         this.initPromptUI();
         this.initReasoning();
         this.updateCheckboxes();
@@ -301,6 +305,57 @@ export class SettingsUI {
         if (value) {
             const provider = this.apiProviders[this.currentApiIndex];
             this.stateManager.setApiKey(provider, value);
+        }
+    }
+
+    renderChatGPTAuth() {
+        const credentials = this.stateManager.getSetting('chatgpt_auth');
+        const connected = isChatGPTCredentials(credentials);
+        const status = document.getElementById('chatgpt-auth-status');
+        const button = document.getElementById('button-chatgpt-auth');
+        if (!status || !button) return;
+
+        const identity = credentials?.email || credentials?.planType;
+        status.textContent = connected
+            ? `Connected${identity ? ` as ${identity}` : ''}. OpenAI chat uses your ChatGPT subscription.`
+            : 'Not connected. OpenAI chat uses the API key above.';
+        const label = button.querySelector('span');
+        if (label) label.textContent = connected ? 'Sign out ' : 'Connect ';
+        button.disabled = false;
+    }
+
+    async toggleChatGPTAuth() {
+        if (isChatGPTCredentials(this.stateManager.getSetting('chatgpt_auth'))) {
+            this.chatGPTAuthController?.abort();
+            this.chatGPTAuthController = null;
+            await chrome.storage.local.remove('chatgpt_auth');
+            this.stateManager.updateSettingsLocal({ chatgpt_auth: undefined });
+            this.renderChatGPTAuth();
+            return;
+        }
+
+        if (this.chatGPTAuthController) return;
+        const controller = new AbortController();
+        this.chatGPTAuthController = controller;
+        const status = document.getElementById('chatgpt-auth-status');
+        const button = document.getElementById('button-chatgpt-auth');
+        button.disabled = true;
+        status.textContent = 'Complete sign-in in the opened ChatGPT tab…';
+
+        try {
+            const credentials = await loginWithChatGPT({
+                signal: controller.signal
+            });
+            await chrome.storage.local.set({ chatgpt_auth: credentials });
+            this.stateManager.updateSettingsLocal({ chatgpt_auth: credentials });
+            this.renderChatGPTAuth();
+        } catch (error) {
+            if (error.name !== 'AbortError') {
+                status.textContent = `ChatGPT sign-in failed: ${error.message || error}`;
+            }
+        } finally {
+            if (this.chatGPTAuthController === controller) this.chatGPTAuthController = null;
+            button.disabled = false;
         }
     }
 

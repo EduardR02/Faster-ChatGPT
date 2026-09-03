@@ -50,6 +50,9 @@ export const DEFAULT_MODELS = {
     llamacpp: { "local-model": "Local Model" }
 };
 
+const CHATGPT_CODEX_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses';
+const CHATGPT_CODEX_CLIENT_VERSION = '0.144.1';
+
 export const isAnthropicOpusAtLeast = (model, major, minor = 0) => {
     const match = model.match(/^claude-opus-(\d+)(?:-(\d+))?(?:-|$)/);
     if (!match) return false;
@@ -305,10 +308,10 @@ export class OpenAIProvider extends BaseProvider {
             });
     }
 
-    createRequest({ model, messages, stream, options, apiKey, settings }) {
+    createRequest({ model, messages, stream, options, apiKey, chatGPTAuth, settings }) {
         const isReasoner = this.supports('reasoning', model);
         const isGpt56 = /^gpt-5\.6(?:-|$)/.test(model);
-        const shouldWebSearch = (options.webSearch ?? options.getWebSearch?.() ?? false) && 
+        const shouldWebSearch = (options.webSearch ?? options.getWebSearch?.() ?? false) &&
                               this.supports('web_search', model);
         const noImage = model.includes('o1-mini') || model.includes('o1-preview') || model.includes('o3-mini');
         const systemMessage = messages.find(message => message.role === RoleEnum.system)?.parts
@@ -321,31 +324,49 @@ export class OpenAIProvider extends BaseProvider {
         const body = {
             model,
             input: this.formatMessages(messages, !noImage),
-            max_output_tokens: Math.min(settings.max_tokens, isGpt56 ? MaxTokens.openai_56 : (isReasoner ? MaxTokens.openai_thinking : this.maxTokens)),
-            stream
+            stream: chatGPTAuth ? true : stream
         };
 
-        if (systemMessage) {
-            body.instructions = systemMessage;
+        if (chatGPTAuth) {
+            body.store = false;
+            body.instructions = systemMessage || 'You are a helpful assistant.';
+        } else {
+            body.max_output_tokens = Math.min(settings.max_tokens, isGpt56 ? MaxTokens.openai_56 : (isReasoner ? MaxTokens.openai_thinking : this.maxTokens));
+            if (systemMessage) body.instructions = systemMessage;
         }
-        
+
         if (shouldWebSearch) {
             body.tools = [{ type: "web_search_preview" }];
         }
-        
+
         if (isReasoner) {
             const requestedEffort = options.reasoningEffort ?? options.getOpenAIReasoningEffort?.() ?? 'medium';
-            body.reasoning = { 
+            body.reasoning = {
                 effort: this.normalizeReasoningEffort(model, requestedEffort),
                 summary: 'auto'
             };
-            if (isGpt56) body.reasoning.mode = options.reasoningMode === 'pro' ? 'pro' : 'standard';
-        } else {
+            if (isGpt56 && options.reasoningMode === 'pro') {
+                body.reasoning.mode = 'pro';
+            } else if (isGpt56 && !chatGPTAuth) {
+                body.reasoning.mode = 'standard';
+            }
+        } else if (!chatGPTAuth) {
             body.temperature = Math.min(settings.temperature, this.maxTemp);
         }
 
-        return this.buildApiRequest('https://api.openai.com/v1/responses', body, { 
-            'Authorization': `Bearer ${apiKey}` 
+        if (chatGPTAuth) {
+            return this.buildApiRequest(CHATGPT_CODEX_ENDPOINT, body, {
+                'Authorization': `Bearer ${chatGPTAuth.access}`,
+                'chatgpt-account-id': chatGPTAuth.accountId,
+                'OpenAI-Beta': 'responses=experimental',
+                'originator': 'pi',
+                'version': CHATGPT_CODEX_CLIENT_VERSION,
+                'Accept': 'text/event-stream'
+            });
+        }
+
+        return this.buildApiRequest('https://api.openai.com/v1/responses', body, {
+            'Authorization': `Bearer ${apiKey}`
         });
     }
 

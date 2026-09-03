@@ -1,5 +1,6 @@
 import { SettingsManager } from './state_manager.js';
 import { Providers } from './LLMProviders.js';
+import { ensureFreshChatGPTCredentials } from './chatgpt_auth.js';
 
 // Timeout constants (in milliseconds)
 const TIMEOUT = {
@@ -156,7 +157,7 @@ export class ApiManager {
         const { settingsManager = null, ...optionOverrides } = options;
 
         this.settingsManager = settingsManager || new SettingsManager([
-            'api_keys', 'max_tokens', 'temperature', 'models',
+            'api_keys', 'chatgpt_auth', 'max_tokens', 'temperature', 'models',
             'current_model', 'web_search', 'reasoning_effort',
             'auto_rename', 'auto_rename_model'
         ]);
@@ -177,6 +178,21 @@ export class ApiManager {
         this.settingsManager.subscribeToSetting('models', () => {
             this.providerResolutionCache.clear();
         });
+    }
+
+    async resolveChatGPTAuth(providerName, abortController) {
+        if (providerName !== 'openai') return null;
+        const credentials = this.settingsManager.getSetting('chatgpt_auth');
+        if (credentials == null) return null;
+
+        const refreshed = await ensureFreshChatGPTCredentials(credentials, {
+            signal: abortController?.signal
+        });
+        if (refreshed !== credentials) {
+            this.settingsManager.updateSettingsLocal({ chatgpt_auth: refreshed });
+            await chrome.storage.local.set({ chatgpt_auth: refreshed });
+        }
+        return refreshed;
     }
 
     resolveProvider(modelId) {
@@ -290,13 +306,17 @@ export class ApiManager {
         const provider = this.getProvider(modelId);
         const providerName = this.getProviderName(modelId);
         const apiKey = this.settingsManager.getSetting('api_keys')?.[providerName];
+        const chatGPTAuth = await this.resolveChatGPTAuth(providerName, abortController);
 
         if (provider.supports('image', modelId) && typeof provider.createImageRequest !== 'function') {
             throw new Error(`Image generation not supported for ${providerName}.`);
         }
 
-        if (providerName !== 'llamacpp' && !apiKey?.trim()) {
-            throw new Error(`${providerName} API key is empty.`);
+        if (providerName !== 'llamacpp' && !apiKey?.trim() && !chatGPTAuth) {
+            const credentialLabel = providerName === 'openai'
+                ? 'OpenAI API key or ChatGPT connection'
+                : `${providerName} API key`;
+            throw new Error(`${credentialLabel} is empty.`);
         }
 
         // Handle local model configuration
@@ -315,8 +335,9 @@ export class ApiManager {
         }
 
         const isStreaming = (streamWriter !== null);
+        const requestIsStreaming = isStreaming || !!chatGPTAuth;
         const processedMessages = this.processFiles(filteredMessages);
-        
+
         const settings = {
             max_tokens: this.settingsManager.getSetting('max_tokens'),
             temperature: this.settingsManager.getSetting('temperature')
@@ -325,9 +346,10 @@ export class ApiManager {
         const [url, requestOptions] = provider.createRequest({
             model: modelId,
             messages: processedMessages,
-            stream: isStreaming,
+            stream: requestIsStreaming,
             options: { ...this, ...options, streamWriter },
             apiKey,
+            chatGPTAuth,
             settings
         });
 
@@ -336,21 +358,21 @@ export class ApiManager {
             const timeoutMs = (streamWriter?.isThinkingModel || streamWriter?.thinkingModelWithCounter)
                 ? TIMEOUT.API_THINKING
                 : TIMEOUT.API_NORMAL;
-            
+
             const response = await this._fetchWithTimeout(
-                url, 
-                requestOptions, 
-                timeoutMs, 
-                { prefix: 'API request failed', model: modelId, provider: providerName }, 
+                url,
+                requestOptions,
+                timeoutMs,
+                { prefix: 'API request failed', model: modelId, provider: providerName },
                 abortController
             );
 
-            if (isStreaming) {
+            if (requestIsStreaming) {
                 return await this.handleStreamResponse(response, modelId, tokenCounter, streamWriter);
-            } else {
-                const data = await response.json();
-                return provider.handleResponse({ data, tokenCounter });
             }
+
+            const data = await response.json();
+            return provider.handleResponse({ data, tokenCounter });
         } catch (error) {
             streamWriter?.stopThinkingCounter?.();
             throw error;
@@ -465,6 +487,12 @@ export class ApiManager {
         const decoder = new TextDecoder("utf-8");
         const provider = this.getProvider(modelId);
         const state = { buffer: '', dataLines: [], dataStructure: null };
+        const collected = writer ? null : { text: [], thoughts: [] };
+        const outputWriter = writer || {
+            processContent(content, isThought = false) {
+                collected[isThought ? 'thoughts' : 'text'].push(content);
+            }
+        };
 
         while (true) {
             const { done, value } = await reader.read();
@@ -472,7 +500,7 @@ export class ApiManager {
 
             const chunk = decoder.decode(value, { stream: true });
             for (const parsed of ApiManager.parseSSEChunk(state, chunk)) {
-                provider.handleStream({ parsed, tokenCounter, writer });
+                provider.handleStream({ parsed, tokenCounter, writer: outputWriter });
             }
         }
 
@@ -480,12 +508,14 @@ export class ApiManager {
         // flush the decoder and parser so the final event (and its token
         // usage) is not lost.
         for (const parsed of ApiManager.parseSSEChunk(state, decoder.decode())) {
-            provider.handleStream({ parsed, tokenCounter, writer });
+            provider.handleStream({ parsed, tokenCounter, writer: outputWriter });
         }
         for (const parsed of ApiManager.flushSSEBuffer(state)) {
-            provider.handleStream({ parsed, tokenCounter, writer });
+            provider.handleStream({ parsed, tokenCounter, writer: outputWriter });
         }
-        return true;
+
+        if (writer) return true;
+        return provider.returnMessage([collected.text.join('')], [collected.thoughts.join('')]);
     }
 
 

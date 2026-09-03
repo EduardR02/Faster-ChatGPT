@@ -171,7 +171,7 @@ export class SettingsManager {
 export class SettingsStateManager extends SettingsManager {
     constructor() {
         super([
-            'api_keys', 'max_tokens', 'temperature', 'loop_threshold', 'current_model',
+            'api_keys', 'chatgpt_auth', 'max_tokens', 'temperature', 'loop_threshold', 'current_model',
             'close_on_deselect', 'show_model_name', 'stream_response', 'arena_mode',
             'arena_models', 'auto_rename', 'auto_rename_model', 'models',
             'auto_page_context',
@@ -391,7 +391,7 @@ export class HistoryStateManager extends SettingsManager {
 export class SidepanelStateManager extends SettingsManager {
     constructor(activePromptKey) {
         super([
-            'api_keys', 'max_tokens', 'temperature',
+            'api_keys', 'chatgpt_auth', 'max_tokens', 'temperature',
             'loop_threshold', 'current_model', 'arena_models', 'stream_response',
             'arena_mode', 'show_model_name', 'models', 'web_search', 'auto_page_context',
             'reasoning_effort', 'persist_tabs', 'transcription_model',
