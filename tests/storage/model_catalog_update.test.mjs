@@ -32,16 +32,15 @@ describe('model catalog update', () => {
         expect(storage.models.openai['custom-openai']).toBe('Custom OpenAI');
         expect(storage.models.anthropic['claude-fable-5']).toBe('My Fable Label');
         expect(storage.models.custom).toEqual({ 'private-model': 'Private Model' });
-        expect(storage.model_catalog_version).toBe(3);
+        expect(storage.model_catalog_version).toBe(4);
     });
 
-    test('upgrades an existing version 2 catalog with DeepSeek V4', async () => {
-        storage.model_catalog_version = 2;
+    test('upgrades an existing version 3 catalog with Gemini 3.8 Flash', async () => {
+        storage.model_catalog_version = 3;
 
         expect(await mergeNewDefaultModels()).toBe(true);
-        expect(storage.models.deepseek['deepseek-v4-flash']).toBe('DeepSeek V4 Flash');
-        expect(storage.models.deepseek['deepseek-v4-pro']).toBe('DeepSeek V4 Pro');
-        expect(storage.model_catalog_version).toBe(3);
+        expect(storage.models.gemini['gemini-3.8-flash']).toBe('Gemini 3.8 Flash');
+        expect(storage.model_catalog_version).toBe(4);
     });
 
     test('runs only once and leaves the current catalog untouched afterward', async () => {

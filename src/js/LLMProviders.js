@@ -34,7 +34,7 @@ export const MaxTokens = {
 export const NEW_DEFAULT_MODELS = {
     openai: { "gpt-5.6-sol": "GPT-5.6 Sol", "gpt-5.6-terra": "GPT-5.6 Terra", "gpt-5.6-luna": "GPT-5.6 Luna" },
     anthropic: { "claude-fable-5": "Claude Fable 5", "claude-opus-4-8": "Claude Opus 4.8", "claude-opus-5": "Claude Opus 5" },
-    gemini: { "gemini-3.5-flash": "Gemini 3.5 Flash" },
+    gemini: { "gemini-3.5-flash": "Gemini 3.5 Flash", "gemini-3.8-flash": "Gemini 3.8 Flash" },
     deepseek: { "deepseek-v4-flash": "DeepSeek V4 Flash", "deepseek-v4-pro": "DeepSeek V4 Pro" },
     kimi: { "kimi-k3": "Kimi K3" }
 };
@@ -627,13 +627,19 @@ export class GeminiProvider extends BaseProvider {
 
     getReasoningEfforts(model) {
         if (!this.supports('reasoning', model)) return [];
+        if (model === 'gemini-3.8-flash') return ['low', 'medium', 'high'];
         return model === 'gemini-3.5-flash'
             ? ['minimal', 'low', 'medium', 'high']
             : ['minimal', 'low', 'medium', 'high', 'xhigh'];
     }
 
     normalizeReasoningEffort(model, effort) {
-        if (model === 'gemini-3.5-flash' && (effort === 'xhigh' || effort === 'max')) return 'high';
+        if (model === 'gemini-3.8-flash') {
+            if (effort === 'minimal') return 'low';
+            if (effort === 'xhigh' || effort === 'max') return 'high';
+        } else if (model === 'gemini-3.5-flash' && (effort === 'xhigh' || effort === 'max')) {
+            return 'high';
+        }
         return super.normalizeReasoningEffort(model, effort, 'medium');
     }
 
@@ -715,11 +721,11 @@ export class GeminiProvider extends BaseProvider {
             isThinking ? MaxTokens.gemini_thinking : this.getGeminiMaxTokens(model)
         );
 
-        const generationConfig = { 
-            temperature: Math.min(settings.temperature, this.maxTemp), 
-            maxOutputTokens: maxTokens, 
-            responseMimeType: "text/plain" 
+        const generationConfig = {
+            maxOutputTokens: maxTokens,
+            responseMimeType: "text/plain"
         };
+        if (!isGemini3) generationConfig.temperature = Math.min(settings.temperature, this.maxTemp);
 
         if (isGemini3) {
             const requestedEffort = options.reasoningEffort ?? options.getGeminiThinkingLevel?.() ?? 'medium';

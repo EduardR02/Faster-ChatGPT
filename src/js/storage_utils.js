@@ -1,6 +1,6 @@
 import { DEFAULT_MODELS, NEW_DEFAULT_MODELS } from './LLMProviders.js';
 
-const MODEL_CATALOG_VERSION = 3;
+const MODEL_CATALOG_VERSION = 4;
 
 export const ModeEnum = { InstantPromptMode: 0, PromptMode: 1, Off: 2 };
 

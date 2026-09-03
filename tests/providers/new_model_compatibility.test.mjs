@@ -41,6 +41,7 @@ describe('new default model registry', () => {
         expect(DEFAULT_MODELS.kimi['kimi-k3']).toBe('Kimi K3');
         expect(DEFAULT_MODELS.kimi['kimi-k2.6']).toBe('Kimi 2.6');
         expect(DEFAULT_MODELS.gemini['gemini-3.5-flash']).toBe('Gemini 3.5 Flash');
+        expect(DEFAULT_MODELS.gemini['gemini-3.8-flash']).toBe('Gemini 3.8 Flash');
         expect(DEFAULT_MODELS.gemini['gemini-3-flash-preview']).toBe('Gemini 3 Flash');
         expect(DEFAULT_MODELS.deepseek['deepseek-v4-flash']).toBe('DeepSeek V4 Flash');
         expect(DEFAULT_MODELS.deepseek['deepseek-v4-pro']).toBe('DeepSeek V4 Pro');
@@ -105,6 +106,7 @@ describe('Gemini 3.5 Flash compatibility', () => {
                 thinkingLevel: effort,
                 include_thoughts: true
             });
+            expect(body.generationConfig.temperature).toBeUndefined();
         }
     });
 
@@ -118,6 +120,36 @@ describe('Gemini 3.5 Flash compatibility', () => {
     test('normalizes unsupported max on older Gemini reasoning models', () => {
         const body = createBody(provider, 'gemini-3-flash-preview', { reasoningEffort: 'max' });
         expect(body.generationConfig.thinking_config.thinkingLevel).toBe('medium');
+    });
+});
+
+describe('Gemini 3.8 Flash compatibility', () => {
+    const provider = new GeminiProvider();
+
+    test('exposes and sends only the supported thinking levels', () => {
+        const efforts = ['low', 'medium', 'high'];
+        expect(provider.getReasoningEfforts('gemini-3.8-flash')).toEqual(efforts);
+
+        for (const effort of efforts) {
+            const body = createBody(provider, 'gemini-3.8-flash', { reasoningEffort: effort });
+            expect(body.generationConfig.thinking_config).toEqual({
+                thinkingLevel: effort,
+                include_thoughts: true
+            });
+            expect(body.generationConfig.temperature).toBeUndefined();
+            expect(body.generationConfig.maxOutputTokens).toBe(MaxTokens.gemini_thinking);
+        }
+    });
+
+    test('normalizes unsupported saved thinking levels', () => {
+        expect(createBody(provider, 'gemini-3.8-flash', { reasoningEffort: 'minimal' })
+            .generationConfig.thinking_config.thinkingLevel).toBe('low');
+        for (const effort of ['xhigh', 'max']) {
+            expect(createBody(provider, 'gemini-3.8-flash', { reasoningEffort: effort })
+                .generationConfig.thinking_config.thinkingLevel).toBe('high');
+        }
+        expect(createBody(provider, 'gemini-3.8-flash', { reasoningEffort: 'invalid' })
+            .generationConfig.thinking_config.thinkingLevel).toBe('medium');
     });
 });
 
