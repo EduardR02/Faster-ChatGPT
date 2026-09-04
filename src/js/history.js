@@ -3,7 +3,6 @@ import { HistoryChatUI, runAfterSuccessfulBuild } from './chat_ui.js';
 import { HistoryStateManager } from './state_manager.js';
 import { RenameManager } from './rename_manager.js';
 import { ChatCore } from './chat_core.js';
-import { createElementWithClass } from './ui_utils.js';
 import { normaliseForSearch } from './search_utils.js';
 import { copyChatMarkdownToClipboard, saveChatMarkdownToFile } from './markdown_export.js';
 import { runHistoryMarkdownAction } from './history_markdown_action.js';
@@ -405,7 +404,7 @@ async function handleAppended(chatId, addedCount, startIndex, searchDelta = null
         },
         invalidateMedia: () => {
             if (!mediaTab) return;
-            mediaTab.deferredForceRefresh = true;
+            mediaTab.invalidate();
             if (mediaTab.isMediaTabActive()) {
                 runWhenIdle(() => mediaTab.refreshMedia({ incremental: true }));
             }
@@ -429,7 +428,7 @@ async function handleUpdate(chatId, messageId, timestamp = null, messageData = n
             return shouldApplyLiveMessage(chatId, messageId, effectiveTimestamp);
         },
         beforeRefresh: () => {
-            if (mediaTab) mediaTab.deferredForceRefresh = true;
+            if (mediaTab) mediaTab.invalidate();
         },
         refreshHistory: message => {
             const effectiveTimestamp = getLiveMessageTimestamp(timestamp, message);
@@ -534,7 +533,6 @@ async function autoRenameUnmodified() {
  * Media Tab Management.
  */
 const MEDIA_DEFAULT_LIMIT = 500;
-const MEDIA_RENDER_CHUNK_SIZE = 12;
 const MEDIA_STATE = Object.freeze({
     loading: 'loading',
     indexing: 'indexing',
@@ -544,22 +542,10 @@ const MEDIA_STATE = Object.freeze({
 });
 
 const MEDIA_STATUS_MESSAGES = Object.freeze({
-    [MEDIA_STATE.loading]: {
-        title: 'Loading media…',
-        subtitle: ''
-    },
-    [MEDIA_STATE.indexing]: {
-        title: 'Indexing existing images…',
-        subtitle: 'This may take a moment.'
-    },
-    [MEDIA_STATE.empty]: {
-        title: 'No images found',
-        subtitle: 'Images from new chats will appear here.'
-    },
-    [MEDIA_STATE.error]: {
-        title: 'Error loading media',
-        subtitle: 'Please try again later.'
-    }
+    [MEDIA_STATE.loading]: { title: 'Loading media…', subtitle: '' },
+    [MEDIA_STATE.indexing]: { title: 'Indexing existing images…', subtitle: 'This may take a moment.' },
+    [MEDIA_STATE.empty]: { title: 'No images found', subtitle: 'Images from new chats will appear here.' },
+    [MEDIA_STATE.error]: { title: 'Error loading media', subtitle: 'Please try again later.' }
 });
 
 class MediaTab {
@@ -572,222 +558,84 @@ class MediaTab {
         this.isLoading = false;
         this.hasAttemptedInitialLoad = false;
         this.invalidMediaIds = new Set();
-        this.pendingRefresh = false;
-        this.mediaLoadContext = null;
-        this.renderToken = null;
-        this.renderScheduled = false;
-        this.mediaItemElements = new Map();
-        this.mediaEntryMap = new Map();
-        this.initialHydrateBudget = 0;
-        this.mediaObserver = null;
-        this.mediaObserverRoot = null;
-        this.deferredForceRefresh = false;
-        this.init();
-    }
+        this.refreshPending = false;
+        this.loadContext = null;
 
-    init() {
-        document.querySelectorAll('.history-tab').forEach(tab => {
+        // The static HTML owns every required media node; cache them once and trust them.
+        this.mediaPanel = document.getElementById('media-panel');
+        this.mediaGrid = document.getElementById('media-grid');
+        this.mediaView = document.getElementById('media-view');
+        this.mediaSidebar = document.getElementById('media-tab');
+        this.chatView = document.getElementById('chat-view');
+        this.mediaTabButton = document.querySelector('.history-tab[data-tab="media"]');
+        this.historyTabs = document.querySelectorAll('.history-tab');
+        this.filterButtons = [...document.querySelectorAll('.media-filter-btn')];
+        this.sortToggle = document.getElementById('media-sort-toggle');
+        this.mediaStatusTitle = this.mediaPanel.querySelector('.media-status-title');
+        this.mediaStatusSubtitle = this.mediaPanel.querySelector('.media-status-subtitle');
+
+        for (const tab of this.historyTabs) {
             tab.addEventListener('click', () => this.switchTab(tab.dataset.tab));
-        });
-
-        document.querySelectorAll('.media-filter-btn').forEach(btn => {
+        }
+        for (const btn of this.filterButtons) {
             btn.addEventListener('click', () => this.setFilter(btn.dataset.filter));
-        });
-
-        const sortToggle = document.getElementById('media-sort-toggle');
-        if (sortToggle) {
-            sortToggle.addEventListener('click', () => this.toggleSort(sortToggle));
         }
+        this.sortToggle.addEventListener('click', () => this.toggleSort());
     }
 
-    _resetMediaState() {
-        this.deferredForceRefresh = true;
-        this.mediaEntries = [];
-        this.mediaEntryMap.clear();
-        this.mediaItemElements.clear();
-        this.invalidMediaIds = new Set();
-        this.mediaLoadContext = null;
-        this.isLoading = false;
-        this.pendingRefresh = false;
-        if (this.mediaObserver) {
-            this.mediaObserver.disconnect();
-        }
+    invalidate() {
+        this.refreshPending = true;
     }
 
-    _filterAndSortMedia(entries) {
-        const filtered = entries
-            .filter(entry => this.currentFilter === 'all' || entry.source === this.currentFilter)
-            .filter(entry => !this.invalidMediaIds?.has(entry.id));
-        return filtered.sort((a, b) => {
-            if (this.currentSort === 'asc') {
-                return (a.timestamp ?? 0) - (b.timestamp ?? 0);
-            }
-            return (b.timestamp ?? 0) - (a.timestamp ?? 0);
-        });
-    }
-
-    ensureMediaObserver() {
-        const panel = document.getElementById('media-panel');
-        const root = panel ?? null;
-
-        if (this.mediaObserver && this.mediaObserverRoot === root) {
-            return this.mediaObserver;
-        }
-
-        if (this.mediaObserver) {
-            this.mediaObserver.disconnect();
-        }
-
-        this.mediaObserverRoot = root;
-        this.mediaObserver = new IntersectionObserver(
-            (entries) => this.handleMediaIntersection(entries),
-            {
-                root,
-                rootMargin: '200px 0px',
-                threshold: 0.1
-            }
-        );
-
-        return this.mediaObserver;
-    }
-
-    handleMediaIntersection(entries) {
-        for (const observerEntry of entries) {
-            if (!observerEntry.isIntersecting) continue;
-            const element = observerEntry.target;
-            const mediaId = Number(element.dataset.entryId);
-            if (!Number.isFinite(mediaId)) continue;
-            const mediaEntry = this.mediaEntryMap.get(mediaId);
-            if (!mediaEntry) {
-                if (this.mediaObserver) {
-                    this.mediaObserver.unobserve(element);
-                }
-                continue;
-            }
-            void this.hydrateMediaEntry(mediaEntry).catch(() => {});
-        }
+    isMediaTabActive() {
+        return this.mediaTabButton.classList.contains('active');
     }
 
     switchTab(tabName) {
-        document.querySelectorAll('.history-tab').forEach(t => {
-            const isActive = t.dataset.tab === tabName;
-            t.classList.toggle('active', isActive);
-        });
-
+        for (const tab of this.historyTabs) {
+            tab.classList.toggle('active', tab.dataset.tab === tabName);
+        }
         document.querySelectorAll('.history-tab-content').forEach(c => c.style.display = 'none');
         document.querySelectorAll('.history-chat-view, .media-view').forEach(c => c.style.display = 'none');
-
-        const chatContainer = document.getElementById(`${tabName}-tab`);
-        const chatView = document.getElementById('chat-view');
-        const mediaSidebar = document.getElementById('media-tab');
-        const mediaView = document.getElementById('media-view');
-
         if (tabName === 'media') {
-            if (mediaSidebar) mediaSidebar.style.display = 'flex';
-            if (mediaView) mediaView.style.display = 'flex';
+            this.mediaSidebar.style.display = 'flex';
+            this.mediaView.style.display = 'flex';
             if (!this.hasAttemptedInitialLoad) {
                 this.hasAttemptedInitialLoad = true;
-                const shouldForce = this.deferredForceRefresh;
-                if (shouldForce) this.deferredForceRefresh = false;
-                runWhenIdle(() => { void this.refreshMedia({ force: shouldForce }); });
-            } else if (this.deferredForceRefresh) {
-                this.deferredForceRefresh = false;
-                runWhenIdle(() => { void this.refreshMedia({ force: true }); });
-            } else if (this.pendingRefresh) {
-                runWhenIdle(() => { void this.refreshMedia({ force: true }); });
+            } else if (!this.refreshPending) {
+                return;
             }
+            this.refreshPending = false;
+            runWhenIdle(() => { void this.refreshMedia({ force: true }); });
         } else {
-            if (chatContainer) chatContainer.style.display = 'flex';
-            if (chatView) chatView.style.display = 'flex';
+            document.getElementById(`${tabName}-tab`).style.display = 'flex';
+            this.chatView.style.display = 'flex';
         }
+    }
 
+    setFilter(filter) {
+        if (this.currentFilter === filter) return;
+        this.currentFilter = filter;
+        this.filterButtons.forEach(btn => btn.classList.remove('is-active', 'active'));
+        this.filterButtons.find(btn => btn.dataset.filter === filter)?.classList.add('is-active');
+        this.renderMedia();
+    }
+
+    toggleSort() {
+        this.currentSort = this.currentSort === 'desc' ? 'asc' : 'desc';
+        this.sortToggle.dataset.order = this.currentSort;
+        this.sortToggle.textContent = this.currentSort === 'desc' ? 'Newest first' : 'Oldest first';
+        this.sortToggle.classList.toggle('is-active', this.currentSort === 'asc');
+        this.renderMedia();
     }
 
     async refreshMedia({ force = false, incremental = false } = {}) {
-        if (force) {
-            this.deferredForceRefresh = false;
-        }
-
-        if (incremental && this.isMediaTabActive() && this.mediaEntries.length && !force && !this.isLoading) {
+        if (incremental && !force && !this.isLoading && this.isMediaTabActive() && this.mediaEntries.length) {
             return this.refreshMediaIncremental();
         }
-
-        if (this.isLoading && !force) return;
-
-        const runLoad = async () => {
-            this.pendingRefresh = false;
-            if (this.isLoading && !force) return;
-            this.isLoading = true;
-            if (this.mediaLoadContext) {
-                this.mediaLoadContext.aborted = true;
-            }
-            const loadContext = { aborted: false };
-            this.mediaLoadContext = loadContext;
-
-            const panel = document.getElementById('media-panel');
-            const grid = document.getElementById('media-grid');
-
-            if (this.mediaObserver) {
-                this.mediaObserver.disconnect();
-            }
-            this.ensureMediaObserver();
-
-            this.setMediaState(panel, MEDIA_STATE.loading);
-            if (grid) {
-                grid.replaceChildren();
-            }
-
-            const loadStart = now();
-
-            try {
-                let entries = await this.chatStorage.getAllMedia(MEDIA_DEFAULT_LIMIT, 0);
-
-                if (entries.length === 0) {
-                    const indexedCount = await this.maybeIndexExistingMedia(panel, loadContext);
-                    if (indexedCount > 0) {
-                        entries = await this.chatStorage.getAllMedia(MEDIA_DEFAULT_LIMIT, 0);
-                    }
-                }
-
-                if (entries.some(entry => !entry.thumbnail)) {
-                    await this.chatStorage.ensureMediaThumbnails(entries);
-                }
-
-                this.invalidMediaIds = new Set();
-                this.mediaEntries = entries;
-                this.mediaEntryMap.clear();
-                entries.forEach(entry => this.mediaEntryMap.set(entry.id, entry));
-                this.initialHydrateBudget = Math.min(entries.length, MEDIA_RENDER_CHUNK_SIZE * 2);
-                this.syncMediaCache(entries);
-
-                if (entries.length === 0) {
-                    this.setMediaState(panel, MEDIA_STATE.empty);
-                    return;
-                }
-
-                this.setMediaState(panel, MEDIA_STATE.ready);
-                await this.renderMedia(loadContext);
-                console.log(`Media grid loaded ${entries.length} entries in ${formatDuration(loadStart)}`);
-            } catch (error) {
-                this.setMediaState(panel, MEDIA_STATE.error);
-                console.error('Error loading media:', error);
-            } finally {
-                this.isLoading = false;
-                if (this.mediaLoadContext === loadContext) {
-                    this.mediaLoadContext = null;
-                }
-            }
-        };
-
-        if (!force) {
-            if (this.pendingRefresh) return;
-            this.pendingRefresh = true;
-            runWhenIdle(() => { void runLoad(); });
-            return;
-        }
-
-        this.pendingRefresh = false;
-        await runLoad();
+        if (force) return this.runLoad(true);
+        if (this.isLoading) return;
+        runWhenIdle(() => { void this.runLoad(); });
     }
 
     async refreshMediaIncremental() {
@@ -795,412 +643,152 @@ class MediaTab {
             const latest = await this.chatStorage.getAllMedia(MEDIA_DEFAULT_LIMIT, 0);
             if (!Array.isArray(latest) || latest.length === 0) return;
 
-            const knownIds = new Set(this.mediaEntryMap.keys());
-            const newEntries = latest.filter(e => !knownIds.has(e.id));
-            if (!newEntries.length) return;
+            const knownIds = new Set(this.mediaEntries.map(entry => entry.id));
+            const newEntries = latest.filter(entry => !knownIds.has(entry.id));
+            if (newEntries.length === 0) return;
 
             if (newEntries.some(entry => !entry.thumbnail)) {
                 await this.chatStorage.ensureMediaThumbnails(newEntries);
             }
-
-            newEntries.forEach(entry => this.mediaEntryMap.set(entry.id, entry));
-            const existing = this.mediaEntries.filter(entry => this.mediaEntryMap.has(entry.id) && !newEntries.some(ne => ne.id === entry.id));
-            this.mediaEntries = [...newEntries, ...existing];
-
-            const panel = document.getElementById('media-panel');
-            const grid = document.getElementById('media-grid');
-            if (!panel || !grid) return;
-
-            const sorted = this._filterAndSortMedia(newEntries);
-            if (!sorted.length) return;
-
-            this.setMediaState(panel, MEDIA_STATE.ready);
-            await this.renderNewMediaEntries(sorted, grid);
+            this.mediaEntries = [...newEntries, ...this.mediaEntries];
+            this._showEntries(this._filterAndSortMedia(newEntries));
         } catch (error) {
             console.error('Incremental media refresh failed:', error);
-            this.pendingRefresh = true;
+            this.refreshPending = true;
         }
     }
 
-    async reindexMedia() {
-        const db = await this.chatStorage.getDB();
-
-        if (!db.objectStoreNames.contains('mediaIndex')) {
-            const mediaActive = this.isMediaTabActive();
-            if (mediaActive) {
-                this.deferredForceRefresh = false;
-                await this.refreshMedia({ force: true });
-            } else {
-                this._resetMediaState();
-            }
-            return 0;
+    async runLoad(force = false) {
+        if (this.isLoading && !force) return;
+        if (this.loadContext) {
+            this.loadContext.aborted = true;
         }
 
+        const loadContext = { aborted: false };
+        this.loadContext = loadContext;
+        this.isLoading = true;
+        this.refreshPending = false;
+
+        this.setMediaState(MEDIA_STATE.loading);
+        this.mediaGrid.replaceChildren();
+
+        const loadStart = now();
         try {
-            await new Promise((resolve, reject) => {
-                const tx = db.transaction(['mediaIndex'], 'readwrite');
-                tx.objectStore('mediaIndex').clear();
-                const fail = () => reject(tx.error || new Error('Failed to clear media index'));
-                tx.oncomplete = () => resolve();
-                tx.onabort = fail;
-                tx.onerror = fail;
-            });
+            const entries = await this.fetchMediaEntries(loadContext);
+            if (loadContext.aborted) return;
 
-            const indexedCount = await this.chatStorage.indexAllMediaFromExistingMessages();
-            const mediaActive = this.isMediaTabActive();
-            if (mediaActive) {
-                this.deferredForceRefresh = false;
-                await this.refreshMedia({ force: true });
-            } else {
-                this._resetMediaState();
-            }
-            return indexedCount;
-        } catch (error) {
-            if (this.isMediaTabActive()) {
-                await this.refreshMedia({ force: true }).catch(() => {});
-            } else {
-                this.deferredForceRefresh = true;
-            }
-            throw error;
-        }
-    }
+            this.invalidMediaIds = new Set();
+            this.mediaEntries = entries;
 
-    isMediaTabActive() {
-        const tab = document.querySelector('.history-tab[data-tab="media"]');
-        return !!tab && tab.classList.contains('active');
-    }
-
-    setMediaState(panel, state) {
-        if (!panel) return;
-        panel.setAttribute('data-state', state);
-
-        const { title = '', subtitle = '' } = MEDIA_STATUS_MESSAGES[state] ?? {};
-
-        const status = this.ensureMediaStatus(panel);
-        status.title.textContent = title;
-        status.subtitle.textContent = subtitle;
-    }
-
-    ensureMediaStatus(panel) {
-        let container = panel.querySelector('.media-status');
-        if (!container) {
-            container = createElementWithClass('div', 'media-status');
-            const icon = createElementWithClass('div', 'media-status-icon');
-            const copy = createElementWithClass('div', 'media-status-copy');
-            const title = createElementWithClass('div', 'media-status-title');
-            const subtitle = createElementWithClass('div', 'media-status-subtitle');
-            copy.append(title, subtitle);
-            container.append(icon, copy);
-            panel.prepend(container);
-        }
-
-        const copy = container.querySelector('.media-status-copy');
-        const title = container.querySelector('.media-status-title');
-        const subtitle = container.querySelector('.media-status-subtitle');
-
-        return {
-            container,
-            icon: container.querySelector('.media-status-icon'),
-            copy,
-            title,
-            subtitle
-        };
-    }
-
-    setFilter(filter) {
-        if (this.currentFilter === filter) return;
-        this.currentFilter = filter;
-        document.querySelectorAll('.media-filter-btn').forEach(b => b.classList.remove('is-active', 'active'));
-        const target = document.querySelector(`[data-filter="${filter}"]`);
-        if (target) target.classList.add('is-active');
-        this.scheduleMediaRender();
-    }
-
-    async renderMedia(loadContext = this.mediaLoadContext) {
-        const panel = document.getElementById('media-panel');
-        const grid = document.getElementById('media-grid');
-        if (!panel || !grid) return;
-
-        if (this.mediaObserver) {
-            this.mediaObserver.disconnect();
-        }
-        this.ensureMediaObserver();
-
-        const sortedEntries = this._filterAndSortMedia(this.mediaEntries);
-
-        grid.replaceChildren();
-
-        if (sortedEntries.length === 0) {
-            this.setMediaState(panel, MEDIA_STATE.empty);
-            return;
-        }
-
-        this.setMediaState(panel, MEDIA_STATE.ready);
-        this.initialHydrateBudget = Math.min(sortedEntries.length, MEDIA_RENDER_CHUNK_SIZE * 2);
-        await this.renderMediaInBatches(sortedEntries, grid, loadContext);
-
-        if (!grid.children.length) {
-            this.setMediaState(panel, MEDIA_STATE.empty);
-        }
-    }
-
-    scheduleMediaRender(immediate = false) {
-        const token = Symbol('media-render');
-        this.renderToken = token;
-
-        const run = async () => {
-            if (this.renderToken !== token) return;
-            this.renderScheduled = false;
-            await this.renderMedia();
-        };
-
-        if (immediate) {
-            void run();
-            return;
-        }
-
-        if (this.renderScheduled) {
-            return;
-        }
-
-        this.renderScheduled = true;
-        runWhenIdle(() => { void run(); }, 48);
-    }
-
-    createPlaceholderLoader() {
-        const loader = document.createElement('div');
-        loader.className = 'media-placeholder-loader';
-        loader.textContent = 'Loading...';
-        return loader;
-    }
-
-    getOrCreateMediaPlaceholder(entry) {
-        let element = this.mediaItemElements.get(entry.id);
-        if (!element) {
-            element = document.createElement('div');
-            element.className = 'media-item media-placeholder';
-            element.dataset.entryId = String(entry.id);
-            element.dataset.hydrated = 'false';
-            element.appendChild(this.createPlaceholderLoader());
-            this.mediaItemElements.set(entry.id, element);
-        }
-
-        element.dataset.entryId = String(entry.id);
-        if (element.dataset.hydrated === 'true') {
-            return element;
-        }
-
-        if (!element.classList.contains('media-placeholder')) {
-            element.classList.add('media-placeholder');
-        }
-
-        if (!element.firstChild || !element.firstChild.classList || !element.firstChild.classList.contains('media-placeholder-loader')) {
-            element.replaceChildren(this.createPlaceholderLoader());
-        }
-
-        element.dataset.hydrated = 'false';
-        delete element.dataset.observing;
-        delete element.dataset.hydrating;
-        if (entry.thumbnailWidth && entry.thumbnailHeight) {
-            element.dataset.thumbWidth = String(entry.thumbnailWidth);
-            element.dataset.thumbHeight = String(entry.thumbnailHeight);
-        } else {
-            delete element.dataset.thumbWidth;
-            delete element.dataset.thumbHeight;
-        }
-        this.applyMediaDimensions(element, entry);
-        return element;
-    }
-
-    async renderNewMediaEntries(entries, grid) {
-        for (const entry of entries) {
-            const element = this.getOrCreateMediaPlaceholder(entry);
-            element.dataset.hydrated = 'false';
-            element.classList.add('media-placeholder');
-            if (entry.thumbnailWidth && entry.thumbnailHeight) {
-                element.dataset.thumbWidth = String(entry.thumbnailWidth);
-                element.dataset.thumbHeight = String(entry.thumbnailHeight);
-            }
-            this.applyMediaDimensions(element, entry);
-            grid.prepend(element);
-            this.scheduleMediaHydration(entry, this.mediaLoadContext);
-        }
-    }
-
-    scheduleMediaHydration(entry, loadContext = null) {
-        const element = this.mediaItemElements.get(entry.id);
-        if (!element || element.dataset.hydrated === 'true' || element.dataset.hydrating === 'true') {
-            return;
-        }
-
-        if (this.initialHydrateBudget > 0) {
-            this.initialHydrateBudget -= 1;
-            void this.hydrateMediaEntry(entry, loadContext).catch(() => {});
-            return;
-        }
-
-        if (element.dataset.observing === 'true') {
-            return;
-        }
-
-        const observer = this.ensureMediaObserver();
-        element.dataset.observing = 'true';
-        observer.observe(element);
-    }
-
-    async hydrateMediaEntry(entry, loadContext = null) {
-        const element = this.mediaItemElements.get(entry.id);
-        if (!element || element.dataset.hydrated === 'true' || element.dataset.hydrating === 'true') {
-            return;
-        }
-
-        element.dataset.hydrating = 'true';
-
-        let imageData = entry.thumbnail ?? null;
-
-        try {
-            if (entry.thumbnailWidth && entry.thumbnailHeight) {
-                element.dataset.thumbWidth = String(entry.thumbnailWidth);
-                element.dataset.thumbHeight = String(entry.thumbnailHeight);
-            }
-
-            if (!this.isValidImage(imageData)) {
-                await this.handleInvalidMedia(entry.id, element);
+            if (entries.length === 0) {
+                this.setMediaState(MEDIA_STATE.empty);
                 return;
             }
 
-            const hydratedElement = this.createMediaElement(entry, imageData);
-            if (!hydratedElement) return;
-
-            hydratedElement.dataset.entryId = String(entry.id);
-            hydratedElement.dataset.hydrated = 'true';
-
-            this.mediaItemElements.set(entry.id, hydratedElement);
-
-            this.applyMediaDimensions(hydratedElement, entry);
-
-            if (element.parentNode) {
-                element.parentNode.replaceChild(hydratedElement, element);
-            }
-
-            if (this.mediaObserver) {
-                this.mediaObserver.unobserve(element);
-            }
-
+            this.renderMedia();
+            console.log(`Media grid loaded ${entries.length} entries in ${formatDuration(loadStart)}`);
         } catch (error) {
-            if (!loadContext?.aborted) {
-                console.warn('Failed to hydrate media entry', error);
-                const observer = this.ensureMediaObserver();
-                element.dataset.observing = 'true';
-                observer.observe(element);
+            if (!loadContext.aborted) {
+                this.setMediaState(MEDIA_STATE.error);
+                console.error('Error loading media:', error);
             }
         } finally {
-            delete element.dataset.hydrating;
-            delete element.dataset.observing;
+            if (this.loadContext === loadContext) {
+                this.loadContext = null;
+                this.isLoading = false;
+            }
         }
     }
 
-    async renderMediaInBatches(entries, grid, loadContext = null, batchSize = 24) {
-        const allHydrated = entries.every(entry => {
-            const element = this.mediaItemElements.get(entry.id);
-            return element && element.dataset.hydrated === 'true';
-        });
-
-        if (allHydrated) {
-            const fragment = document.createDocumentFragment();
-            for (const entry of entries) {
-                const element = this.mediaItemElements.get(entry.id);
-                if (element) {
-                    fragment.appendChild(element);
-                }
+    // Fetches entries from storage, bootstrapping the media index and thumbnails when missing.
+    async fetchMediaEntries(loadContext) {
+        let entries = await this.chatStorage.getAllMedia(MEDIA_DEFAULT_LIMIT, 0);
+        if (entries.length === 0 && !loadContext.aborted) {
+            const indexedCount = await this.maybeIndexExistingMedia(loadContext);
+            if (indexedCount > 0) {
+                entries = await this.chatStorage.getAllMedia(MEDIA_DEFAULT_LIMIT, 0);
             }
-            if (fragment.childNodes.length) {
-                grid.appendChild(fragment);
-            }
-            return;
         }
-
-        for (let i = 0; i < entries.length; i += batchSize) {
-            if (loadContext?.aborted) return;
-
-            const batch = entries.slice(i, i + batchSize);
-            const fragment = document.createDocumentFragment();
-
-            for (const entry of batch) {
-                const element = this.getOrCreateMediaPlaceholder(entry);
-                fragment.appendChild(element);
-                this.scheduleMediaHydration(entry, loadContext);
-            }
-
-            if (fragment.childNodes.length) {
-                grid.appendChild(fragment);
-            }
-
-            await nextFrame();
+        if (!loadContext.aborted && entries.some(entry => !entry.thumbnail)) {
+            await this.chatStorage.ensureMediaThumbnails(entries);
         }
+        return entries;
     }
 
-    async maybeIndexExistingMedia(panel, loadContext) {
-        this.setMediaState(panel, MEDIA_STATE.indexing);
-
+    async maybeIndexExistingMedia(loadContext) {
+        this.setMediaState(MEDIA_STATE.indexing);
         try {
             return await this.chatStorage.indexAllMediaFromExistingMessages();
         } catch (error) {
-            if (!loadContext?.aborted) {
+            if (!loadContext.aborted) {
                 console.error('Failed to index existing media:', error);
             }
             return 0;
         }
     }
 
-    createMediaElement(entry, imageData) {
+    renderMedia() {
+        this._showEntries(this._filterAndSortMedia(this.mediaEntries), { replace: true });
+    }
+
+    // A replace pass clears the grid and may fall back to the empty state; an incremental pass
+    // only touches the grid when it has items to insert.
+    _showEntries(entries, { replace = false } = {}) {
+        const items = this.createMediaItems(entries);
+        if (items.length === 0 && !replace) return;
+
+        const fragment = document.createDocumentFragment();
+        for (const item of items) fragment.appendChild(item);
+        if (replace) {
+            this.mediaGrid.replaceChildren(fragment);
+        } else if (this.currentSort === 'asc') {
+            this.mediaGrid.append(fragment);
+        } else {
+            this.mediaGrid.prepend(fragment);
+        }
+        this.setMediaState(items.length ? MEDIA_STATE.ready : MEDIA_STATE.empty);
+    }
+
+    _filterAndSortMedia(entries) {
+        const filtered = entries
+            .filter(entry => this.currentFilter === 'all' || entry.source === this.currentFilter)
+            .filter(entry => !this.invalidMediaIds.has(entry.id));
+        const order = this.currentSort === 'asc' ? 1 : -1;
+        return filtered.sort((a, b) => order * ((a.timestamp ?? 0) - (b.timestamp ?? 0)));
+    }
+
+    createMediaItems(entries) {
+        const items = [];
+        for (const entry of entries) {
+            if (this.isValidImage(entry.thumbnail)) {
+                items.push(this.createMediaItem(entry));
+            } else {
+                void this.handleInvalidMedia(entry.id);
+            }
+        }
+        return items;
+    }
+
+    createMediaItem(entry) {
         const item = document.createElement('div');
         item.className = 'media-item';
-        if (entry?.id != null) {
-            item.dataset.entryId = String(entry.id);
-        }
-        item.dataset.hydrated = 'true';
 
-        const content = this.createMediaContent(entry, imageData, item);
-        if (!content) {
-            return null;
-        }
-        item.appendChild(content);
+        const img = document.createElement('img');
+        img.loading = 'lazy';
+        img.decoding = 'async';
+        img.src = entry.thumbnail;
+        img.alt = 'Media item';
+        img.onerror = () => this.handleInvalidMedia(entry.id, item);
+        item.appendChild(img);
 
         item.appendChild(this.createBadge(entry.source));
-
         item.addEventListener('click', () => this.handleMediaClick(entry));
-
         if (entry.thumbnailWidth && entry.thumbnailHeight) {
-            item.dataset.thumbWidth = String(entry.thumbnailWidth);
-            item.dataset.thumbHeight = String(entry.thumbnailHeight);
-        }
-
-        this.applyMediaDimensions(item, entry);
-
-        return item;
-    }
-
-    applyMediaDimensions(element, entry) {
-        if (!element) return;
-        if (entry?.thumbnailWidth && entry?.thumbnailHeight) {
-            const ratio = `${Math.max(entry.thumbnailWidth, 1)} / ${Math.max(entry.thumbnailHeight, 1)}`;
-            element.style.aspectRatio = ratio;
+            item.style.aspectRatio = `${Math.max(entry.thumbnailWidth, 1)} / ${Math.max(entry.thumbnailHeight, 1)}`;
         } else {
-            element.style.removeProperty('aspect-ratio');
+            item.style.removeProperty('aspect-ratio');
         }
-    }
-
-    createMediaContent(entry, imageData, item) {
-        const img = document.createElement('img');
-        img.decoding = 'async';
-        img.loading = 'lazy';
-        img.src = imageData;
-        img.alt = 'Media item';
-        img.onerror = () => {
-            this.handleInvalidMedia(entry.id, item);
-        };
-        return img;
+        return item;
     }
 
     createBadge(source) {
@@ -1224,7 +812,7 @@ class MediaTab {
 
     findImageInMessage(entry) {
         const messageElements = document.querySelectorAll(`[data-message-id="${entry.messageId}"]`);
-        if (!messageElements.length) return null;
+        if (messageElements.length === 0) return null;
 
         if (entry.source === 'user') {
             const images = messageElements[0].querySelectorAll('.user-content.image-content img');
@@ -1234,70 +822,89 @@ class MediaTab {
         // For assistant images: contentIndex = which regeneration, partIndex = which image within it
         const msgElement = messageElements[entry.contentIndex] || messageElements[messageElements.length - 1];
         const images = msgElement.querySelectorAll('.assistant-content.image-content img');
-        const imgIndex = entry.partIndex ?? 0;
-        return images[imgIndex] || images[0] || null;
-    }
-
-    isValidImage(imageData) {
-        if (!imageData) return false;
-        return (
-            imageData.startsWith('data:image/') ||
-            imageData.startsWith('http://') ||
-            imageData.startsWith('https://')
-        );
-    }
-
-    markEntryInvalid(entryId) {
-        if (!this.invalidMediaIds) {
-            this.invalidMediaIds = new Set();
-        }
-        this.invalidMediaIds.add(entryId);
-        this.mediaEntries = this.mediaEntries.filter(entry => entry.id !== entryId);
-        this.mediaEntryMap.delete(entryId);
-    }
-
-    syncMediaCache(entries) {
-        const activeIds = new Set(entries.map(entry => entry.id));
-
-        for (const [id] of this.mediaItemElements.entries()) {
-            if (!activeIds.has(id)) {
-                this.mediaItemElements.delete(id);
-            }
-        }
-    }
-
-    toggleSort(button) {
-        this.currentSort = this.currentSort === 'desc' ? 'asc' : 'desc';
-        button.dataset.order = this.currentSort;
-        button.textContent = this.currentSort === 'desc' ? 'Newest first' : 'Oldest first';
-        button.classList.toggle('is-active', this.currentSort === 'asc');
-        this.scheduleMediaRender();
+        return images[entry.partIndex ?? 0] || images[0] || null;
     }
 
     async handleInvalidMedia(entryId, item = null) {
         this.markEntryInvalid(entryId);
-        
-        this.mediaItemElements.delete(entryId);
-        
+
         try {
             await this.chatStorage.deleteMediaEntry(entryId);
         } catch (error) {
             console.warn('Failed to delete invalid media entry', error);
         }
 
-        if (this.mediaObserver && item) {
-            this.mediaObserver.unobserve(item);
+        item?.remove();
+
+        if (this.mediaGrid.children.length === 0) {
+            this.setMediaState(MEDIA_STATE.empty);
+        }
+    }
+
+    markEntryInvalid(entryId) {
+        this.invalidMediaIds.add(entryId);
+        this.mediaEntries = this.mediaEntries.filter(entry => entry.id !== entryId);
+    }
+
+    isValidImage(imageData) {
+        if (!imageData) return false;
+        return imageData.startsWith('data:image/') || imageData.startsWith('http://') || imageData.startsWith('https://');
+    }
+
+    async reindexMedia() {
+        const db = await this.chatStorage.getDB();
+        if (!db.objectStoreNames.contains('mediaIndex')) {
+            await this._settleAfterReindex();
+            return 0;
         }
 
-        if (item?.parentNode) {
-            item.remove();
-        }
+        try {
+            await new Promise((resolve, reject) => {
+                const tx = db.transaction(['mediaIndex'], 'readwrite');
+                tx.objectStore('mediaIndex').clear();
+                const fail = () => reject(tx.error || new Error('Failed to clear media index'));
+                tx.oncomplete = () => resolve();
+                tx.onabort = fail;
+                tx.onerror = fail;
+            });
 
-        const grid = document.getElementById('media-grid');
-        const panel = document.getElementById('media-panel');
-        if (grid && grid.children.length === 0) {
-            this.setMediaState(panel, MEDIA_STATE.empty);
+            const indexedCount = await this.chatStorage.indexAllMediaFromExistingMessages();
+            await this._settleAfterReindex();
+            return indexedCount;
+        } catch (error) {
+            await this._settleAfterReindex(false).catch(() => {});
+            throw error;
         }
+    }
+
+    // Force a refresh on the active tab; on a hidden tab, clear state or just mark it stale.
+    async _settleAfterReindex(clearState = true) {
+        if (this.isMediaTabActive()) {
+            await this.refreshMedia({ force: true });
+        } else if (clearState) {
+            this._resetMediaState();
+        } else {
+            this.invalidate();
+        }
+    }
+
+    _resetMediaState() {
+        this.invalidate();
+        this.mediaEntries = [];
+        this.invalidMediaIds = new Set();
+        if (this.loadContext) {
+            this.loadContext.aborted = true;
+        }
+        this.loadContext = null;
+        this.isLoading = false;
+    }
+
+    setMediaState(state) {
+        this.mediaPanel.dataset.state = state;
+
+        const { title = '', subtitle = '' } = MEDIA_STATUS_MESSAGES[state] ?? {};
+        this.mediaStatusTitle.textContent = title;
+        this.mediaStatusSubtitle.textContent = subtitle;
     }
 }
 
