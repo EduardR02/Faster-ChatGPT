@@ -1,6 +1,4 @@
-import { DEFAULT_MODELS, NEW_DEFAULT_MODELS } from './LLMProviders.js';
-
-const MODEL_CATALOG_VERSION = 4;
+import { DEFAULT_MODELS } from './LLMProviders.js';
 
 export const ModeEnum = { InstantPromptMode: 0, PromptMode: 1, Off: 2 };
 
@@ -113,8 +111,7 @@ export const setDefaults = async () => {
         arena_mode: false,
         council_mode: false,
         council_models: [],
-        council_collector_model: defaultModel,
-        model_catalog_version: MODEL_CATALOG_VERSION
+        council_collector_model: defaultModel
     };
 
     const loadPrompt = async (path, storageKey, fallback = '') => {
@@ -142,17 +139,4 @@ export const setDefaults = async () => {
             solver_prompt: solverPrompt.trim()
         })
     ]);
-};
-
-export const mergeNewDefaultModels = async () => {
-    const stored = await chrome.storage.local.get(['models', 'model_catalog_version']);
-    if ((stored.model_catalog_version || 0) >= MODEL_CATALOG_VERSION) return false;
-
-    const models = { ...(stored.models || {}) };
-    for (const [provider, additions] of Object.entries(NEW_DEFAULT_MODELS)) {
-        models[provider] = { ...additions, ...(models[provider] || {}) };
-    }
-
-    await chrome.storage.local.set({ models, model_catalog_version: MODEL_CATALOG_VERSION });
-    return true;
 };

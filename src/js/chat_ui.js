@@ -1097,7 +1097,8 @@ export class SidepanelChatUI extends ChatUI {
         };
 
         const rebuildOptions = () => {
-            picker.innerHTML = '';
+            // Keep the select button (the closed control markup) and replace only the options
+            picker.querySelectorAll('option').forEach((option) => option.remove());
             for (const { api, display } of getModelList()) {
                 const option = document.createElement('option');
                 option.value = api;

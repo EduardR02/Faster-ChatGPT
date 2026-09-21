@@ -1,4 +1,4 @@
-import { getMode, isOn, mergeNewDefaultModels, setDefaults } from "./storage_utils.js";
+import { getMode, isOn, setDefaults } from "./storage_utils.js";
 import { requestPageContextForWindow } from './page_context_request.js';
 
 const PANEL_PATH = chrome.runtime.getURL("src/html/sidepanel.html");
@@ -23,8 +23,6 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     if (details.reason === chrome.runtime.OnInstalledReason.INSTALL) {
         await setDefaults();
         chrome.runtime.openOptionsPage();
-    } else if (details.reason === chrome.runtime.OnInstalledReason.UPDATE) {
-        await mergeNewDefaultModels();
     }
 });
 

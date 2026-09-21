@@ -16,6 +16,7 @@ export const MaxTokens = {
     openai: 16384,
     openai_thinking: 100000,
     openai_56: 128000,
+    openai_astra: 128000,
     anthropic: 32000,
     anthropic_thinking: 64000,
     anthropic_fable: 128000,
@@ -24,6 +25,7 @@ export const MaxTokens = {
     gemini_image: 32768,
     gemini_thinking: 65536,
     deepseek: 8000,
+    deepseek_v4: 384000,
     anthropic_old: 8192,
     grok: 131072,
     kimi: 262144,
@@ -31,27 +33,20 @@ export const MaxTokens = {
     mistral: 32768
 };
 
-export const NEW_DEFAULT_MODELS = {
-    openai: { "gpt-5.6-sol": "GPT-5.6 Sol", "gpt-5.6-terra": "GPT-5.6 Terra", "gpt-5.6-luna": "GPT-5.6 Luna" },
-    anthropic: { "claude-fable-5": "Claude Fable 5", "claude-opus-4-8": "Claude Opus 4.8", "claude-opus-5": "Claude Opus 5" },
-    gemini: { "gemini-3.5-flash": "Gemini 3.5 Flash", "gemini-3.8-flash": "Gemini 3.8 Flash" },
-    deepseek: { "deepseek-v4-flash": "DeepSeek V4 Flash", "deepseek-v4-pro": "DeepSeek V4 Pro" },
-    kimi: { "kimi-k3": "Kimi K3" }
-};
-
 export const DEFAULT_MODELS = {
-    openai: { "gpt-5.2": "GPT-5.2", "gpt-5.3-codex": "GPT-5.3 Codex", "gpt-5.2-mini": "GPT-5.2 mini", ...NEW_DEFAULT_MODELS.openai },
-    anthropic: { ...NEW_DEFAULT_MODELS.anthropic, "claude-opus-4-6": "Claude Opus 4.6", "claude-4.5-opus": "Claude 4.5 Opus", "claude-sonnet-4-5": "Claude 4.5 Sonnet", "claude-4.5-haiku": "Claude 4.5 Haiku" },
-    gemini: { ...NEW_DEFAULT_MODELS.gemini, "gemini-3-pro-preview": "Gemini 3 Pro", "gemini-3-flash-preview": "Gemini 3 Flash", "gemini-3-pro-image-preview": "Nano Banana Pro", "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite", "gemini-3.1-flash-image-preview": "Nano Banana 2" },
-    deepseek: { ...NEW_DEFAULT_MODELS.deepseek, "deepseek-chat": "DeepSeek V3.2", "deepseek-reasoner": "DeepSeek V3.2 thinking" },
+    openai: { "gpt-6-astra": "GPT-6 Astra", "gpt-5.6-sol": "GPT-5.6 Sol", "gpt-5.6-luna": "GPT-5.6 Luna" },
+    anthropic: { "claude-fable-5-1": "Claude Fable 5.1", "claude-opus-5": "Claude Opus 5" },
+    gemini: { "gemini-3.5-flash": "Gemini 3.5 Flash", "gemini-3.8-flash": "Gemini 3.8 Flash", "gemini-3-pro-preview": "Gemini 3 Pro", "gemini-3-flash-preview": "Gemini 3 Flash", "gemini-3-pro-image-preview": "Nano Banana Pro", "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite", "gemini-3.1-flash-image-preview": "Nano Banana 2" },
+    deepseek: { "deepseek-flash": "DeepSeek V4.1 Flash" },
     mistral: { "mistral-large-latest": "Mistral Large", "mistral-small-latest": "Mistral Small" },
     grok: { "grok-4": "Grok 4", "grok-4.1-fast-reasoning": "Grok 4.1 Fast Reasoning" },
-    kimi: { ...NEW_DEFAULT_MODELS.kimi, "kimi-k2.6": "Kimi 2.6", "kimi-k2-thinking": "Kimi 2 Thinking" },
+    kimi: { "kimi-k3": "Kimi K3" },
     llamacpp: { "local-model": "Local Model" }
 };
 
 const CHATGPT_CODEX_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses';
-const CHATGPT_CODEX_CLIENT_VERSION = '0.144.1';
+// Codex gates models by client version: gpt-6-astra requires 0.153.0, the GPT-5.6 models require 0.144.0.
+const CHATGPT_CODEX_CLIENT_VERSION = '0.153.0';
 
 export const isAnthropicOpusAtLeast = (model, major, minor = 0) => {
     const match = model.match(/^claude-opus-(\d+)(?:-(\d+))?(?:-|$)/);
@@ -62,6 +57,10 @@ export const isAnthropicOpusAtLeast = (model, major, minor = 0) => {
 };
 
 const isAnthropicFable = model => /^claude-fable-\d+(?:-|$)/.test(model);
+
+const isOpenAIGpt56 = model => /^gpt-5\.6(?:-|$)/.test(model);
+
+const isOpenAIAstra = model => /^gpt-6-astra(?:-|$)/.test(model);
 
 export class BaseProvider {
     constructor() {
@@ -188,12 +187,13 @@ export class BaseProvider {
 
 export class OpenAICompatibleProvider extends BaseProvider {
     supports() { return false; }
-    supportsImageMessages() { return false; }
-    formatMessages(messages) {
+    supportsImageMessages(_model) { return false; }
+    formatMessages(messages, context) {
+        const canSendImages = this.supportsImageMessages(context?.model);
         return messages.map(message => {
             const text = this.extractTextContent(message);
-            if (this.supportsImageMessages() && message.images) {
-                const content = [{ type: 'text', text }];
+            if (canSendImages && message.images?.length) {
+                const content = text ? [{ type: 'text', text }] : [];
                 message.images.forEach(imageUrl => content.push({ type: 'image_url', image_url: { url: imageUrl } }));
                 return { role: message.role, content };
             }
@@ -209,6 +209,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
     shouldIncludeTemperature() { return true; }
     shouldIncludeStreamOptions({ stream }) { return stream; }
     getRequestTemperature({ settings }) { return Math.min(settings.temperature, this.maxTemp); }
+    getRequestMaxTokens({ settings }) { return Math.min(settings.max_tokens, this.maxTokens); }
 
     createRequest({ model, messages, stream, settings, apiKey, options = {} }) {
         const context = { model, messages, stream, settings, apiKey, options };
@@ -218,7 +219,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
             messages: this.formatMessages(messages, context),
             stream
         };
-        if (this.shouldIncludeMaxTokens(context)) body.max_tokens = Math.min(settings.max_tokens, this.maxTokens);
+        if (this.shouldIncludeMaxTokens(context)) body.max_tokens = this.getRequestMaxTokens(context);
         if (this.shouldIncludeTemperature(context)) body.temperature = this.getRequestTemperature(context);
         if (this.shouldIncludeStreamOptions(context)) body.stream_options = { include_usage: true };
         this.extendRequestBody(body, context);
@@ -263,25 +264,37 @@ export class OpenAIProvider extends BaseProvider {
 
     supports(feature, model) {
         if (feature === 'reasoning') {
-            return /o\d/.test(model) || model.includes('gpt-5');
+            return /o\d/.test(model) || model.includes('gpt-5') || isOpenAIAstra(model);
         }
         if (feature === 'web_search') {
-            return ['gpt-4.1', 'gpt-5'].some(substring => model.includes(substring)) && !model.includes('nano');
+            const legacySearch = ['gpt-4.1', 'gpt-5'].some(substring => model.includes(substring)) && !model.includes('nano');
+            return legacySearch || isOpenAIAstra(model);
         }
-        if (feature === 'reasoning_mode') return /^gpt-5\.6(?:-|$)/.test(model);
+        if (feature === 'reasoning_mode') return isOpenAIGpt56(model) || isOpenAIAstra(model);
         return super.supports(feature, model);
     }
 
     getReasoningEfforts(model) {
         if (!this.supports('reasoning', model)) return [];
-        return /^gpt-5\.6(?:-|$)/.test(model)
+        if (isOpenAIAstra(model)) return ['low', 'medium', 'high', 'xhigh', 'max'];
+        return isOpenAIGpt56(model)
             ? ['none', 'low', 'medium', 'high', 'xhigh', 'max']
             : ['minimal', 'low', 'medium', 'high', 'xhigh'];
     }
 
     normalizeReasoningEffort(model, effort) {
-        if (/^gpt-5\.6(?:-|$)/.test(model) && effort === 'minimal') return 'none';
+        if (isOpenAIAstra(model)) {
+            if (effort === 'none' || effort === 'minimal') return 'low';
+        } else if (isOpenAIGpt56(model) && effort === 'minimal') {
+            return 'none';
+        }
         return super.normalizeReasoningEffort(model, effort, 'medium');
+    }
+
+    getOpenAIMaxTokens(model) {
+        if (isOpenAIAstra(model)) return MaxTokens.openai_astra;
+        if (isOpenAIGpt56(model)) return MaxTokens.openai_56;
+        return this.supports('reasoning', model) ? MaxTokens.openai_thinking : this.maxTokens;
     }
 
     formatMessages(messages, addImages) {
@@ -310,7 +323,8 @@ export class OpenAIProvider extends BaseProvider {
 
     createRequest({ model, messages, stream, options, apiKey, chatGPTAuth, settings }) {
         const isReasoner = this.supports('reasoning', model);
-        const isGpt56 = /^gpt-5\.6(?:-|$)/.test(model);
+        const isAstra = isOpenAIAstra(model);
+        const hasReasoningModes = this.supports('reasoning_mode', model);
         const shouldWebSearch = (options.webSearch ?? options.getWebSearch?.() ?? false) &&
                               this.supports('web_search', model);
         const noImage = model.includes('o1-mini') || model.includes('o1-preview') || model.includes('o3-mini');
@@ -331,12 +345,12 @@ export class OpenAIProvider extends BaseProvider {
             body.store = false;
             body.instructions = systemMessage || 'You are a helpful assistant.';
         } else {
-            body.max_output_tokens = Math.min(settings.max_tokens, isGpt56 ? MaxTokens.openai_56 : (isReasoner ? MaxTokens.openai_thinking : this.maxTokens));
+            body.max_output_tokens = Math.min(settings.max_tokens, this.getOpenAIMaxTokens(model));
             if (systemMessage) body.instructions = systemMessage;
         }
 
         if (shouldWebSearch) {
-            body.tools = [{ type: "web_search_preview" }];
+            body.tools = [{ type: isAstra ? "web_search" : "web_search_preview" }];
         }
 
         if (isReasoner) {
@@ -345,9 +359,9 @@ export class OpenAIProvider extends BaseProvider {
                 effort: this.normalizeReasoningEffort(model, requestedEffort),
                 summary: 'auto'
             };
-            if (isGpt56 && options.reasoningMode === 'pro') {
+            if (hasReasoningModes && options.reasoningMode === 'pro') {
                 body.reasoning.mode = 'pro';
-            } else if (isGpt56 && !chatGPTAuth) {
+            } else if (hasReasoningModes && !chatGPTAuth) {
                 body.reasoning.mode = 'standard';
             }
         } else if (!chatGPTAuth) {
@@ -879,7 +893,17 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
     }
 
     isDeepSeekV4(model) {
-        return model?.startsWith('deepseek-v4') ?? false;
+        return !!model && (model.startsWith('deepseek-v4') || model.startsWith('deepseek-flash'));
+    }
+
+    getRequestMaxTokens({ model, settings }) {
+        return Math.min(settings.max_tokens, this.isDeepSeekV4(model) ? MaxTokens.deepseek_v4 : this.maxTokens);
+    }
+
+    // Docs: only the Flash family reads images. The retired deepseek-v4-flash ids are served by
+    // DeepSeek-V4.1-Flash, while deepseek-v4-pro and the older chat/reasoner ids stay text-only.
+    supportsImageMessages(model) {
+        return !!model && (model.startsWith('deepseek-flash') || model.startsWith('deepseek-v4-flash'));
     }
 
     beforeCreateRequest({ model, options }) {
@@ -927,8 +951,13 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
         return !model.includes('reasoner') && !this.isDeepSeekV4(model);
     }
 
+    // Docs: with stream_options.include_usage every chunk carries `usage` (null except the last) and no
+    // separate usage-only chunk is emitted - the final chunk's single choice carries no new content,
+    // just a non-null finish_reason alongside the totals.
     isUsageChunk(parsed) {
-        return !!(parsed.usage && parsed.choices?.[0]?.delta?.content === "");
+        if (!parsed.usage) return false;
+        const delta = parsed.choices?.[0]?.delta;
+        return !delta?.content && !delta?.reasoning_content;
     }
 
     requiresResponseUsage() {

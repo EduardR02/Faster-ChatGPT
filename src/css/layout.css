@@ -520,20 +520,119 @@ body {
 
 /* Native model picker */
 .model-picker-select {
-  color-scheme: dark;
+  appearance: none; /* Fallback for browsers without base-select: style the control ourselves */
+  appearance: base-select; /* Chrome 135+: styleable control and picker */
+  color-scheme: dark; /* Keep the OS rendered control and picker dark before base-select applies */
   max-width: 150px;
   min-width: 0;
   border: 0;
   border-radius: 0.5rem;
-  padding: 1px 5px;
-  background: transparent;
+  padding: 1px 18px 1px 5px; /* Right padding leaves room for the fallback arrow */
+  background-color: #21252b; /* Opaque: the native white field color never shows through */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M1 0.5l3 3 3-3' fill='none' stroke='%23d4d4d4' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
   color: #d4d4d4;
   font-size: 0.8em;
   cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.2s ease-out;
 }
 
 .model-picker-select:hover {
   color: #fdaaaa;
+}
+
+.model-picker-select:focus-visible {
+  outline: 2px solid #fdaaaa;
+  outline-offset: -2px;
+}
+
+@supports (appearance: base-select) {
+  .model-picker-select {
+    padding-right: 5px; /* ::picker-icon replaces the fallback arrow */
+    background-image: none;
+    /* The picker icon belongs to the select, not its inner button. */
+    align-items: center;
+  }
+
+  /* The closed control renders this button, so the label can truncate instead of wrapping */
+  .model-picker-select > button {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+    border: 0;
+    padding: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+  }
+
+  .model-picker-select selectedcontent {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .model-picker-select::picker-icon {
+    flex: none;
+    color: #abb2bf;
+    margin-inline-start: 4px;
+    transition: color 0.2s ease-out;
+  }
+
+  .model-picker-select:hover::picker-icon {
+    color: #fdaaaa;
+  }
+
+  /* Popup list of models, rendered by the browser so it can be themed like the panel */
+  .model-picker-select::picker(select) {
+    appearance: base-select; /* Opt the picker in as well, otherwise it stays OS rendered */
+    box-sizing: border-box;
+    margin: 0 0 4px 0; /* Gap above the control, the picker opens upwards in the panel */
+    padding: 4px;
+    border: 1px solid #abb2bf;
+    border-radius: 0.5rem;
+    background: #21252b;
+    color: #d4d4d4;
+    max-height: min(240px, 40vh);
+    max-width: min(320px, calc(100vw - 16px));
+    overflow-y: auto;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  }
+
+  .model-picker-select option {
+    padding: 2px 8px;
+    border-radius: 9999px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .model-picker-select option:hover,
+  .model-picker-select option:focus {
+    background: #3a3f4a;
+  }
+
+  .model-picker-select option:focus-visible {
+    outline: 2px solid #fdaaaa;
+    outline-offset: -2px;
+  }
+
+  .model-picker-select option:checked {
+    background: #5c6980;
+    color: #ffffff;
+    font-weight: bold;
+  }
+
+  .model-picker-select option::checkmark {
+    color: #fdaaaa;
+  }
 }
 
 .action-dots {

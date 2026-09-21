@@ -18,6 +18,8 @@ Essentially the point is that it's a centralized LLM hub, history all in one pla
 
 All providers in one place. Switch models mid-conversation. Regenerate a response with a different model. Add new models from settings whenever.
 
+Defaults apply only to fresh installs. Extension updates leave your saved model list unchanged; add new models manually in Settings. For GPT-6 Astra, select OpenAI and use the API model ID `gpt-6-astra`. It supports either an OpenAI API key or a connected ChatGPT subscription, subject to your account's model access.
+
 ### Council Mode
 
 Send your prompt to multiple models at once. An arbiter reads all the responses and writes a final synthesis.
@@ -50,7 +52,7 @@ LaTeX/math (Temml), syntax-highlighted code blocks with copy button, streaming m
 ### Other features
 
 - **Multi-tab** — multiple chat sessions open at once
-- **Images & files** — drag and drop or paste, multiple per message
+- **Images & files** — drag and drop or paste, multiple per message; DeepSeek V4.1 Flash supports image input
 - **Image generation** — supports Nano Banana models
 - **Voice input** — record and transcribe (Mistral)
 - **Web search** — toggle for supported models

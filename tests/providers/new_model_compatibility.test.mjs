@@ -27,26 +27,30 @@ const createBody = (provider, model, options = {}, settings = {}) => {
     return JSON.parse(request.body);
 };
 
-describe('new default model registry', () => {
-    test('includes the new models without removing existing defaults', () => {
-        expect(DEFAULT_MODELS.openai).toEqual(expect.objectContaining({
+describe('current default model registry', () => {
+    test('lists only the current models for openai, anthropic, deepseek, and kimi', () => {
+        expect(DEFAULT_MODELS.openai).toEqual({
+            'gpt-6-astra': 'GPT-6 Astra',
             'gpt-5.6-sol': 'GPT-5.6 Sol',
-            'gpt-5.6-terra': 'GPT-5.6 Terra',
-            'gpt-5.6-luna': 'GPT-5.6 Luna',
-            'gpt-5.2': 'GPT-5.2'
+            'gpt-5.6-luna': 'GPT-5.6 Luna'
+        });
+        expect(DEFAULT_MODELS.anthropic).toEqual({
+            'claude-fable-5-1': 'Claude Fable 5.1',
+            'claude-opus-5': 'Claude Opus 5'
+        });
+        expect(DEFAULT_MODELS.deepseek).toEqual({ 'deepseek-flash': 'DeepSeek V4.1 Flash' });
+        expect(DEFAULT_MODELS.kimi).toEqual({ 'kimi-k3': 'Kimi K3' });
+    });
+
+    test('keeps the gemini, mistral, grok, and local model entries', () => {
+        expect(DEFAULT_MODELS.gemini).toEqual(expect.objectContaining({
+            'gemini-3.5-flash': 'Gemini 3.5 Flash',
+            'gemini-3.8-flash': 'Gemini 3.8 Flash',
+            'gemini-3-flash-preview': 'Gemini 3 Flash'
         }));
-        expect(DEFAULT_MODELS.anthropic['claude-opus-4-8']).toBe('Claude Opus 4.8');
-        expect(DEFAULT_MODELS.anthropic['claude-fable-5']).toBe('Claude Fable 5');
-        expect(DEFAULT_MODELS.anthropic['claude-opus-5']).toBe('Claude Opus 5');
-        expect(DEFAULT_MODELS.kimi['kimi-k3']).toBe('Kimi K3');
-        expect(DEFAULT_MODELS.kimi['kimi-k2.6']).toBe('Kimi 2.6');
-        expect(DEFAULT_MODELS.gemini['gemini-3.5-flash']).toBe('Gemini 3.5 Flash');
-        expect(DEFAULT_MODELS.gemini['gemini-3.8-flash']).toBe('Gemini 3.8 Flash');
-        expect(DEFAULT_MODELS.gemini['gemini-3-flash-preview']).toBe('Gemini 3 Flash');
-        expect(DEFAULT_MODELS.deepseek['deepseek-v4-flash']).toBe('DeepSeek V4 Flash');
-        expect(DEFAULT_MODELS.deepseek['deepseek-v4-pro']).toBe('DeepSeek V4 Pro');
-        expect(DEFAULT_MODELS.deepseek['deepseek-chat']).toBe('DeepSeek V3.2');
-        expect(DEFAULT_MODELS.deepseek['deepseek-reasoner']).toBe('DeepSeek V3.2 thinking');
+        expect(DEFAULT_MODELS.mistral).toEqual(expect.objectContaining({ 'mistral-large-latest': 'Mistral Large' }));
+        expect(DEFAULT_MODELS.grok).toEqual(expect.objectContaining({ 'grok-4': 'Grok 4' }));
+        expect(DEFAULT_MODELS.llamacpp).toEqual(expect.objectContaining({ 'local-model': 'Local Model' }));
     });
 });
 
