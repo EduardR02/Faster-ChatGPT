@@ -1796,7 +1796,7 @@ p {
 
 .textarea-wrapper .std-input {
   border-radius: 0.75rem;
-  padding-bottom: 2.25rem; /* Space for bottom-left controls */
+  padding-bottom: 3rem; /* Bottom toolbar plus a gap below the last text line */
   min-height: 8rem; /* Space for right + bottom buttons */
   max-height: 50vh;
   overflow-y: hidden; /* JS switches to auto when at max-height */
