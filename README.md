@@ -18,7 +18,7 @@ Essentially the point is that it's a centralized LLM hub, history all in one pla
 
 All providers in one place. Switch models mid-conversation. Regenerate a response with a different model. Add new models from settings whenever.
 
-Defaults apply only to fresh installs. Extension updates leave your saved model list unchanged; add new models manually in Settings. For GPT-6 Astra, select OpenAI and use the API model ID `gpt-6-astra`. It supports either an OpenAI API key or a connected ChatGPT subscription, subject to your account's model access.
+Defaults apply only to fresh installs. Extension updates leave your saved model list unchanged; add new models manually in Settings. The current additions are OpenAI `gpt-6-sol` and `gpt-6-luna`, and Anthropic `claude-opus-5-5`. OpenAI models support either an API key or a connected ChatGPT subscription, subject to your account's model access.
 
 ### Council Mode
 

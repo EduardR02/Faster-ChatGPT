@@ -34,8 +34,8 @@ export const MaxTokens = {
 };
 
 export const DEFAULT_MODELS = {
-    openai: { "gpt-6-astra": "GPT-6 Astra", "gpt-5.6-sol": "GPT-5.6 Sol", "gpt-5.6-luna": "GPT-5.6 Luna" },
-    anthropic: { "claude-fable-5-1": "Claude Fable 5.1", "claude-opus-5": "Claude Opus 5" },
+    openai: { "gpt-6-astra": "GPT-6 Astra", "gpt-6-sol": "GPT-6 Sol", "gpt-6-luna": "GPT-6 Luna" },
+    anthropic: { "claude-fable-5-1": "Claude Fable 5.1", "claude-opus-5-5": "Claude Opus 5.5" },
     gemini: { "gemini-3.5-flash": "Gemini 3.5 Flash", "gemini-3.8-flash": "Gemini 3.8 Flash", "gemini-3-pro-preview": "Gemini 3 Pro", "gemini-3-flash-preview": "Gemini 3 Flash", "gemini-3-pro-image-preview": "Nano Banana Pro", "gemini-2.5-flash-lite": "Gemini 2.5 Flash Lite", "gemini-3.1-flash-image-preview": "Nano Banana 2" },
     deepseek: { "deepseek-flash": "DeepSeek V4.1 Flash" },
     mistral: { "mistral-large-latest": "Mistral Large", "mistral-small-latest": "Mistral Small" },
@@ -45,8 +45,8 @@ export const DEFAULT_MODELS = {
 };
 
 const CHATGPT_CODEX_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses';
-// Codex gates models by client version: gpt-6-astra requires 0.153.0, the GPT-5.6 models require 0.144.0.
-const CHATGPT_CODEX_CLIENT_VERSION = '0.153.0';
+// Codex requires 0.155.0 for GPT-6 Sol/Luna, 0.153.0 for Astra, and 0.144.0 for GPT-5.6.
+const CHATGPT_CODEX_CLIENT_VERSION = '0.155.0';
 
 export const isAnthropicOpusAtLeast = (model, major, minor = 0) => {
     const match = model.match(/^claude-opus-(\d+)(?:-(\d+))?(?:-|$)/);
@@ -61,6 +61,7 @@ const isAnthropicFable = model => /^claude-fable-\d+(?:-|$)/.test(model);
 const isOpenAIGpt56 = model => /^gpt-5\.6(?:-|$)/.test(model);
 
 const isOpenAIAstra = model => /^gpt-6-astra(?:-|$)/.test(model);
+const isOpenAIGpt6SolLuna = model => /^gpt-6-(?:sol|luna)(?:-|$)/.test(model);
 
 export class BaseProvider {
     constructor() {
@@ -264,22 +265,23 @@ export class OpenAIProvider extends BaseProvider {
 
     supports(feature, model) {
         if (feature === 'reasoning') {
-            return /o\d/.test(model) || model.includes('gpt-5') || isOpenAIAstra(model);
+            return /o\d/.test(model) || model.includes('gpt-5') || isOpenAIAstra(model) || isOpenAIGpt6SolLuna(model);
         }
         if (feature === 'web_search') {
             const legacySearch = ['gpt-4.1', 'gpt-5'].some(substring => model.includes(substring)) && !model.includes('nano');
-            return legacySearch || isOpenAIAstra(model);
+            return legacySearch || isOpenAIAstra(model) || isOpenAIGpt6SolLuna(model);
         }
-        if (feature === 'reasoning_mode') return isOpenAIGpt56(model) || isOpenAIAstra(model);
+        if (feature === 'reasoning_mode') return isOpenAIGpt56(model) || isOpenAIAstra(model) || isOpenAIGpt6SolLuna(model);
         return super.supports(feature, model);
     }
 
     getReasoningEfforts(model) {
         if (!this.supports('reasoning', model)) return [];
         if (isOpenAIAstra(model)) return ['low', 'medium', 'high', 'xhigh', 'max'];
-        return isOpenAIGpt56(model)
-            ? ['none', 'low', 'medium', 'high', 'xhigh', 'max']
-            : ['minimal', 'low', 'medium', 'high', 'xhigh'];
+        if (isOpenAIGpt56(model) || isOpenAIGpt6SolLuna(model)) {
+            return ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
+        }
+        return ['minimal', 'low', 'medium', 'high', 'xhigh'];
     }
 
     normalizeReasoningEffort(model, effort) {
@@ -292,7 +294,7 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     getOpenAIMaxTokens(model) {
-        if (isOpenAIAstra(model)) return MaxTokens.openai_astra;
+        if (isOpenAIAstra(model) || isOpenAIGpt6SolLuna(model)) return MaxTokens.openai_astra;
         if (isOpenAIGpt56(model)) return MaxTokens.openai_56;
         return this.supports('reasoning', model) ? MaxTokens.openai_thinking : this.maxTokens;
     }
@@ -323,7 +325,7 @@ export class OpenAIProvider extends BaseProvider {
 
     createRequest({ model, messages, stream, options, apiKey, chatGPTAuth, settings }) {
         const isReasoner = this.supports('reasoning', model);
-        const isAstra = isOpenAIAstra(model);
+        const isCurrentGPT6 = isOpenAIAstra(model) || isOpenAIGpt6SolLuna(model);
         const hasReasoningModes = this.supports('reasoning_mode', model);
         const shouldWebSearch = (options.webSearch ?? options.getWebSearch?.() ?? false) &&
                               this.supports('web_search', model);
@@ -350,7 +352,7 @@ export class OpenAIProvider extends BaseProvider {
         }
 
         if (shouldWebSearch) {
-            body.tools = [{ type: isAstra ? "web_search" : "web_search_preview" }];
+            body.tools = [{ type: isCurrentGPT6 ? "web_search" : "web_search_preview" }];
         }
 
         if (isReasoner) {

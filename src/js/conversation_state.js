@@ -247,6 +247,7 @@ const interactiveStateMixin = {
         if (sessionEffort) return sessionEffort;
 
         const model = this.getCurrentModel?.() || '';
+        if (model === 'claude-opus-5-5') return 'medium';
         if (isAnthropicOpusAtLeast(model, 4, 6)) return 'high';
 
         return this.getSetting('reasoning_effort') || 'high';
