@@ -56,6 +56,7 @@ describe('SidepanelController assistant action restoration', () => {
     test('restores council-level continue and regenerate handlers', () => {
         const latestMessage = {
             role: 'assistant',
+            contents: [[{ type: 'text', content: 'Collector answer', model: 'collector-model' }]],
             council: {
                 collector_model: 'collector-model',
                 responses: {

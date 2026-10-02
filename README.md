@@ -33,11 +33,33 @@ Blind side-by-side comparison, like LMSYS but personal. Two random models, you v
 
 ### History & Search
 
-All chats saved locally in IndexedDB. Full-text search that highlights matches. Chats get auto-titled by an LLM in the background. You can branch off from any message to start a new conversation while keeping a link to the original.
+All chats saved locally in IndexedDB. Full-text search that highlights matches. Chats get auto-titled by an LLM in the background; a title finishing after you switch chats updates only its original chat. You can branch off from any message to start a new conversation while keeping a link to the original.
+
+### Reasoning continuity
+
+OpenAI, Claude, Gemini, and Grok keep their native encrypted reasoning locally, alongside the readable answer. Gemini preserves original signed content parts, including generated images; Grok uses the Responses API. Kimi K3 retains its returned `reasoning_content`, and supported Mistral models retain their ordered thinking chunks. Streaming and non-streaming responses preserve the same replay state, including signed thinking with no visible text.
+
+Native replay uses conservative exact-provider/model and credential/account checks, plus unchanged preceding context and visible response content. Switching providers, models, or API keys keeps the visible conversation but omits incompatible native reasoning without deleting its saved copy. Refreshing a ChatGPT access token keeps the same account scope. Edited earlier context and merged thinking-loop responses cannot reuse reasoning bound to the original request.
+
+Saved chats and JSON backups retain native state through restoration, branches, regeneration, Arena, and Council. Council synthesis receives visible expert answers, not their private reasoning. Markdown exports and search do not expose opaque payloads. Restored chats can reuse compatible reasoning without expiring server-side response IDs; no client-side expiry is imposed, but providers do not guarantee indefinite validity. Older chats cannot recover native state discarded before this feature.
+
+Completed OpenAI/Grok responses retain recoverable failed tool calls. Claude search results and citations are retained even without thinking, and Mistral retains reference chunks inside thinking. If every Council expert fails, synthesis is skipped instead of saving a collector answer without expert input.
+
+DeepSeek resends known same-model reasoning as `reasoning_content`; its API ignores it on requests without tools. Kimi K3 also accepts older reasoning with known same-model provenance, never unknown or foreign traces. Local llama.cpp reasoning replay requires the server's `supports_preserve_reasoning` capability and a matching endpoint, loaded model, and chat template, checked before each request. Named local router selections retain the selected model ID rather than substituting the first advertised model. OpenAI's model default selects current-turn or all-turn reasoning behavior.
+
+Mistral Small's reasoning control offers `none` and `high`; models without documented adjustable reasoning keep their existing behavior. Gemini 2.5 Flash's off control disables its thinking budget. Claude manual thinking rejects output caps too small for the minimum thinking budget instead of exceeding the configured cap.
+
+Stream errors, premature EOF, and token-limit truncation are errors, not successful saved answers. Kimi and DeepSeek additionally require the final `[DONE]` marker. Partial text can remain visible, but incomplete native responses are not replayed as complete reasoning.
+
+### Token accounting
+
+All providers report cumulative usage snapshots rather than additive stream deltas. Input excludes cached reads and includes cache writes; cached reads are counted separately, and reported cache writes are tracked as a subset of input. Claude input combines ordinary input and cache creation, keeping cache reads separate.
+
+Message footers and the popup's lifetime totals show `input | output | N cached` when cached reads are nonzero. Tooltips expose reported cache writes without adding them to input a second time. Existing lifetime input/output totals are preserved; historical cached usage cannot be reconstructed, so separate lifetime cache totals accumulate from newly recorded usage.
 
 ### Rendering
 
-LaTeX/math (Temml), syntax-highlighted code blocks with copy button, streaming markdown that doesn't flicker.
+LaTeX/math (Temml), syntax-highlighted code blocks with copy button, streaming markdown that doesn't flicker. OpenAI refusals are visible, and OpenAI/Claude search citations appear as clickable source markers after the answer without changing the retained native payload.
 
 ### Keyboard Shortcuts
 

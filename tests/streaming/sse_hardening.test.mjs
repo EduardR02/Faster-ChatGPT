@@ -20,19 +20,12 @@ function parseStream(chunks) {
 
 function createStreamResponse(chunks) {
   const encoder = new TextEncoder();
-  const encoded = chunks.map(chunk => typeof chunk === 'string' ? encoder.encode(chunk) : chunk);
-  return {
-    body: {
-      getReader() {
-        let index = 0;
-        return {
-          read: async () => index >= encoded.length
-            ? { done: true, value: undefined }
-            : { done: false, value: encoded[index++] }
-        };
-      }
+  return new Response(new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(typeof chunk === 'string' ? encoder.encode(chunk) : chunk);
+      controller.close();
     }
-  };
+  }), { headers: { 'Content-Type': 'text/event-stream' } });
 }
 
 describe('SSE hardening - parser', () => {
@@ -171,20 +164,20 @@ describe('SSE hardening - stream termination', () => {
     tokenCounter = createMockTokenCounter();
   });
 
-  test('processes a final event when the stream ends without a trailing newline', async () => {
+  test('rejects a stream without a terminal event after displaying its final unterminated text', async () => {
     const response = createStreamResponse([
       'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
-      'data: {"choices":[{"delta":{"content":"lo"}}]}' // no trailing newline, no [DONE]
+      'data: {"choices":[{"delta":{"content":"lo"}}]}'
     ]);
-
-    await apiManager.handleStreamResponse(response, 'local-model', tokenCounter, writer);
-
+    await expect(apiManager.handleStreamResponse(response, 'local-model', tokenCounter, writer))
+      .rejects.toThrow('stream ended before completion');
     expect(writer._processedContent.map(entry => entry.content)).toEqual(['Hel', 'lo']);
   });
 
   test('counts token usage from a final unterminated usage event', async () => {
     const response = createStreamResponse([
       'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
       'data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7}}'
     ]);
 
@@ -197,7 +190,7 @@ describe('SSE hardening - stream termination', () => {
   test('streams content and usage after malformed blankless data', async () => {
     const response = createStreamResponse([
       'data: {bad}\n',
-      'data: {"choices":[{"delta":{"content":"Hi"}}]}\n',
+      'data: {"choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]}\n',
       'data: {"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":1}}\n',
       'data: [DONE]\n'
     ]);
@@ -209,74 +202,82 @@ describe('SSE hardening - stream termination', () => {
     expect(tokenCounter.outputTokens).toBe(1);
   });
 
-  test('preserves final usage handling for every provider format', async () => {
+  test('preserves final cumulative usage and cache categories across provider formats', async () => {
     const cases = [
       {
         provider: 'openai',
-        event: { type: 'response.completed', response: { usage: { input_tokens: 11, output_tokens: 7 } } },
-        expected: [11, 7]
+        events: [{ type: 'response.completed', response: { status: 'completed', usage: {
+          input_tokens: 11, output_tokens: 7, input_tokens_details: { cached_tokens: 3, cache_write_tokens: 1 }
+        } } }],
+        expected: [8, 7, 3, 1]
       },
       {
         provider: 'anthropic',
-        event: {
-          type: 'message_start',
-          message: { usage: { input_tokens: 5, output_tokens: 3, cache_creation_input_tokens: 2, cache_read_input_tokens: 1 } }
-        },
-        expected: [8, 3]
+        events: [
+          { type: 'message_start', message: { usage: {
+            input_tokens: 5, output_tokens: 3, cache_creation_input_tokens: 2, cache_read_input_tokens: 1
+          } } },
+          { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 6 } },
+          { type: 'message_stop' }
+        ],
+        expected: [7, 6, 1, 2]
       },
       {
         provider: 'gemini',
-        event: { usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 2, thoughtsTokenCount: 1 } },
-        expected: [5, 3]
+        events: [{ candidates: [{ finishReason: 'STOP' }], usageMetadata: {
+          promptTokenCount: 5, cachedContentTokenCount: 2, candidatesTokenCount: 2, thoughtsTokenCount: 1
+        } }],
+        expected: [3, 3, 2, 0]
       },
       {
         provider: 'deepseek',
-        event: { choices: [{ delta: { content: '' } }], usage: { prompt_tokens: 6, completion_tokens: 4 } },
-        expected: [6, 4]
+        events: [{ choices: [{ delta: {}, finish_reason: 'stop' }], usage: {
+          prompt_tokens: 6, completion_tokens: 4, prompt_cache_hit_tokens: 2, prompt_cache_miss_tokens: 4
+        } }],
+        expected: [4, 4, 2, 0]
       },
       {
         provider: 'grok',
-        event: {
-          choices: [],
-          usage: { prompt_tokens: 7, completion_tokens: 4, completion_tokens_details: { reasoning_tokens: 2 } }
-        },
-        expected: [7, 6]
+        events: [{ type: 'response.completed', response: { status: 'completed', usage: {
+          input_tokens: 7, output_tokens: 4, input_tokens_details: { cached_tokens: 2 },
+          output_tokens_details: { reasoning_tokens: 2 }
+        } } }],
+        expected: [5, 4, 2, 0]
       },
       {
         provider: 'kimi',
-        event: { choices: [], usage: { prompt_tokens: 8, completion_tokens: 5 } },
-        expected: [8, 5]
+        events: [{ choices: [{ delta: {}, finish_reason: 'stop' }], usage: {
+          prompt_tokens: 8, completion_tokens: 5, prompt_tokens_details: { cached_tokens: 3, cache_write_tokens: 1 }
+        } }],
+        expected: [5, 5, 3, 1]
       },
       {
         provider: 'mistral',
-        event: { data: { usage: { prompt_tokens: 9, completion_tokens: 6 } } },
-        expected: [9, 6]
+        events: [{ data: { choices: [{ delta: {}, finish_reason: 'stop' }], usage: {
+          prompt_tokens: 9, completion_tokens: 6, prompt_tokens_details: { cached_tokens: 4 }
+        } } }],
+        expected: [5, 6, 4, 0]
       },
       {
         provider: 'llamacpp',
-        event: { choices: [], usage: { prompt_tokens: 10, completion_tokens: 7 } },
-        expected: [10, 7]
+        events: [{ choices: [{ delta: {}, finish_reason: 'stop' }], usage: {
+          prompt_tokens: 10, completion_tokens: 7, prompt_tokens_details: { cached_tokens: 4 }
+        } }],
+        expected: [6, 7, 4, 0]
       }
     ];
-
-    for (const { provider, event, expected } of cases) {
-      const caseWriter = createMockWriter();
+    for (const { provider, events, expected } of cases) {
       const caseCounter = createMockTokenCounter();
-      apiManager.getProvider = () => Providers[provider];
-
-      await apiManager.handleStreamResponse(
-        createStreamResponse([`data: ${JSON.stringify(event)}`]),
-        'test-model',
-        caseCounter,
-        caseWriter
-      );
-
-      expect([caseCounter.inputTokens, caseCounter.outputTokens]).toEqual(expected);
+      const data = events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]';
+      await apiManager.handleStreamResponse(createStreamResponse([data]), 'test-model',
+        caseCounter, createMockWriter(), null, null, Providers[provider]);
+      expect([caseCounter.inputTokens, caseCounter.outputTokens, caseCounter.cachedInputTokens,
+        caseCounter.cacheWriteInputTokens]).toEqual(expected);
     }
   });
 
   test('handles multi-byte UTF-8 characters split across byte chunks', async () => {
-    const bytes = new TextEncoder().encode('data: {"choices":[{"delta":{"content":"héllo ✓"}}]}\n');
+    const bytes = new TextEncoder().encode('data: {"choices":[{"delta":{"content":"héllo ✓"},"finish_reason":"stop"}]}\n');
     const chunks = [];
     for (let i = 0; i < bytes.length; i += 7) {
       chunks.push(bytes.slice(i, i + 7));
@@ -289,7 +290,7 @@ describe('SSE hardening - stream termination', () => {
 
   test('processes a CRLF stream end to end', async () => {
     const response = createStreamResponse([
-      'data: {"choices":[{"delta":{"content":"Hi"}}]}\r\n\r\n',
+      'data: {"choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]}\r\n\r\n',
       'data: {"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1}}\r\n',
       'data: [DONE]\r\n'
     ]);
@@ -304,7 +305,7 @@ describe('SSE hardening - stream termination', () => {
   test('tolerates keepalive comments interleaved in the stream', async () => {
     const response = createStreamResponse([
       ': keep-alive\n\n',
-      'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]}\n\n',
       ': keep-alive\n\n',
       'data: [DONE]\n'
     ]);

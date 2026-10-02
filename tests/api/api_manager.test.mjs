@@ -32,24 +32,12 @@ function createJsonResponse(data, status = 200, ok = true) {
 
 function createStreamResponse(chunks) {
     const encoder = new TextEncoder();
-    return {
-        ok: true,
-        status: 200,
-        headers: new Headers({ 'Content-Type': 'text/event-stream' }),
-        body: {
-            getReader() {
-                let index = 0;
-                return {
-                    read: async () => {
-                        if (index >= chunks.length) return { done: true, value: undefined };
-                        const value = encoder.encode(chunks[index++]);
-                        return { done: false, value };
-                    },
-                    releaseLock: () => {}
-                };
-            }
+    return new Response(new ReadableStream({
+        start(controller) {
+            for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+            controller.close();
         }
-    };
+    }), { headers: { 'Content-Type': 'text/event-stream' } });
 }
 
 // --- Test Suite ---
@@ -269,6 +257,7 @@ describe('ApiManager', () => {
             const chunks = [
                 'data: {"type": "response.output_text.delta", "delta": "Hel"}\n',
                 'data: {"type": "response.output_text.delta", "delta": "lo"}\n',
+                'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n',
                 'data: [DONE]\n'
             ];
             mockResponse = createStreamResponse(chunks);
@@ -336,6 +325,32 @@ describe('ApiManager', () => {
                 expect(config.raw).toBe('local-mistral');
                 expect(config.display).toBe('Local Mistral');
                 expect(config.port).toBe(8080);
+            } finally {
+                globalThis.fetch = originalFetch;
+            }
+        });
+        test('direct named local calls retain selection across fallback-port discovery', async () => {
+            const originalFetch = globalThis.fetch;
+            const completionBodies = [];
+            try {
+                globalThis.fetch = async (url, options) => {
+                    if (url.includes(':8080/')) throw new Error('No server on default port');
+                    if (url.endsWith('/v1/models')) {
+                        return createJsonResponse({ data: [{ id: 'router-A' }, { id: 'router-B' }] });
+                    }
+                    if (url.includes('/props')) return createJsonResponse({ model_path: 'B.gguf',
+                        chat_template: 'template', chat_template_caps: { supports_preserve_reasoning: true } });
+                    const body = JSON.parse(options.body);
+                    completionBodies.push(body);
+                    return createJsonResponse({ choices: [{ message: { role: 'assistant',
+                        content: `Answer from ${body.model}`, reasoning_content: 'Trace' }, finish_reason: 'stop' }] });
+                };
+                const parts = await apiManager.callApi('router-B',
+                    [{ role: 'user', parts: [{ type: 'text', content: 'Question' }] }], createMockTokenCounter());
+                expect(completionBodies[0].model).toBe('router-B');
+                expect(apiManager.localServerPort).toBe(8000);
+                expect(parts.find(part => part.type === 'text').content).toBe('Answer from router-B');
+                expect(parts[0].providerState.model).toBe('router-B');
             } finally {
                 globalThis.fetch = originalFetch;
             }

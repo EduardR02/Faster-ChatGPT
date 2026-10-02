@@ -20,7 +20,6 @@ const PROVIDER_CONFIGS = [
         supportsImages: true,
         imageModel: 'gpt-5.2',
         getImageFromBody: (body) => body.input[0].content.find(p => p.type === 'input_image'),
-        getUsageFromChunk: (chunk) => chunk.response?.usage,
         supportsThinking: true,
         getThinkingConfigFromBody: (body) => body.reasoning,
         getThinkingFromChunk: (chunk) => null, // OpenAI doesn't stream thoughts in unified yet? Check handleStream
@@ -35,7 +34,6 @@ const PROVIDER_CONFIGS = [
         supportsImages: true,
         imageModel: 'claude-sonnet-4-20250514',
         getImageFromBody: (body) => body.messages[0].content.find(p => p.type === 'image'),
-        getUsageFromChunk: (chunk) => chunk.message?.usage || chunk.usage,
         supportsThinking: true,
         getThinkingConfigFromBody: (body) => body.thinking,
         getThinkingFromChunk: (chunk) => chunk.delta?.thinking,
@@ -50,7 +48,6 @@ const PROVIDER_CONFIGS = [
         supportsImages: true,
         imageModel: 'gemini-3.0-flash-image-preview',
         getImageFromBody: (body) => body.contents[0].parts.find(p => p.inline_data),
-        getUsageFromChunk: (chunk) => chunk.usageMetadata ? { input_tokens: chunk.usageMetadata.promptTokenCount, output_tokens: chunk.usageMetadata.candidatesTokenCount + (chunk.usageMetadata.thoughtsTokenCount || 0) } : null,
         supportsThinking: true,
         getThinkingConfigFromBody: (body) => body.generationConfig?.thinking_config,
         getThinkingFromChunk: (chunk) => chunk.candidates?.[0]?.content?.parts?.find(p => p.thought)?.text,
@@ -63,7 +60,6 @@ const PROVIDER_CONFIGS = [
         getUserMessages: (body) => body.messages?.filter(m => m.role !== 'system'),
         assistantRole: 'assistant',
         supportsImages: false,
-        getUsageFromChunk: (chunk) => chunk.usage,
         supportsThinking: true,
         thinkingModel: 'deepseek-reasoner',
         getThinkingConfigFromBody: (body) => body.thinking,
@@ -73,16 +69,15 @@ const PROVIDER_CONFIGS = [
         name: 'Grok',
         provider: Providers.grok,
         model: 'grok-4',
-        getSystemFromBody: (body) => body.messages?.find(m => m.role === 'system')?.content,
-        getUserMessages: (body) => body.messages?.filter(m => m.role !== 'system'),
+        getSystemFromBody: (body) => body.instructions,
+        getUserMessages: (body) => body.input,
         assistantRole: 'assistant',
         supportsImages: true,
         imageModel: 'grok-4',
-        getImageFromBody: (body) => body.messages[0].content.find(p => p.type === 'image_url'),
-        getUsageFromChunk: (chunk) => chunk.usage,
+        getImageFromBody: (body) => body.input[0].content.find(p => p.type === 'input_image'),
         supportsThinking: true,
         getThinkingConfigFromBody: (body) => null, // Grok uses model name
-        getThinkingFromChunk: (chunk) => chunk.choices?.[0]?.delta?.reasoning_content,
+        getThinkingFromChunk: (chunk) => chunk.type === 'response.reasoning_summary_text.delta' ? chunk.delta : undefined,
     },
     {
         name: 'Kimi',
@@ -94,7 +89,6 @@ const PROVIDER_CONFIGS = [
         supportsImages: true,
         imageModel: 'kimi-k2.6',
         getImageFromBody: (body) => body.messages[0].content.find(p => p.type === 'image_url'),
-        getUsageFromChunk: (chunk) => chunk.usage,
         supportsThinking: true,
         thinkingModel: 'kimi-k2-thinking',
         getThinkingConfigFromBody: (body) => {
@@ -112,7 +106,6 @@ const PROVIDER_CONFIGS = [
         getUserMessages: (body) => body.messages?.filter(m => m.role !== 'system'),
         assistantRole: 'assistant',
         supportsImages: false,
-        getUsageFromChunk: (chunk) => chunk.usage,
         supportsThinking: false,
     },
     {
@@ -125,7 +118,6 @@ const PROVIDER_CONFIGS = [
         supportsImages: true,
         imageModel: 'local-model',
         getImageFromBody: (body) => body.messages[0].content.find(p => p.type === 'image_url'),
-        getUsageFromChunk: (chunk) => chunk.usage,
         supportsThinking: true,
         getThinkingConfigFromBody: (body) => null,
         getThinkingFromChunk: (chunk) => chunk.choices?.[0]?.delta?.reasoning_content,
@@ -237,37 +229,6 @@ PROVIDER_CONFIGS.forEach(config => {
             });
         }
 
-        if (config.getUsageFromChunk) {
-            test('stream token counting', () => {
-                const tokenCounter = { update: mock() };
-                const writer = { processContent: () => {} };
-                
-                // We need to provide a chunk that matches what the provider expects
-                let mockChunk;
-                if (config.name === 'OpenAI') {
-                    mockChunk = { type: 'response.completed', response: { usage: { input_tokens: 50, output_tokens: 25 } } };
-                } else if (config.name === 'Anthropic') {
-                    mockChunk = { type: 'message_start', message: { usage: { input_tokens: 50, output_tokens: 0 } } };
-                } else if (config.name === 'Gemini') {
-                    mockChunk = { usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 20, thoughtsTokenCount: 5 } };
-                } else if (['DeepSeek', 'Grok', 'Kimi', 'Mistral', 'LlamaCpp'].includes(config.name)) {
-                    mockChunk = { usage: { prompt_tokens: 50, completion_tokens: 25 } };
-                    if (config.name === 'DeepSeek') {
-                        mockChunk.choices = [{ delta: { content: "" } }];
-                    } else if (['Grok', 'Kimi', 'LlamaCpp'].includes(config.name)) {
-                        mockChunk.choices = [];
-                    }
-                }
-
-                provider.handleStream({ parsed: mockChunk, writer, tokenCounter });
-                
-                if (config.name === 'Anthropic') {
-                    expect(tokenCounter.update).toHaveBeenCalledWith(50, 0);
-                } else {
-                    expect(tokenCounter.update).toHaveBeenCalledWith(50, 25);
-                }
-            });
-        }
 
         if (config.supportsThinking) {
             test('thinking/reasoning config', () => {
@@ -304,7 +265,9 @@ PROVIDER_CONFIGS.forEach(config => {
                         mockChunk = { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'I am thinking' } };
                     } else if (config.name === 'Gemini') {
                         mockChunk = { candidates: [{ content: { parts: [{ text: 'I am thinking', thought: true }] } }] };
-                    } else if (['DeepSeek', 'Grok', 'Kimi', 'LlamaCpp'].includes(config.name)) {
+                    } else if (config.name === 'Grok') {
+                        mockChunk = { type: 'response.reasoning_summary_text.delta', delta: 'I am thinking' };
+                    } else if (['DeepSeek', 'Kimi', 'LlamaCpp'].includes(config.name)) {
                         mockChunk = { choices: [{ delta: { reasoning_content: 'I am thinking' } }] };
                     }
 
@@ -383,7 +346,6 @@ describe('OpenAIProvider - Specifics', () => {
         }
 
         expect(collected.join('')).toBe('Hello');
-        expect(tokenCounter.update).toHaveBeenCalledWith(10, 5);
     });
 
     test('stream extracts reasoning summary deltas as thoughts', () => {
@@ -815,16 +777,6 @@ describe('DeepSeekProvider - Specifics', () => {
         ]);
     });
 
-    test('token counting names', () => {
-        const tokenCounter = { update: mock() };
-        const data = {
-            usage: { prompt_tokens: 15, completion_tokens: 25 },
-            choices: [{ message: { content: 'hi' } }]
-        };
-        
-        provider.handleResponse({ data, tokenCounter });
-        expect(tokenCounter.update).toHaveBeenCalledWith(15, 25);
-    });
 });
 
 describe('GrokProvider - Specifics', () => {
@@ -832,14 +784,20 @@ describe('GrokProvider - Specifics', () => {
 
     test('citations building', () => {
         const data = {
-            choices: [{ message: { content: 'According to source' } }],
-            citations: ['https://example.com/1', 'https://example.com/2'],
-            usage: { prompt_tokens: 1, completion_tokens: 1 }
+            status: 'completed',
+            output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{
+                type: 'output_text', text: 'According to source',
+                annotations: [
+                    { type: 'url_citation', url: 'https://example.com/1', title: 'Source one', start_index: 0, end_index: 19 },
+                    { type: 'url_citation', url: 'https://example.com/2', title: 'Source two', start_index: 0, end_index: 19 }
+                ]
+            }] }],
+            usage: { input_tokens: 1, output_tokens: 1 }
         };
         const tokenCounter = { update: () => {} };
         const result = provider.handleResponse({ data, tokenCounter });
         
-        const content = result[0].content;
+        const content = result.filter(part => part.type === 'text').map(part => part.content).join('');
         expect(content).toContain('According to source');
         expect(content).toContain('[example.com](https://example.com/1)');
         expect(content).toContain('[example.com](https://example.com/2)');

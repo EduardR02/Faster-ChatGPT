@@ -177,7 +177,7 @@ class ChatUI {
         
         // Attach model info from the last part if available
         if (parts.length > 0 && parts.at(-1).model) {
-            prefixOptions.model = parts.at(-1).model;
+            prefixOptions.model = parts.at(-1).displayModel ?? parts.at(-1).model;
         }
 
         const messageBlock = createElementWithClass('div', `${role}-message`);
@@ -1305,7 +1305,7 @@ export class SidepanelChatUI extends ChatUI {
         this.lastScrollTop = this.scrollToElement?.scrollTop || 0;
     }
 
-    addCouncilRegenerateFooter(inputTokens, outputTokens, onRegenerate, councilBlockOverride = null) {
+    addCouncilRegenerateFooter(inputTokens, outputTokens, onRegenerate, councilBlockOverride = null, options = {}) {
         const councilBlock = councilBlockOverride || this.activeDivs;
         if (!councilBlock || !councilBlock.classList.contains('council-message')) return;
         
@@ -1320,7 +1320,7 @@ export class SidepanelChatUI extends ChatUI {
         const existingFooter = content.querySelector('.message-footer');
         if (existingFooter) existingFooter.remove();
         
-        new Footer(inputTokens, outputTokens, false, () => false, onRegenerate).create(content);
+        new Footer(inputTokens, outputTokens, false, () => false, onRegenerate, options).create(content);
         this.scrollIntoView();
     }
 
@@ -1356,7 +1356,7 @@ export class SidepanelChatUI extends ChatUI {
         if (latest.querySelector('.regenerate-button')) return;
 
         if (latest.classList.contains('council-message')) {
-            this.addCouncilRegenerateFooter(options.inputTokens ?? 0, options.outputTokens ?? 0, handler, latest);
+            this.addCouncilRegenerateFooter(options.inputTokens ?? 0, options.outputTokens ?? 0, handler, latest, options);
             return;
         }
 

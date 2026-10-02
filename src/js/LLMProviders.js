@@ -1,4 +1,12 @@
 import { sanitizeBase64Image } from './image_utils.js';
+import {
+    credentialScope, nativeCandidate, prepareNativeRequest, finalizeNativeState,
+    captureOpenAIStream, captureAnthropicStream, citationURLs, buildCitationsTail, buildInlineCitations
+} from './reasoning_state.js';
+import {
+    rememberNativeRequest, prepareProviderNativeRequest, finalizeProviderNativeState,
+    captureGemini, captureChatCompletion, captureGrokStream, grokCitations
+} from './provider_native_state.js';
 
 export const RoleEnum = { system: "system", user: "user", assistant: "assistant" };
 
@@ -57,17 +65,51 @@ export const isAnthropicOpusAtLeast = (model, major, minor = 0) => {
 };
 
 const isAnthropicFable = model => /^claude-fable-\d+(?:-|$)/.test(model);
+const isAnthropicModernCustom = model => /^claude-(?:sonnet-5-5|mythos-5-1)(?:-|$)/.test(model);
 
 const isOpenAIGpt56 = model => /^gpt-5\.6(?:-|$)/.test(model);
 
 const isOpenAIAstra = model => /^gpt-6-astra(?:-|$)/.test(model);
 const isOpenAIGpt6SolLuna = model => /^gpt-6-(?:sol|luna)(?:-|$)/.test(model);
+const isOpenAISol61 = model => /^gpt-6\.1-sol(?:-|$)/.test(model);
+const streamDisplays = new WeakMap();
+const streamDisplay = (writer, state) => {
+    const key = state || writer;
+    if (!streamDisplays.has(key)) streamDisplays.set(key, { citations: new Set(), refusals: new Set(), completed: false });
+    return streamDisplays.get(key);
+};
+const updateResponsesUsage = (usage, counter, includeWrites = false) => {
+    const cached = usage.input_tokens_details?.cached_tokens || 0;
+    counter.update((usage.input_tokens || 0) - cached, usage.output_tokens || 0, cached,
+        includeWrites ? usage.input_tokens_details?.cache_write_tokens || 0 : 0);
+};
+const updateChatUsage = (usage, counter, cached = usage.prompt_tokens_details?.cached_tokens || 0, write = 0) => {
+    counter.update((usage.prompt_tokens || 0) - cached, usage.completion_tokens || 0, cached, write);
+};
+const updateGeminiUsage = (usage, counter) => {
+    const cached = usage.cachedContentTokenCount || 0;
+    counter.update((usage.promptTokenCount || 0) - cached,
+        (usage.candidatesTokenCount || 0) + (usage.thoughtsTokenCount || 0), cached, 0);
+};
+const updateAnthropicUsage = (usage, counter, partial = false) => {
+    const write = usage.cache_creation_input_tokens ?? (partial ? counter.cacheWriteInputTokens : 0);
+    const input = usage.input_tokens ?? (partial ? counter.inputTokens - counter.cacheWriteInputTokens : 0);
+    counter.update(input + write, usage.output_tokens,
+        usage.cache_read_input_tokens ?? (partial ? undefined : 0), write);
+};
 
 export class BaseProvider {
     constructor() {
         this.maxTemp = 1.0;
         this.maxTokens = 8192;
+        this.streamCompletion = null;
     }
+
+    async getReasoningScope(_auth) { return null; }
+
+    async prepareRequest(_request) { return null; }
+
+    finalizeResponseState(_responseState) { return null; }
 
     isThinkingDefaultOn(model) { return false; }
 
@@ -129,36 +171,8 @@ export class BaseProvider {
         return this.parseBase64DataUrl(base64String).data;
     }
 
-    extractBaseDomain(url) {
-        try {
-            const hostname = new URL(url).hostname.toLowerCase();
-            const noWww = hostname.startsWith('www.') ? hostname.slice(4) : hostname;
-            const parts = noWww.split('.');
-            
-            if (parts.length <= 2) return noWww;
-            
-            const last = parts[parts.length - 1];
-            const secondLast = parts[parts.length - 2];
-            const sldSet = new Set(['co', 'com', 'org', 'net', 'gov', 'ac', 'edu']);
-            
-            return (last.length === 2 && sldSet.has(secondLast)) 
-                ? parts.slice(-3).join('.') 
-                : parts.slice(-2).join('.');
-        } catch (_) { 
-            return url; 
-        }
-    }
 
-    buildCitationsTail(citations) {
-        if (!Array.isArray(citations) || citations.length === 0) return '';
-        
-        const list = [...new Set(citations)]
-            .slice(0, 10)
-            .map(u => `[${this.extractBaseDomain(u)}](${u})`)
-            .join(' · ');
-            
-        return `\n\n${list}\n`;
-    }
+    buildCitationsTail(citations) { return buildCitationsTail(citations); }
 
     buildApiRequest(url, body, headers = {}) {
         return [url, {
@@ -227,7 +241,9 @@ export class OpenAICompatibleProvider extends BaseProvider {
         return this.buildApiRequest(this.getApiEndpoint(context), body, this.getAuthHeaders(context));
     }
     isUsageChunk(parsed) { return !!(parsed.usage && (!parsed.choices || parsed.choices.length === 0)); }
-    updateStreamTokenUsage(parsed, tokenCounter) { tokenCounter.update(parsed.usage.prompt_tokens, parsed.usage.completion_tokens); }
+    updateStreamTokenUsage(parsed, tokenCounter) {
+        updateChatUsage(parsed.usage, tokenCounter);
+    }
     afterUsageChunk(_parsed, _writer) {}
     getStreamDelta(parsed) { return parsed.choices?.[0]?.delta; }
     processReasoningContent(reasoningContent, writer) { writer.processContent(reasoningContent, true); }
@@ -235,8 +251,8 @@ export class OpenAICompatibleProvider extends BaseProvider {
     decorateResponseContent(content) { return content; }
 
     handleStream({ parsed, tokenCounter, writer }) {
+        if (parsed.usage) this.updateStreamTokenUsage(parsed, tokenCounter);
         if (this.isUsageChunk(parsed)) {
-            this.updateStreamTokenUsage(parsed, tokenCounter);
             this.afterUsageChunk(parsed, writer);
             return;
         }
@@ -247,7 +263,7 @@ export class OpenAICompatibleProvider extends BaseProvider {
 
     handleResponse({ data, tokenCounter }) {
         if (this.requiresResponseUsage() || data.usage) {
-            tokenCounter.update(data.usage.prompt_tokens, data.usage.completion_tokens);
+            this.updateStreamTokenUsage(data, tokenCounter);
         }
         const message = data.choices[0].message;
         const thoughts = message.reasoning_content ? [message.reasoning_content] : [];
@@ -261,23 +277,37 @@ export class OpenAIProvider extends BaseProvider {
         super(); 
         this.maxTemp = MaxTemp.openai; 
         this.maxTokens = MaxTokens.openai; 
+        this.streamCompletion = 'responses';
     }
+
+    async getReasoningScope({ apiKey, chatGPTAuth }) {
+        if (chatGPTAuth) return chatGPTAuth.accountId ? `chatgpt:${chatGPTAuth.accountId}` : null;
+        return credentialScope(apiKey);
+    }
+
+    async prepareRequest(request) {
+        const candidates = this.reasoningRequests?.get(request.requestOptions);
+        this.reasoningRequests?.delete(request.requestOptions);
+        return prepareNativeRequest('openai', request, candidates);
+    }
+
+    finalizeResponseState(responseState) { return finalizeNativeState(responseState); }
 
     supports(feature, model) {
         if (feature === 'reasoning') {
-            return /o\d/.test(model) || model.includes('gpt-5') || isOpenAIAstra(model) || isOpenAIGpt6SolLuna(model);
+            return /o\d/.test(model) || model.includes('gpt-5') || isOpenAIAstra(model) || isOpenAIGpt6SolLuna(model) || isOpenAISol61(model);
         }
         if (feature === 'web_search') {
             const legacySearch = ['gpt-4.1', 'gpt-5'].some(substring => model.includes(substring)) && !model.includes('nano');
-            return legacySearch || isOpenAIAstra(model) || isOpenAIGpt6SolLuna(model);
+            return legacySearch || isOpenAIAstra(model) || isOpenAIGpt6SolLuna(model) || isOpenAISol61(model);
         }
-        if (feature === 'reasoning_mode') return isOpenAIGpt56(model) || isOpenAIAstra(model) || isOpenAIGpt6SolLuna(model);
+        if (feature === 'reasoning_mode') return isOpenAIGpt56(model) || isOpenAIAstra(model) || isOpenAIGpt6SolLuna(model) || isOpenAISol61(model);
         return super.supports(feature, model);
     }
 
     getReasoningEfforts(model) {
         if (!this.supports('reasoning', model)) return [];
-        if (isOpenAIAstra(model)) return ['low', 'medium', 'high', 'xhigh', 'max'];
+        if (isOpenAIAstra(model) || isOpenAISol61(model)) return ['low', 'medium', 'high', 'xhigh', 'max'];
         if (isOpenAIGpt56(model) || isOpenAIGpt6SolLuna(model)) {
             return ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
         }
@@ -285,7 +315,7 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     normalizeReasoningEffort(model, effort) {
-        if (isOpenAIAstra(model)) {
+        if (isOpenAIAstra(model) || isOpenAISol61(model)) {
             if (effort === 'none' || effort === 'minimal') return 'low';
         } else if (isOpenAIGpt56(model) && effort === 'minimal') {
             return 'none';
@@ -294,7 +324,7 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     getOpenAIMaxTokens(model) {
-        if (isOpenAIAstra(model) || isOpenAIGpt6SolLuna(model)) return MaxTokens.openai_astra;
+        if (isOpenAIAstra(model) || isOpenAIGpt6SolLuna(model) || isOpenAISol61(model)) return MaxTokens.openai_astra;
         if (isOpenAIGpt56(model)) return MaxTokens.openai_56;
         return this.supports('reasoning', model) ? MaxTokens.openai_thinking : this.maxTokens;
     }
@@ -325,7 +355,7 @@ export class OpenAIProvider extends BaseProvider {
 
     createRequest({ model, messages, stream, options, apiKey, chatGPTAuth, settings }) {
         const isReasoner = this.supports('reasoning', model);
-        const isCurrentGPT6 = isOpenAIAstra(model) || isOpenAIGpt6SolLuna(model);
+        const isCurrentGPT6 = isOpenAIAstra(model) || isOpenAIGpt6SolLuna(model) || isOpenAISol61(model);
         const hasReasoningModes = this.supports('reasoning_mode', model);
         const shouldWebSearch = (options.webSearch ?? options.getWebSearch?.() ?? false) &&
                               this.supports('web_search', model);
@@ -340,11 +370,12 @@ export class OpenAIProvider extends BaseProvider {
         const body = {
             model,
             input: this.formatMessages(messages, !noImage),
-            stream: chatGPTAuth ? true : stream
+            stream: chatGPTAuth ? true : stream,
+            store: false
         };
 
         if (chatGPTAuth) {
-            body.store = false;
+            // Account identity, rather than the rotating access token, gates local replay.
             body.instructions = systemMessage || 'You are a helpful assistant.';
         } else {
             body.max_output_tokens = Math.min(settings.max_tokens, this.getOpenAIMaxTokens(model));
@@ -370,20 +401,22 @@ export class OpenAIProvider extends BaseProvider {
             body.temperature = Math.min(settings.temperature, this.maxTemp);
         }
 
-        if (chatGPTAuth) {
-            return this.buildApiRequest(CHATGPT_CODEX_ENDPOINT, body, {
+        const request = chatGPTAuth
+            ? this.buildApiRequest(CHATGPT_CODEX_ENDPOINT, body, {
                 'Authorization': `Bearer ${chatGPTAuth.access}`,
                 'chatgpt-account-id': chatGPTAuth.accountId,
                 'OpenAI-Beta': 'responses=experimental',
                 'originator': 'pi',
                 'version': CHATGPT_CODEX_CLIENT_VERSION,
                 'Accept': 'text/event-stream'
+            })
+            : this.buildApiRequest('https://api.openai.com/v1/responses', body, {
+                'Authorization': `Bearer ${apiKey}`
             });
-        }
-
-        return this.buildApiRequest('https://api.openai.com/v1/responses', body, {
-            'Authorization': `Bearer ${apiKey}`
-        });
+        this.reasoningRequests ??= new WeakMap();
+        this.reasoningRequests.set(request[1], messages.filter(message => message.role !== RoleEnum.system)
+            .map(message => nativeCandidate(message, 'openai')));
+        return request;
     }
 
     createTranscriptionRequest({ model, audioBlob, apiKey, options }) {
@@ -403,49 +436,74 @@ export class OpenAIProvider extends BaseProvider {
         }];
     }
 
-    handleStream({ parsed, tokenCounter, writer }) {
+    handleStream({ parsed, tokenCounter, writer, responseState }) {
+        captureOpenAIStream(parsed, responseState);
+        const display = streamDisplay(writer, responseState);
         if (parsed.type === 'response.reasoning_summary_text.delta' && parsed.delta) {
             writer.processContent(parsed.delta, true);
-        } else if (parsed.type === 'response.reasoning_summary_text.done') {
         } else if (parsed.type === 'response.output_text.delta' && parsed.delta) {
             writer.processContent(parsed.delta);
-        } else if (parsed.type === 'response.completed' && parsed.response?.usage) {
-            const usage = parsed.response.usage;
-            tokenCounter.update(usage.input_tokens, usage.output_tokens);
+        } else if (parsed.type === 'response.refusal.delta' && parsed.delta) {
+            display.refusals.add(`${parsed.output_index ?? 0}:${parsed.content_index ?? 0}`);
+            writer.processContent(parsed.delta);
+        } else if (parsed.type === 'response.refusal.done' && parsed.refusal) {
+            const key = `${parsed.output_index ?? 0}:${parsed.content_index ?? 0}`;
+            if (!display.refusals.has(key)) writer.processContent(parsed.refusal);
+            display.refusals.add(key);
+        } else if (parsed.type === 'response.output_text.annotation.added') {
+            const url = parsed.annotation?.url || parsed.annotation?.url_citation?.url;
+            if (url) display.citations.add(url);
+        } else if (parsed.type === 'response.completed' && !display.completed) {
+            display.completed = true;
+            const output = parsed.response?.output || responseState?.payload || [];
+            output.forEach((item, index) => (item.content || []).forEach((block, contentIndex) => {
+                if (block.type === 'refusal' && !display.refusals.has(`${index}:${contentIndex}`) && block.refusal) {
+                    writer.processContent(block.refusal);
+                }
+            }));
+            const citations = citationURLs('openai', output);
+            const tail = buildInlineCitations(citations.length ? citations : [...display.citations]);
+            if (tail) writer.processContent(tail);
+            if (parsed.response?.usage) updateResponsesUsage(parsed.response.usage, tokenCounter, true);
+        } else if (['response.failed', 'error'].includes(parsed.type)) {
+            throw new Error(parsed.response?.error?.message || parsed.error?.message || parsed.message || 'OpenAI response failed');
         }
     }
 
-    collectReasoningSummaries(output) {
-        const thoughts = [];
-
+    handleResponse({ data, tokenCounter, responseState }) {
+        const output = data.output || [];
+        if (responseState) {
+            responseState.payload = output;
+            responseState.completed = data.status === 'completed';
+        }
+        const parts = [];
         for (const item of output) {
             if (!item || typeof item !== 'object') continue;
-
-            if (item.type === 'reasoning' && item.summary) {
-                thoughts.push(item.summary);
+            if (item.type === 'reasoning') {
+                if (typeof item.summary === 'string' && item.summary) {
+                    parts.push({ type: 'thought', content: item.summary });
+                } else if (Array.isArray(item.summary)) {
+                    for (const summary of item.summary) {
+                        if (typeof summary?.text === 'string' && summary.text) {
+                            parts.push({ type: 'thought', content: summary.text });
+                        }
+                    }
+                }
             } else if (item.type === 'reasoning_summary_text' && item.text) {
-                thoughts.push(item.text);
+                parts.push({ type: 'thought', content: item.text });
+            } else if (item.type === 'message' && Array.isArray(item.content)) {
+                let text = '';
+                for (const part of item.content) {
+                    if (part?.type === 'output_text') text += part.text || '';
+                    else if (part?.type === 'refusal') text += part.refusal || '';
+                }
+                if (text) parts.push({ type: 'text', content: text });
             }
         }
-
-        return thoughts;
-    }
-
-    handleResponse({ data, tokenCounter }) {
-        const output = data.output || [];
-        const text = output
-            .filter(item => item?.type === 'message' && Array.isArray(item.content))
-            .flatMap(item => item.content)
-            .filter(part => part?.type === 'output_text')
-            .map(part => part.text || '')
-            .join('');
-
-        if (data.usage) {
-            tokenCounter.update(data.usage.input_tokens, data.usage.output_tokens);
-        }
-
-        const thoughts = this.collectReasoningSummaries(output);
-        return this.returnMessage([text], thoughts);
+        const tail = buildInlineCitations(citationURLs('openai', output));
+        if (tail) parts.push({ type: 'text', content: tail });
+        if (data.usage) updateResponsesUsage(data.usage, tokenCounter, true);
+        return parts;
     }
 }
 
@@ -454,21 +512,32 @@ export class AnthropicProvider extends BaseProvider {
         super(); 
         this.maxTemp = MaxTemp.anthropic; 
         this.maxTokens = MaxTokens.anthropic; 
+        this.streamCompletion = 'anthropic';
     }
+
+    async getReasoningScope({ apiKey }) { return credentialScope(apiKey); }
+
+    async prepareRequest(request) {
+        const candidates = this.reasoningRequests?.get(request.requestOptions);
+        this.reasoningRequests?.delete(request.requestOptions);
+        return prepareNativeRequest('anthropic', request, candidates);
+    }
+
+    finalizeResponseState(responseState) { return finalizeNativeState(responseState); }
 
     supports(feature, model) {
         if (feature === 'reasoning') {
-            return isAnthropicFable(model) || isAnthropicOpusAtLeast(model, 4, 6);
+            return isAnthropicFable(model) || isAnthropicModernCustom(model) || isAnthropicOpusAtLeast(model, 4, 6);
         }
         
         if (feature === 'thinking') {
             return ['3-7-sonnet', 'sonnet-4'].some(name => model.includes(name)) ||
-                isAnthropicFable(model) || isAnthropicOpusAtLeast(model, 4);
+                isAnthropicFable(model) || isAnthropicModernCustom(model) || isAnthropicOpusAtLeast(model, 4);
         }
         
         if (feature === 'web_search') {
             return ['3-7-sonnet', '3-5-sonnet-latest', '3-5-haiku-latest', 'sonnet-4']
-                .some(name => model.includes(name)) || isAnthropicFable(model) ||
+                .some(name => model.includes(name)) || isAnthropicFable(model) || isAnthropicModernCustom(model) ||
                 isAnthropicOpusAtLeast(model, 4);
         }
         
@@ -476,7 +545,7 @@ export class AnthropicProvider extends BaseProvider {
     }
 
     getReasoningEfforts(model) {
-        if (isAnthropicFable(model)) return ['low', 'medium', 'high', 'xhigh', 'max'];
+        if (isAnthropicFable(model) || isAnthropicModernCustom(model)) return ['low', 'medium', 'high', 'xhigh', 'max'];
         if (isAnthropicOpusAtLeast(model, 4, 7)) return ['low', 'medium', 'high', 'xhigh', 'max'];
         if (isAnthropicOpusAtLeast(model, 4, 6)) return ['low', 'medium', 'high', 'max'];
         return [];
@@ -523,7 +592,7 @@ export class AnthropicProvider extends BaseProvider {
                               this.supports('web_search', model);
         
         let maxLimit = this.maxTokens;
-        if (isAnthropicFable(model) || isAnthropicOpusAtLeast(model, 4, 8)) {
+        if (isAnthropicFable(model) || isAnthropicModernCustom(model) || isAnthropicOpusAtLeast(model, 4, 8)) {
             maxLimit = MaxTokens.anthropic_fable;
         } else if (isThinking) {
             maxLimit = MaxTokens.anthropic_thinking;
@@ -535,17 +604,18 @@ export class AnthropicProvider extends BaseProvider {
         
         const maxTokens = Math.min(settings.max_tokens, maxLimit);
         const systemMessage = messages.find(m => m.role === RoleEnum.system);
-        const formatted = this.formatMessages(systemMessage ? messages : messages.filter(m => m.role !== RoleEnum.system));
+        const history = messages.filter(message => message.role !== RoleEnum.system);
+        const formatted = this.formatMessages(history);
         
         const body = { 
             model, 
-            messages: systemMessage ? (formatted.length > 0 ? formatted.slice(1) : []) : formatted, 
+            messages: formatted,
             max_tokens: maxTokens, 
             stream 
         };
 
         if (systemMessage) {
-            body.system = [formatted[0].content[0]];
+            body.system = [{ type: 'text', text: this.extractTextContent(systemMessage) }];
         }
 
 
@@ -556,6 +626,9 @@ export class AnthropicProvider extends BaseProvider {
                 body.thinking = { type: 'adaptive', display: 'summarized' };
                 body.output_config = { effort };
             } else {
+                if (maxTokens <= 1024) {
+                    throw new Error('Anthropic manual thinking requires max_tokens greater than 1024 (the minimum thinking budget). Increase your token cap or turn thinking off.');
+                }
                 body.thinking = {
                     type: "enabled",
                     budget_tokens: Math.max(1024, maxTokens - 4000)
@@ -577,14 +650,26 @@ export class AnthropicProvider extends BaseProvider {
             }];
         }
 
-        return this.buildApiRequest('https://api.anthropic.com/v1/messages', body, { 
-            'x-api-key': apiKey, 
-            'anthropic-version': '2023-06-01', 
-            'anthropic-dangerous-direct-browser-access': 'true' 
+        const request = this.buildApiRequest('https://api.anthropic.com/v1/messages', body, {
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true'
         });
+        this.reasoningRequests ??= new WeakMap();
+        this.reasoningRequests.set(request[1], history.map(message => nativeCandidate(message, 'anthropic')));
+        return request;
     }
 
-    handleStream({ parsed, tokenCounter, writer }) {
+    handleStream({ parsed, tokenCounter, writer, responseState }) {
+        captureAnthropicStream(parsed, responseState);
+        const display = streamDisplay(writer, responseState);
+        if (parsed.type === 'content_block_start') {
+            for (const citation of parsed.content_block?.citations || []) {
+                if (citation.url) display.citations.add(citation.url);
+            }
+        } else if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'citations_delta') {
+            if (parsed.delta.citation?.url) display.citations.add(parsed.delta.citation.url);
+        }
         if (parsed.type === 'content_block_delta') {
             const delta = parsed.delta || {};
             if (delta.type === 'text_delta') {
@@ -604,41 +689,50 @@ export class AnthropicProvider extends BaseProvider {
                 }
             } else {
                 writer._lastContentWasRedacted = false;
+                if (parsed.content_block?.type === 'text' && parsed.content_block.text) {
+                    writer.processContent(parsed.content_block.text);
+                } else if (parsed.content_block?.type === 'thinking' && parsed.content_block.thinking) {
+                    writer.processContent(parsed.content_block.thinking, true);
+                }
             }
         } else if (parsed.type === 'message_start' && parsed.message?.usage) {
             const usage = parsed.message.usage;
-            const inputCount = (usage.input_tokens || 0) + 
-                             (usage.cache_creation_input_tokens || 0) + 
-                             (usage.cache_read_input_tokens || 0);
-            tokenCounter.update(inputCount, usage.output_tokens || 0);
-        } else if (parsed.type === 'message_delta' && parsed.usage?.output_tokens) {
-            tokenCounter.update(0, parsed.usage.output_tokens);
+            updateAnthropicUsage(usage, tokenCounter);
+        } else if (parsed.type === 'message_delta' && parsed.usage) {
+            updateAnthropicUsage(parsed.usage, tokenCounter, true);
+        } else if (parsed.type === 'message_stop' && !display.completed) {
+            display.completed = true;
+            const citations = responseState ? citationURLs('anthropic', responseState.payload) : [...display.citations];
+            const tail = buildInlineCitations(citations);
+            if (tail) writer.processContent(tail);
         } else if (parsed.type === 'error') {
             throw new Error(parsed.error?.message || 'Anthropic Error');
         }
     }
 
-    handleResponse({ data, tokenCounter }) {
-        const usage = data.usage;
-        const thoughts = [];
-        const texts = [];
-        
-        if (usage) {
-            const inputCount = usage.input_tokens + 
-                             (usage.cache_creation_input_tokens || 0) + 
-                             (usage.cache_read_input_tokens || 0);
-            tokenCounter.update(inputCount, usage.output_tokens);
+    handleResponse({ data, tokenCounter, responseState }) {
+        const content = data.content || [];
+        if (responseState) {
+            responseState.payload = content;
+            responseState.completed = !!data.stop_reason && data.stop_reason !== 'max_tokens';
         }
-        
-        (data.content || []).forEach(block => { 
-            if (block.type === 'thinking') {
-                thoughts.push(block.thinking); 
-            } else if (block.type === 'text') {
-                texts.push(block.text); 
+        const usage = data.usage;
+        if (usage) {
+            updateAnthropicUsage(usage, tokenCounter);
+        }
+        const parts = [];
+        for (const block of content) {
+            if (block.type === 'thinking' && block.thinking) {
+                parts.push({ type: 'thought', content: block.thinking });
+            } else if (block.type === 'redacted_thinking') {
+                parts.push({ type: 'thought', content: "\n\n```\n*redacted thinking*\n```\n\n" });
+            } else if (block.type === 'text' && block.text) {
+                parts.push({ type: 'text', content: block.text });
             }
-        });
-        
-        return this.returnMessage(texts, thoughts);
+        }
+        const tail = buildInlineCitations(citationURLs('anthropic', content));
+        if (tail) parts.push({ type: 'text', content: tail });
+        return parts;
     }
 }
 
@@ -647,7 +741,14 @@ export class GeminiProvider extends BaseProvider {
         super(); 
         this.maxTemp = MaxTemp.gemini; 
         this.maxTokens = MaxTokens.gemini; 
+        this.streamCompletion = 'gemini';
     }
+
+    async getReasoningScope({ apiKey }) { return credentialScope(apiKey); }
+
+    async prepareRequest(request) { return prepareProviderNativeRequest('gemini', request); }
+
+    finalizeResponseState(state) { return finalizeProviderNativeState(state); }
 
     supports(feature, model) {
         if (feature === 'reasoning') {
@@ -690,6 +791,7 @@ export class GeminiProvider extends BaseProvider {
         return messages.map(message => {
             const parts = [];
             (message.parts || []).forEach(part => {
+                if (message.role === RoleEnum.assistant && part.thought) return;
                 if ((part.type === 'image' || part.type === 'audio') && part.content) {
                     const entry = { 
                         inline_data: { 
@@ -697,11 +799,11 @@ export class GeminiProvider extends BaseProvider {
                             data: this.simpleBase64Splitter(part.content) 
                         } 
                     };
-                    if (part.thoughtSignature) entry.thoughtSignature = part.thoughtSignature;
+                    if (message.role !== RoleEnum.assistant && part.thoughtSignature) entry.thoughtSignature = part.thoughtSignature;
                     parts.push(entry);
-                } else if (part.type === 'text' || part.thoughtSignature) {
+                } else if (part.type === 'text' || message.role !== RoleEnum.assistant && part.thoughtSignature) {
                     const entry = { text: part.content ?? '' };
-                    if (part.thoughtSignature) entry.thoughtSignature = part.thoughtSignature;
+                    if (message.role !== RoleEnum.assistant && part.thoughtSignature) entry.thoughtSignature = part.thoughtSignature;
                     parts.push(entry);
                 }
             });
@@ -774,6 +876,8 @@ export class GeminiProvider extends BaseProvider {
             generationConfig.thinking_config = { thinkingLevel: level, include_thoughts: true };
         } else if (isThinking) {
             generationConfig.thinking_config = { thinkingBudget: -1, include_thoughts: true };
+        } else if (canToggle && !model.includes('lite')) {
+            generationConfig.thinking_config = { thinkingBudget: 0 };
         }
         
         const baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models/';
@@ -800,7 +904,8 @@ export class GeminiProvider extends BaseProvider {
             body.tools = [{ google_search: {} }];
         }
 
-        return this.buildApiRequest(url, body);
+        return rememberNativeRequest(this, 'gemini', this.buildApiRequest(url, body),
+            hasSystem ? messages.slice(1) : messages);
     }
 
     createImageRequest({ model, messages, apiKey, settings, options }) {
@@ -837,45 +942,45 @@ export class GeminiProvider extends BaseProvider {
         }
 
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-        return this.buildApiRequest(url, body);
+        return rememberNativeRequest(this, 'gemini', this.buildApiRequest(url, body),
+            hasSystem ? messages.slice(1) : messages);
     }
 
-    handleStream({ parsed, tokenCounter, writer }) {
+    handleStream({ parsed, tokenCounter, writer, responseState }) {
+        captureGemini(parsed, responseState);
         const parts = parsed.candidates?.[0]?.content?.parts;
         if (parts) {
-            parts.forEach(part => { 
-                if (part.text !== undefined) {
-                    writer.processContent(part.text, !!part.thought); 
-                }
-                if (part.thoughtSignature && writer?.parts?.length) {
-                    writer.parts.at(-1).thoughtSignature = part.thoughtSignature; 
+            parts.forEach(part => {
+                if (part.text !== undefined) writer.processContent(part.text, !!part.thought);
+                // Native signature placement belongs to the capsule, not merged UI text.
+                const data = part.inlineData || part.inline_data;
+                if (data?.data) {
+                    const mimeType = data.mimeType || data.mime_type || 'image/png';
+                    const content = `data:${mimeType};base64,${sanitizeBase64Image(data.data, mimeType)}`;
+                    writer.processImage?.(content, { thought: !!part.thought });
                 }
             });
         }
         const usage = parsed.usageMetadata;
-        if (usage?.promptTokenCount) {
-            tokenCounter.update(usage.promptTokenCount, (usage.candidatesTokenCount || 0) + (usage.thoughtsTokenCount || 0));
-        }
+        if (usage) updateGeminiUsage(usage, tokenCounter);
     }
 
-    handleResponse({ data, tokenCounter }) {
+    handleResponse({ data, tokenCounter, responseState }) {
+        captureGemini(data, responseState, false);
         const usage = data.usageMetadata || {};
-        tokenCounter.update(usage.promptTokenCount || 0, (usage.candidatesTokenCount || 0) + (usage.thoughtsTokenCount || 0));
+        updateGeminiUsage(usage, tokenCounter);
         
         const parts = data.candidates?.[0]?.content?.parts || [];
         const messageParts = [];
         
         parts.forEach(part => {
-            if (part.text !== undefined) { 
-                const entry = { type: part.thought ? 'thought' : 'text', content: part.text || '' }; 
-                if (part.thoughtSignature) entry.thoughtSignature = part.thoughtSignature; 
-                messageParts.push(entry); 
-            } else if (part.inlineData?.data) { 
-                const mimeType = part.inlineData.mimeType || 'image/png';
-                const base64 = sanitizeBase64Image(part.inlineData.data, mimeType); 
-                const entry = { type: 'image', content: `data:${mimeType};base64,${base64}` }; 
-                if (part.thoughtSignature) entry.thoughtSignature = part.thoughtSignature; 
-                messageParts.push(entry); 
+            if (part.text !== undefined) {
+                messageParts.push({ type: part.thought ? 'thought' : 'text', content: part.text || '' });
+            } else if ((part.inlineData || part.inline_data)?.data) {
+                const data = part.inlineData || part.inline_data;
+                const mimeType = data.mimeType || data.mime_type || 'image/png';
+                const base64 = sanitizeBase64Image(data.data, mimeType);
+                messageParts.push({ type: 'image', thought: !!part.thought, content: `data:${mimeType};base64,${base64}` });
             }
         });
         
@@ -888,6 +993,11 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
         super(); 
         this.maxTemp = MaxTemp.deepseek; 
         this.maxTokens = MaxTokens.deepseek; 
+        this.streamCompletion = 'chat-done';
+    }
+
+    updateStreamTokenUsage(parsed, tokenCounter) {
+        updateChatUsage(parsed.usage, tokenCounter, parsed.usage.prompt_cache_hit_tokens || 0);
     }
 
     getApiEndpoint() {
@@ -906,6 +1016,19 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
     // DeepSeek-V4.1-Flash, while deepseek-v4-pro and the older chat/reasoner ids stay text-only.
     supportsImageMessages(model) {
         return !!model && (model.startsWith('deepseek-flash') || model.startsWith('deepseek-v4-flash'));
+    }
+
+    formatMessages(messages, context) {
+        const formatted = super.formatMessages(messages, context);
+        if (!context?.model?.startsWith('deepseek-')) return formatted;
+        formatted.forEach((message, index) => {
+            if (message.role !== RoleEnum.assistant || messages[index].parts?.some(part => part.providerState)) return;
+            const reasoning = (messages[index].parts || [])
+                .filter(part => part.type === 'thought' && part.model === context.model)
+                .map(part => part.content || '').join('\n');
+            if (reasoning) message.reasoning_content = reasoning;
+        });
+        return formatted;
     }
 
     beforeCreateRequest({ model, options }) {
@@ -967,59 +1090,133 @@ export class DeepSeekProvider extends OpenAICompatibleProvider {
     }
 }
 
-export class GrokProvider extends OpenAICompatibleProvider {
+export class GrokProvider extends BaseProvider {
     constructor() {
         super();
         this.maxTemp = MaxTemp.grok;
         this.maxTokens = MaxTokens.grok;
+        this.streamCompletion = 'responses';
     }
 
+    async getReasoningScope({ apiKey }) { return credentialScope(apiKey); }
+
+    async prepareRequest(request) { return prepareProviderNativeRequest('grok', request); }
+
+    finalizeResponseState(state) { return finalizeProviderNativeState(state); }
+
     supports(feature, model) {
-        if (feature === 'web_search') {
-            return model?.includes('grok-4');
-        }
+        if (feature === 'web_search') return model?.includes('grok-4');
+        if (feature === 'reasoning') return this.getReasoningEfforts(model).length > 0;
         return super.supports(feature, model);
     }
 
-    supportsImageMessages() {
-        return true;
+    getReasoningEfforts(model) {
+        if (/^grok-4\.[67](?:-|$)/.test(model)) return ['low', 'medium', 'high', 'xhigh'];
+        if (/^grok-4\.5(?:-|$)/.test(model)) return ['low', 'medium', 'high'];
+        if (/^grok-4\.3(?:-|$)/.test(model)) return ['none', 'low', 'medium', 'high', 'xhigh'];
+        return [];
     }
 
-    getApiEndpoint() {
-        return 'https://api.x.ai/v1/chat/completions';
+    normalizeReasoningEffort(model, effort) {
+        if (effort === 'minimal' || effort === 'none' && !this.getReasoningEfforts(model).includes('none')) effort = 'low';
+        if (effort === 'max') effort = 'xhigh';
+        return super.normalizeReasoningEffort(model, effort, 'high');
     }
 
-    beforeCreateRequest({ model, options }) {
-        if (model.includes('grok-4') && !model.includes('non-reasoning') && options.streamWriter) {
-            options.streamWriter.addThinkingCounter();
+    createRequest({ model, messages, stream, settings, apiKey, options = {} }) {
+        const history = messages.filter(message => message.role !== RoleEnum.system);
+        const isReasoner = model.includes('grok-4') && !model.includes('non-reasoning');
+        const body = {
+            model, stream, store: false,
+            max_output_tokens: Math.min(settings.max_tokens, this.maxTokens),
+            input: history.map(message => {
+                const content = [];
+                const text = this.extractTextContent(message);
+                if (text) content.push({ type: message.role === RoleEnum.assistant ? 'output_text' : 'input_text', text });
+                for (const url of message.images || []) content.push({ type: 'input_image', image_url: url });
+                for (const part of message.parts || []) {
+                    if (part.type === 'image' && part.content) content.push({ type: 'input_image', image_url: part.content });
+                }
+                return { role: message.role, content };
+            })
+        };
+        const system = messages.find(message => message.role === RoleEnum.system);
+        if (system) body.instructions = this.extractTextContent(system);
+        if (isReasoner) {
+            body.include = ['reasoning.encrypted_content'];
+            options.streamWriter?.addThinkingCounter?.();
+        } else body.temperature = Math.min(settings.temperature, this.maxTemp);
+        if (this.supports('reasoning', model)) {
+            body.reasoning = { effort: this.normalizeReasoningEffort(model,
+                options.reasoningEffort ?? options.getOpenAIReasoningEffort?.() ?? 'high') };
+        }
+        if (this.supports('web_search', model) && (options.webSearch ?? options.getWebSearch?.() ?? false)) {
+            body.tools = [{ type: 'web_search' }];
+        }
+        return rememberNativeRequest(this, 'grok', this.buildApiRequest('https://api.x.ai/v1/responses',
+            body, { 'Authorization': `Bearer ${apiKey}` }), history);
+    }
+
+    handleStream({ parsed, tokenCounter, writer, responseState }) {
+        captureGrokStream(parsed, responseState);
+        const display = streamDisplay(writer, responseState);
+        const displayed = display.items ??= new Set();
+        const key = `${parsed.output_index ?? 0}`;
+        if (['response.reasoning_text.delta', 'response.reasoning_summary_text.delta'].includes(parsed.type) && parsed.delta) {
+            displayed?.add(`thought:${key}`);
+            writer.processContent(parsed.delta, true);
+        } else if (parsed.type === 'response.output_text.delta' && parsed.delta) {
+            displayed?.add(`text:${key}`);
+            writer.processContent(parsed.delta);
+        } else if (parsed.type === 'response.output_item.done') {
+            this.renderCompletedItem(parsed.item, key, writer, displayed);
+        } else if (parsed.type === 'response.completed' && !display.completed) {
+            display.completed = true;
+            (parsed.response?.output || []).forEach((item, index) => this.renderCompletedItem(item, `${index}`, writer, displayed));
+            const usage = parsed.response?.usage;
+            if (usage) updateResponsesUsage(usage, tokenCounter);
+            const citations = responseState?.citations || grokCitations(parsed.response);
+            if (citations.length) writer.processContent(this.buildCitationsTail(citations));
+        } else if (['response.failed', 'error'].includes(parsed.type)) {
+            throw new Error(parsed.response?.error?.message || parsed.error?.message || parsed.message || 'Grok response failed');
         }
     }
 
-    extendRequestBody(body, { model, options }) {
-        const shouldSearch = options.webSearch ?? options.getWebSearch?.() ?? false;
-        if (model.includes('grok-4') && shouldSearch) {
-            body.search_parameters = { mode: "auto" };
-        }
+    renderCompletedItem(item, index, writer, displayed) {
+        if (!item) return;
+        const thought = item.type === 'reasoning';
+        const key = `${thought ? 'thought' : 'text'}:${index}`;
+        if (displayed?.has(key)) return;
+        const blocks = thought ? typeof item.summary === 'string' ? [{ text: item.summary }] : item.summary || []
+            : item.type === 'message' ? (item.content || []).filter(block => block.type === 'output_text') : [];
+        for (const block of blocks) if (block.text) writer.processContent(block.text, thought);
+        if (blocks.length) displayed?.add(key);
     }
 
-    updateStreamTokenUsage(parsed, tokenCounter) {
-        const completion = (parsed.usage.completion_tokens || 0) +
-            (parsed.usage.completion_tokens_details?.reasoning_tokens || 0);
-        tokenCounter.update(parsed.usage.prompt_tokens, completion);
-    }
-
-    afterUsageChunk(parsed, writer) {
-        if (parsed.citations?.length) {
-            writer.processContent(this.buildCitationsTail(parsed.citations));
+    handleResponse({ data, tokenCounter, responseState }) {
+        if (responseState) {
+            responseState.payload = data.output || [];
+            responseState.completed = data.status === 'completed' && !data.error && !data.incomplete_details;
+            responseState.citations = grokCitations(data);
         }
-    }
-
-    decorateResponseContent(content, data) {
-        let finalContent = content;
-        if (data.citations?.length) {
-            finalContent += this.buildCitationsTail(data.citations);
+        if (data.error) throw new Error(data.error.message || 'Grok response failed');
+        if (data.usage) updateResponsesUsage(data.usage, tokenCounter);
+        const parts = [];
+        for (const item of data.output || []) {
+            if (item.type === 'reasoning') {
+                const summary = typeof item.summary === 'string' ? [{ text: item.summary }] : item.summary || [];
+                for (const block of summary) if (block.text) parts.push({ type: 'thought', content: block.text });
+            } else if (['reasoning_summary_text', 'reasoning_text'].includes(item.type) && item.text) {
+                parts.push({ type: 'thought', content: item.text });
+            } else if (item.type === 'message') {
+                for (const block of item.content || []) {
+                    if (block.type === 'output_text' && block.text) parts.push({ type: 'text', content: block.text });
+                }
+            }
         }
-        return finalContent;
+        const tail = this.buildCitationsTail(grokCitations(data));
+        if (tail) parts.push({ type: 'text', content: tail });
+        return parts;
     }
 }
 
@@ -1028,6 +1225,33 @@ export class KimiProvider extends OpenAICompatibleProvider {
         super(); 
         this.maxTemp = MaxTemp.kimi; 
         this.maxTokens = MaxTokens.kimi; 
+        this.streamCompletion = 'chat-done';
+    }
+
+    updateStreamTokenUsage(parsed, tokenCounter) {
+        const usage = parsed.usage;
+        updateChatUsage(usage, tokenCounter, usage.prompt_tokens_details?.cached_tokens ?? usage.cached_tokens ?? 0,
+            usage.prompt_tokens_details?.cache_write_tokens || 0);
+    }
+
+    async getReasoningScope({ apiKey }) { return credentialScope(apiKey); }
+
+    async prepareRequest(request) { return prepareProviderNativeRequest('kimi', request); }
+
+    finalizeResponseState(state) { return finalizeProviderNativeState(state); }
+
+    createRequest(params) {
+        return rememberNativeRequest(this, 'kimi', super.createRequest(params), params.messages);
+    }
+
+    handleStream(params) {
+        captureChatCompletion(params.parsed, params.responseState);
+        super.handleStream(params);
+    }
+
+    handleResponse(params) {
+        captureChatCompletion(params.data, params.responseState, false);
+        return super.handleResponse(params);
     }
 
     getApiEndpoint() {
@@ -1060,9 +1284,9 @@ export class KimiProvider extends OpenAICompatibleProvider {
         if (context?.model !== 'kimi-k3') return formatted;
 
         formatted.forEach((message, index) => {
-            if (message.role !== RoleEnum.assistant) return;
+            if (message.role !== RoleEnum.assistant || messages[index].parts?.some(part => part.providerState)) return;
             const reasoningContent = (messages[index].parts || [])
-                .filter(part => part.type === 'thought' && part.content)
+                .filter(part => part.type === 'thought' && part.model === context.model && part.content)
                 .map(part => part.content)
                 .join('\n');
             if (reasoningContent) message.reasoning_content = reasoningContent;
@@ -1109,6 +1333,25 @@ export class MistralProvider extends BaseProvider {
         super(); 
         this.maxTemp = MaxTemp.mistral; 
         this.maxTokens = MaxTokens.mistral; 
+        this.streamCompletion = 'chat';
+    }
+
+    async getReasoningScope({ apiKey }) { return credentialScope(apiKey); }
+
+    async prepareRequest(request) { return prepareProviderNativeRequest('mistral', request); }
+
+    finalizeResponseState(state) { return finalizeProviderNativeState(state); }
+
+    supports(feature, model) {
+        if (feature === 'reasoning') return ['mistral-small-latest', 'mistral-small-2603', 'mistral-medium-3-5'].includes(model);
+        return super.supports(feature, model);
+    }
+
+    getReasoningEfforts(model) { return this.supports('reasoning', model) ? ['none', 'high'] : []; }
+
+    normalizeReasoningEffort(model, effort) {
+        return this.supports('reasoning', model) ? effort === 'none' || effort === 'minimal' ? 'none' : 'high'
+            : super.normalizeReasoningEffort(model, effort);
     }
 
     formatMessages(messages) { 
@@ -1118,7 +1361,7 @@ export class MistralProvider extends BaseProvider {
         })); 
     }
 
-    createRequest({ model, messages, stream, settings, apiKey }) { 
+    createRequest({ model, messages, stream, settings, apiKey, options = {} }) {
         const body = { 
             model, 
             messages: this.formatMessages(messages), 
@@ -1126,9 +1369,14 @@ export class MistralProvider extends BaseProvider {
             temperature: Math.min(settings.temperature, this.maxTemp), 
             stream 
         };
-        return this.buildApiRequest('https://api.mistral.ai/v1/chat/completions', body, { 
-            'Authorization': `Bearer ${apiKey}` 
-        }); 
+        if (this.supports('reasoning', model)) {
+            body.reasoning_effort = this.normalizeReasoningEffort(model,
+                options.reasoningEffort ?? options.getOpenAIReasoningEffort?.() ?? 'high');
+            if (body.reasoning_effort === 'high') options.streamWriter?.setThinkingModel?.();
+        }
+        return rememberNativeRequest(this, 'mistral', this.buildApiRequest('https://api.mistral.ai/v1/chat/completions', body, {
+            'Authorization': `Bearer ${apiKey}`
+        }), messages);
     }
 
     createTranscriptionRequest({ model, audioBlob, apiKey, options }) {
@@ -1148,11 +1396,11 @@ export class MistralProvider extends BaseProvider {
         }];
     }
 
-    handleStream({ parsed, tokenCounter, writer }) {
-        const deltaData = parsed.data ?? parsed; 
-        if (deltaData.usage && !writer._mistralUsageUpdated) { 
-            tokenCounter.update(deltaData.usage.prompt_tokens, deltaData.usage.completion_tokens); 
-            writer._mistralUsageUpdated = true; 
+    handleStream({ parsed, tokenCounter, writer, responseState }) {
+        const deltaData = parsed.data ?? parsed;
+        captureChatCompletion(deltaData, responseState);
+        if (deltaData.usage) {
+            updateChatUsage(deltaData.usage, tokenCounter);
         }
         
         const choice = deltaData.choices?.[0];
@@ -1165,7 +1413,7 @@ export class MistralProvider extends BaseProvider {
                 if (chunk.type === 'text' && chunk.text) {
                     writer.processContent(chunk.text); 
                 } else if (chunk.type === 'thinking') {
-                    chunk.thinking.forEach(thought => {
+                    (chunk.thinking || []).forEach(thought => {
                         if (thought.text) {
                             writer.processContent(thought.text, true);
                         }
@@ -1175,32 +1423,61 @@ export class MistralProvider extends BaseProvider {
         }
     }
 
-    handleResponse({ data, tokenCounter }) { 
+    handleResponse({ data, tokenCounter, responseState }) {
+        captureChatCompletion(data, responseState, false);
         if (data.usage) {
-            tokenCounter.update(data.usage.prompt_tokens, data.usage.completion_tokens); 
+            updateChatUsage(data.usage, tokenCounter);
         }
         
         const choice = data.choices?.[0];
         const content = choice?.message?.content;
-        const texts = [];
-        const thoughts = []; 
-        
+        const parts = [];
         if (typeof content === 'string') {
-            texts.push(content); 
+            if (content) parts.push({ type: 'text', content });
         } else if (Array.isArray(content)) {
-            content.forEach(item => { 
-                if (item.type === 'text') {
-                    texts.push(item.text); 
-                } else if (item.type === 'thinking') {
-                    item.thinking.forEach(thought => thoughts.push(thought.text)); 
+            for (const item of content) {
+                if (item.type === 'text' && item.text) parts.push({ type: 'text', content: item.text });
+                else if (item.type === 'thinking') {
+                    for (const thought of item.thinking || []) {
+                        if (thought.text) parts.push({ type: 'thought', content: thought.text });
+                    }
                 }
-            }); 
+            }
         }
-        return this.returnMessage(texts.length ? texts : [''], thoughts); 
+        return parts;
     }
 }
 
 export class LlamaCppProvider extends OpenAICompatibleProvider {
+    constructor() {
+        super();
+        this.streamCompletion = 'chat';
+    }
+
+    async getReasoningScope({ options }) {
+        const reasoning = options?.localModelOverride?.reasoning;
+        return reasoning?.supported === true && typeof reasoning.identity === 'string' && reasoning.identity
+            ? `local:${reasoning.identity}` : null;
+    }
+
+    async prepareRequest(request) { return prepareProviderNativeRequest('llamacpp', request); }
+
+    finalizeResponseState(state) { return finalizeProviderNativeState(state); }
+
+    createRequest(params) {
+        return rememberNativeRequest(this, 'llamacpp', super.createRequest(params), params.messages);
+    }
+
+    handleStream(params) {
+        captureChatCompletion(params.parsed, params.responseState);
+        super.handleStream(params);
+    }
+
+    handleResponse(params) {
+        captureChatCompletion(params.data, params.responseState, false);
+        return super.handleResponse(params);
+    }
+
     supportsImageMessages() {
         return true;
     }

@@ -145,8 +145,7 @@ describe('Provider Response Handling', () => {
         { type: 'text', content: 'Confirmed.' }
       ]);
       
-      // Anthropic input tokens = input + cache_creation + cache_read
-      assertDeepEqual(tokenCounter.inputTokens, 10 + 5 + 2);
+      assertDeepEqual([tokenCounter.inputTokens, tokenCounter.cachedInputTokens, tokenCounter.cacheWriteInputTokens], [15, 2, 5]);
     });
 
     test('handleStream handles thinking, text, and redacted blocks', () => {
@@ -179,7 +178,7 @@ describe('Provider Response Handling', () => {
         { type: 'thought', content: '\n\n```\n*redacted thinking*\n```\n\n' }
       ]);
       
-      assertDeepEqual(tokenCounter.inputTokens, 60);
+      assertDeepEqual([tokenCounter.inputTokens, tokenCounter.cachedInputTokens], [50, 10]);
       assertDeepEqual(tokenCounter.outputTokens, 15);
     });
   });
@@ -264,24 +263,40 @@ describe('Provider Response Handling', () => {
   });
 
   // --- Grok Tests ---
-  // UNVERIFIED - no official xAI documentation available
+  // https://docs.x.ai/developers/tools/web-search and the Responses API reference.
   describe('Grok', () => {
-    test('handleStream processes reasoning and appends citations', () => {
+    test('handleStream processes reasoning and appends citations', async () => {
       const provider = Providers.grok;
       const writer = createMockWriter();
       const tokenCounter = createMockTokenCounter();
+      const reasoningScope = await provider.getReasoningScope({ apiKey: 'key' });
+      const [, requestOptions] = provider.createRequest({
+        model: 'grok-4', messages: [{ role: 'user', parts: [{ type: 'text', content: 'Search' }] }],
+        stream: true, apiKey: 'key', settings: { temperature: 0.7, max_tokens: 1000 },
+        options: { reasoningScope, webSearch: true }
+      });
+      const responseState = await provider.prepareRequest({ model: 'grok-4', requestOptions, reasoningScope });
 
       const chunks = [
-        { choices: [{ delta: { reasoning_content: 'Searching...' } }] },
-        { choices: [{ delta: { content: 'Found it.' } }] },
-        { 
-          usage: { prompt_tokens: 10, completion_tokens: 5 }, 
-          citations: ['https://example.com/info'] 
-        }
+        { type: 'response.reasoning_summary_text.delta', output_index: 0, delta: 'Searching...' },
+        { type: 'response.output_text.delta', output_index: 1, content_index: 0, delta: 'Found it.' },
+        { type: 'response.output_text.annotation.added', output_index: 1, content_index: 0, annotation_index: 0,
+          annotation: { type: 'url_citation', url: 'https://example.com/info', title: 'Source', start_index: 0, end_index: 9 } },
+        { type: 'response.completed', response: {
+          status: 'completed', usage: { input_tokens: 10, output_tokens: 5 },
+          output: [
+            { type: 'reasoning', summary: [{ type: 'summary_text', text: 'Searching...' }], encrypted_content: 'native-cipher' },
+            { type: 'message', role: 'assistant', status: 'completed', content: [{
+              type: 'output_text', text: 'Found it.', annotations: [{
+                type: 'url_citation', url: 'https://example.com/info', title: 'Source', start_index: 0, end_index: 9
+              }]
+            }] }
+          ]
+        } }
       ];
 
       for (const chunk of chunks) {
-        provider.handleStream({ parsed: chunk, writer, tokenCounter });
+        provider.handleStream({ parsed: chunk, writer, tokenCounter, responseState });
       }
 
       assertDeepEqual(writer.getFinalContent(), [
@@ -292,7 +307,7 @@ describe('Provider Response Handling', () => {
   });
 
   // --- Mistral Tests ---
-  // UNVERIFIED - nested thinking format not confirmed in official docs
+  // https://docs.mistral.ai/studio/conversations/reasoning documents nested ThinkChunks.
   describe('Mistral', () => {
     test('handleStream handles complex array content deltas', () => {
       const provider = Providers.mistral;

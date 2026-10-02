@@ -210,7 +210,7 @@ describe('GPT-6 Astra on the ChatGPT subscription route', () => {
         const calls = [];
         globalThis.fetch = async (url, options) => {
             calls.push({ url, options });
-            return new Response('data: {"type":"response.output_text.delta","delta":"Hi"}\n\n', {
+            return new Response('data: {"type":"response.output_text.delta","delta":"Hi"}\n\ndata: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n', {
                 headers: { 'Content-Type': 'text/event-stream' }
             });
         };

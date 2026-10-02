@@ -213,14 +213,14 @@ describe('Kimi K3 compatibility', () => {
         expect(effort).toBe('low');
     });
 
-    test('replays assistant thought parts as reasoning_content', () => {
+    test('replays known same-model assistant thought parts as reasoning_content', () => {
         const conversation = [
             { role: RoleEnum.user, parts: [{ type: 'text', content: 'First' }] },
             {
                 role: RoleEnum.assistant,
                 parts: [
-                    { type: 'thought', content: 'reason one' },
-                    { type: 'thought', content: 'reason two' },
+                    { type: 'thought', content: 'reason one', model: 'kimi-k3' },
+                    { type: 'thought', content: 'reason two', model: 'kimi-k3' },
                     { type: 'text', content: 'Answer' }
                 ]
             },

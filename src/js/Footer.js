@@ -20,6 +20,8 @@ export class Footer {
     constructor(inputTokens, outputTokens, isArena, isThinkingCallback, regenCallback, options = {}) {
         this.inputTokens = inputTokens;
         this.outputTokens = outputTokens;
+        this.cachedInputTokens = options.cachedInputTokens || 0;
+        this.cacheWriteInputTokens = options.cacheWriteInputTokens || 0;
         this.isArena = isArena;
         this.isThinking = isThinkingCallback;
         this.regen = regenCallback;
@@ -30,10 +32,18 @@ export class Footer {
         const footerDiv = createElementWithClass('div', 'message-footer');
         
         const tokenLabel = this.isArena ? "~" : this.inputTokens;
-        const infoText = `${tokenLabel} | ${this.outputTokens}`;
+        const cachedLabel = this.cachedInputTokens ? ` | ${this.cachedInputTokens} cached` : '';
+        const infoText = `${tokenLabel} | ${this.outputTokens}${cachedLabel}`;
         const infoSpan = createElementWithClass('span', '', infoText);
+        infoSpan.title = 'Input (excluding cached reads) | Output';
+        if (this.cachedInputTokens) infoSpan.title += ` | Cached reads: ${this.cachedInputTokens}`;
+        if (this.cacheWriteInputTokens) {
+            infoSpan.title += ` | Cache writes: ${this.cacheWriteInputTokens} (included in input)`;
+        }
         
         footerDiv.setAttribute('input-tokens', this.inputTokens);
+        footerDiv.setAttribute('cached-input-tokens', this.cachedInputTokens);
+        footerDiv.setAttribute('cache-write-input-tokens', this.cacheWriteInputTokens);
         footerDiv.appendChild(infoSpan);
         
         if (!this.isThinking() && !this.hideRegenerate) {

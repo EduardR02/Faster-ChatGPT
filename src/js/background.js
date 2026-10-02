@@ -5,13 +5,18 @@ const PANEL_PATH = chrome.runtime.getURL("src/html/sidepanel.html");
 const PANEL_READY_TIMEOUT_MS = 5000;
 
 let lifetimeTokensUpdate = Promise.resolve();
-const applyLifetimeTokensDelta = (inputDelta = 0, outputDelta = 0) => {
+const applyLifetimeTokensDelta = (inputDelta = 0, outputDelta = 0, cachedInputDelta = 0, cacheWriteInputDelta = 0) => {
     lifetimeTokensUpdate = lifetimeTokensUpdate
         .then(() => new Promise(resolve => {
-            chrome.storage.local.get(['lifetime_input_tokens', 'lifetime_output_tokens'], result => {
+            chrome.storage.local.get([
+                'lifetime_input_tokens', 'lifetime_output_tokens',
+                'lifetime_cached_input_tokens', 'lifetime_cache_write_input_tokens'
+            ], result => {
                 chrome.storage.local.set({
                     lifetime_input_tokens: (result.lifetime_input_tokens || 0) + inputDelta,
-                    lifetime_output_tokens: (result.lifetime_output_tokens || 0) + outputDelta
+                    lifetime_output_tokens: (result.lifetime_output_tokens || 0) + outputDelta,
+                    lifetime_cached_input_tokens: (result.lifetime_cached_input_tokens || 0) + cachedInputDelta,
+                    lifetime_cache_write_input_tokens: (result.lifetime_cache_write_input_tokens || 0) + cacheWriteInputDelta
                 }, resolve);
             });
         }))
@@ -48,7 +53,10 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.type) {
         case "increment_lifetime_tokens":
-            applyLifetimeTokensDelta(message.inputDelta || 0, message.outputDelta || 0)
+            applyLifetimeTokensDelta(
+                message.inputDelta || 0, message.outputDelta || 0,
+                message.cachedInputDelta || 0, message.cacheWriteInputDelta || 0
+            )
                 .then(() => sendResponse({ ok: true }))
                 .catch(() => sendResponse({ ok: false }));
             return true;

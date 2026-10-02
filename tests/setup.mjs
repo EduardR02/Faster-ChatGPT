@@ -1,3 +1,5 @@
+import { TokenCounter } from '../src/js/TokenCounter.js';
+
 // Polyfills for Node/Bun environment
 if (typeof atob === 'undefined') {
     globalThis.atob = (str) => Buffer.from(str, 'base64').toString('binary');
@@ -85,16 +87,8 @@ export function createMockWriter() {
     };
 }
 
-// Mock token counter
 export function createMockTokenCounter() {
-    return {
-        inputTokens: 0,
-        outputTokens: 0,
-        update(input, output) {
-            this.inputTokens += input;
-            this.outputTokens += output;
-        }
-    };
+    return new TokenCounter();
 }
 
 // Test assertion helpers

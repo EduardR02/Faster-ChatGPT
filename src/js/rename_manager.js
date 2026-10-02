@@ -36,8 +36,7 @@ export class RenameManager {
 
     async generate(messages, writer) {
         const modelId = this.getModel();
-        const providerName = this.api.getProviderName(modelId);
-        const tokenCounter = new TokenCounter(providerName);
+        const tokenCounter = new TokenCounter();
 
         const apiCall = this.api.callApi(modelId, messages, tokenCounter, writer);
         const timeoutPromise = new Promise((_, reject) =>
@@ -113,19 +112,18 @@ export class RenameManager {
         return result;
     }
 
-    autoRename(chatId, displayElement) {
+    async autoRename(chatId) {
         if (!this.allowAutoRename || !this.state.getSetting('auto_rename')) {
             return null;
         }
-        return this.renameSingleChat(chatId, displayElement);
+        return this.renameSingleChat(chatId);
     }
 
     async renameAllUnmodified() {
         const metadataList = await this.chatStorage.getChatMetadata(Infinity);
         const unmodified = metadataList.filter(chat => !chat.renamed);
 
-        const modelId = this.getModel();
-        const tokenCounter = new TokenCounter(this.api.getProviderName(modelId));
+        const tokenCounter = new TokenCounter();
 
         if (!unmodified.length) return { status: 'no_chats', tokenCounter };
 
@@ -139,6 +137,8 @@ export class RenameManager {
                 successCount++;
                 tokenCounter.inputTokens += result.tokenCounter.inputTokens;
                 tokenCounter.outputTokens += result.tokenCounter.outputTokens;
+                tokenCounter.cachedInputTokens += result.tokenCounter.cachedInputTokens;
+                tokenCounter.cacheWriteInputTokens += result.tokenCounter.cacheWriteInputTokens;
             }
         }));
 

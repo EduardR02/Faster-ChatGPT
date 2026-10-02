@@ -126,7 +126,7 @@ export class SidepanelController {
         const disableRegenerate = options.disableRegenerate ?? isCouncilMode;
 
         const providerName = this.api.getProviderName(modelId);
-        const tokenCounter = new TokenCounter(providerName);
+        const tokenCounter = new TokenCounter();
         const abortController = new AbortController();
         
         let apiModelId = modelId;
@@ -143,23 +143,24 @@ export class SidepanelController {
             abortController.abort();
         }, abortButtonOptions);
 
-        // Handle local model specific configuration
-        if (this.api.getProviderName(modelId) === 'llamacpp') {
-            const localConfig = await this.api.getLocalModelConfig();
-            Object.assign(apiOptions, { localModelOverride: localConfig });
-            apiModelId = localConfig.raw;
-            displayModelName = localConfig.display;
-        }
-
         const contentDiv = options.contentDiv ?? this.chatUI.getContentDiv(modelId);
         const streamWriter = this.createStreamWriter(contentDiv, isArenaMode && !isCouncilMode);
         const shouldStreamResponse = !this.api.isImageModel(modelId) && this.state.getSetting('stream_response');
         let isCallSuccessful = false;
 
         try {
+            if (providerName === 'llamacpp') {
+                const override = modelId === 'local-model' ? null : { raw: modelId };
+                const localConfig = await this.api.getLocalModelConfig(override, abortController, { probeReasoning: false });
+                apiOptions.localModelOverride = localConfig;
+                apiModelId = localConfig.raw;
+                displayModelName = localConfig.display;
+                abortController.signal.throwIfAborted();
+            }
+
             const apiResponse = await this.api.callApi(
                 apiModelId, 
-                options.messages ?? this.chatCore.getMessagesForAPI(modelId), 
+                options.messages ?? this.chatCore.getMessagesForAPI(modelId),
                 tokenCounter, 
                 shouldStreamResponse ? streamWriter : null, 
                 abortController, 
@@ -196,28 +197,33 @@ export class SidepanelController {
         }
 
         if (isCallSuccessful) {
+            if (providerName === 'llamacpp') {
+                for (const part of streamWriter.parts) {
+                    part.model = modelId;
+                    part.apiModel = apiModelId;
+                    part.displayModel = displayModelName;
+                }
+            }
             await this.handleSuccessfulCall(modelId, displayModelName, streamWriter.parts, isRegeneration, mode);
             if (mode === 'normal' && this.state.isInactive(modelId)) {
                 this.chatUI.ensureLatestAssistantRegenerate(() => this.regenerateResponse(modelId));
             }
         }
 
-        return { inputTokens: tokenCounter.inputTokens, outputTokens: tokenCounter.outputTokens };
+        return {
+            success: isCallSuccessful,
+            inputTokens: tokenCounter.inputTokens,
+            outputTokens: tokenCounter.outputTokens,
+            cachedInputTokens: tokenCounter.cachedInputTokens,
+            cacheWriteInputTokens: tokenCounter.cacheWriteInputTokens
+        };
     }
 
     processNonStreamedResponse(responseParts, writer) {
         responseParts.forEach(part => {
             if (part.type === 'image') {
-                // If there's already content in the current part, move to a new one
-                if (writer.parts.at(-1).content.length > 0) {
-                    writer.nextPart();
-                }
-                const currentPart = writer.parts.at(-1);
-                Object.assign(currentPart, { 
-                    content: [part.content], 
-                    type: 'image', 
-                    thoughtSignature: part.thoughtSignature 
-                });
+                writer.processImage(part.content, { thought: part.thought });
+                if (part.thoughtSignature) writer.parts.at(-1).thoughtSignature = part.thoughtSignature;
             } else {
                 writer.processContent(part.content, part.type === 'thought');
                 if (part.thoughtSignature) {
@@ -225,6 +231,14 @@ export class SidepanelController {
                 }
             }
         });
+        const providerState = responseParts[0]?.providerState;
+        if (providerState) {
+            if (!writer.parts.length) writer.parts.push({ type: 'thought', content: '' });
+            if (writer.parts.length === 1 && !writer.parts[0].content.length) {
+                writer.parts[0].type = responseParts[0].type;
+            }
+            writer.parts[0].providerState = providerState;
+        }
     }
 
     async handleSuccessfulCall(modelId, displayName, responseParts, isRegeneration, mode = 'normal') {
@@ -251,8 +265,7 @@ export class SidepanelController {
             this.chatUI.updateLastMessageModelName(displayName);
         }
 
-        const modelNameForStorage = (isArenaMode || isCouncilMode) ? modelId : displayName;
-        await this.saveResponse(responseParts, modelNameForStorage, isRegeneration, mode);
+        await this.saveResponse(responseParts, modelId, isRegeneration, mode);
 
         const lastMessage = this.chatCore.getLatestMessage();
         if (!isArenaMode && !isCouncilMode && this.chatUI.continueFunc && lastMessage?.role === 'assistant') {
@@ -369,7 +382,11 @@ export class SidepanelController {
             isArena, 
             checkThinking, 
             regenerateCallback,
-            { hideRegenerate: isThinkingCheck && isThinkingCheck() }
+            {
+                hideRegenerate: isThinkingCheck && isThinkingCheck(),
+                cachedInputTokens: tokenCounter.cachedInputTokens,
+                cacheWriteInputTokens: tokenCounter.cacheWriteInputTokens
+            }
         );
     }
 
@@ -424,10 +441,11 @@ export class SidepanelController {
         });
 
         const councilResults = await Promise.allSettled(councilCalls);
-        const hasCouncilSuccess = councilResults.some(result => result.status === 'fulfilled');
+        const hasCouncilSuccess = councilResults.some(result => result.status === 'fulfilled' && result.value.success);
 
         if (!hasCouncilSuccess) {
             this.chatUI.updateCouncilCollectorStatus('error');
+            await this.chatCore.updateCouncilCollectorStatus('error');
             this.chatUI.addErrorMessage('Council responses failed. Collector skipped.');
             return;
         }
@@ -441,11 +459,17 @@ export class SidepanelController {
             messages: this.buildCollectorPrompt(councilModels, collectorModel),
             contentDiv: collectorContent || collectorWrapper || collectorMessage
         });
+        if (!tokenResult.success) return;
 
         this.chatUI.addCouncilContinueButton(messageIndex);
         this.chatUI.ensureLatestAssistantRegenerate(
             () => this.regenerateCouncilMessage(councilModels, collectorModel),
-            { inputTokens: tokenResult.inputTokens, outputTokens: tokenResult.outputTokens }
+            {
+                inputTokens: tokenResult.inputTokens,
+                outputTokens: tokenResult.outputTokens,
+                cachedInputTokens: tokenResult.cachedInputTokens,
+                cacheWriteInputTokens: tokenResult.cacheWriteInputTokens
+            }
         );
     }
 
@@ -489,15 +513,19 @@ export class SidepanelController {
         await this.makeApiCall(currentSelectedModel, false, { mode: 'normal' });
     }
 
+    getStoredArenaModels(message) {
+        return ['model_a', 'model_b'].map(key => {
+            const response = message?.responses?.[key];
+            return response?.messages?.at(-1)?.at(-1)?.model || response?.name;
+        });
+    }
+
     regenerateArenaMessage(arenaModels = null) {
         this.chatUI.initScrollListener();
         this.state.updateThinkingMode();
 
         const latest = this.chatCore.getLatestMessage();
-        const fallbackModels = [
-            latest?.responses?.model_a?.name,
-            latest?.responses?.model_b?.name
-        ];
+        const fallbackModels = this.getStoredArenaModels(latest);
         const [rawModelA, rawModelB] = (Array.isArray(arenaModels) && arenaModels.length === 2)
             ? arenaModels
             : fallbackModels;
@@ -539,6 +567,7 @@ export class SidepanelController {
         if (latestMessage?.role !== 'assistant') return;
 
         if (latestMessage.council) {
+            if (!latestMessage.contents?.[0]?.length) return;
             const messageIndex = this.chatCore.getLength() - 1;
             const councilModels = Object.keys(latestMessage.council.responses || {});
             const collectorModel = latestMessage.council.collector_model;
@@ -549,7 +578,7 @@ export class SidepanelController {
 
         if (latestMessage.responses) {
             if (latestMessage.choice && latestMessage.choice !== 'ignored') {
-                const arenaModels = [latestMessage.responses.model_a?.name, latestMessage.responses.model_b?.name];
+                const arenaModels = this.getStoredArenaModels(latestMessage);
                 this.chatUI.ensureLatestAssistantRegenerate(() => this.regenerateArenaMessage(arenaModels));
             }
             return;

@@ -25,6 +25,48 @@ function parseJSONSafe(text) {
     }
 }
 
+function attachProviderState(parts, providerState) {
+    if (!providerState || !parts) return;
+    if (!parts.length) parts.push({ type: 'thought', content: '' });
+    if (parts.length === 1 && parts[0].type === 'text' && !parts[0].content.length) {
+        parts[0].type = 'thought';
+    }
+    parts[0].providerState = providerState;
+}
+
+function checkResponseStatus(parsed, policy) {
+    const event = parsed.data ?? parsed;
+    if (event.error || event.status === 'failed' || event.type === 'error' || event.type === 'response.failed') {
+        throw new Error(event.response?.error?.message || event.error?.message || event.message || 'Provider response failed');
+    }
+    if (event.status === 'incomplete' || event.type === 'response.incomplete') {
+        throw new Error(`Response incomplete: ${(event.response ?? event).incomplete_details?.reason || 'generation stopped early'}`);
+    }
+    if (policy === 'responses' && event.type === 'response.completed') {
+        if (event.response?.status && event.response.status !== 'completed') {
+            throw new Error(`Response ${event.response.status}`);
+        }
+        return true;
+    }
+    if (policy === 'anthropic') {
+        if ((event.delta?.stop_reason ?? event.stop_reason) === 'max_tokens') {
+            throw new Error('Response incomplete: max_tokens');
+        }
+        return event.type === 'message_stop';
+    }
+    if (policy === 'gemini') {
+        const reason = event.candidates?.[0]?.finishReason;
+        if (reason === 'MAX_TOKENS') throw new Error('Response incomplete: MAX_TOKENS');
+        return !!reason;
+    }
+    if (policy === 'chat' || policy === 'chat-done') {
+        const reason = event.choices?.[0]?.finish_reason;
+        if (reason === 'length') throw new Error('Response incomplete: length');
+        return !!reason;
+    }
+    return false;
+}
+
 function clearSSEEvent(state) {
     state.dataLines.length = 0;
     state.dataStructure = null;
@@ -102,6 +144,7 @@ function processSSELine(state, line, events) {
     if (value.startsWith(' ')) value = value.slice(1);
     if (value.trim() === '[DONE]') {
         flushSSEEvent(state, events);
+        state.receivedDone = true;
         return;
     }
 
@@ -303,12 +346,12 @@ export class ApiManager {
     }
 
     async callApi(modelId, messages, tokenCounter, streamWriter = null, abortController = null, options = {}) {
-        const provider = this.getProvider(modelId);
-        const providerName = this.getProviderName(modelId);
+        const providerName = options.localModelOverride ? 'llamacpp' : this.getProviderName(modelId);
+        const provider = options.localModelOverride ? Providers.llamacpp : this.getProvider(modelId);
         const apiKey = this.settingsManager.getSetting('api_keys')?.[providerName];
         const chatGPTAuth = await this.resolveChatGPTAuth(providerName, abortController);
 
-        if (provider.supports('image', modelId) && typeof provider.createImageRequest !== 'function') {
+        if (providerName !== 'llamacpp' && provider.supports('image', modelId) && typeof provider.createImageRequest !== 'function') {
             throw new Error(`Image generation not supported for ${providerName}.`);
         }
 
@@ -319,9 +362,16 @@ export class ApiManager {
             throw new Error(`${credentialLabel} is empty.`);
         }
 
-        // Handle local model configuration
-        if (providerName === 'llamacpp' && !options.localModelOverride) {
-            options.localModelOverride = await this.getLocalModelConfig();
+        // Re-probe the selected endpoint so model/template swaps cannot reuse old reasoning.
+        if (providerName === 'llamacpp') {
+            options = {
+                ...options,
+                localModelOverride: await this.getLocalModelConfig(
+                    options.localModelOverride ?? (modelId === 'local-model' ? null : { raw: modelId }),
+                    abortController
+                )
+            };
+            modelId = options.localModelOverride.raw;
         }
 
         const filteredMessages = messages.filter(msg => {
@@ -330,7 +380,7 @@ export class ApiManager {
         });
 
         // Delegate to image generation if applicable
-        if (this.isImageModel(modelId)) {
+        if (typeof provider.createImageRequest === 'function' && provider.supports('image', modelId)) {
             return this.callImageGenerationApi(modelId, filteredMessages, tokenCounter, streamWriter, abortController, options);
         }
 
@@ -343,15 +393,18 @@ export class ApiManager {
             temperature: this.settingsManager.getSetting('temperature')
         };
 
+        const reasoningScope = await provider.getReasoningScope({ apiKey, chatGPTAuth, options });
+
         const [url, requestOptions] = provider.createRequest({
             model: modelId,
             messages: processedMessages,
             stream: requestIsStreaming,
-            options: { ...this, ...options, streamWriter },
+            options: { ...this, ...options, streamWriter, reasoningScope },
             apiKey,
             chatGPTAuth,
             settings
         });
+        const responseState = await provider.prepareRequest({ model: modelId, requestOptions, reasoningScope });
 
         try {
             // Reasonable timeout extension for models that take longer to "think"
@@ -368,18 +421,22 @@ export class ApiManager {
             );
 
             if (requestIsStreaming) {
-                return await this.handleStreamResponse(response, modelId, tokenCounter, streamWriter);
+                return await this.handleStreamResponse(response, modelId, tokenCounter, streamWriter, responseState, requestOptions.signal, provider);
             }
 
             const data = await response.json();
-            return provider.handleResponse({ data, tokenCounter });
+            requestOptions.signal?.throwIfAborted();
+            checkResponseStatus(data, provider.streamCompletion);
+            const parts = provider.handleResponse({ data, tokenCounter, responseState });
+            attachProviderState(parts, provider.finalizeResponseState(responseState));
+            return parts;
         } catch (error) {
             streamWriter?.stopThinkingCounter?.();
             throw error;
         }
     }
 
-    async callImageGenerationApi(modelId, messages, tokenCounter, streamWriter, abortController, options) {
+    async callImageGenerationApi(modelId, messages, tokenCounter, streamWriter, abortController, options = {}) {
         const provider = this.getProvider(modelId);
         const providerName = this.getProviderName(modelId);
         const apiKey = this.settingsManager.getSetting('api_keys')?.[providerName];
@@ -397,13 +454,16 @@ export class ApiManager {
             temperature: this.settingsManager.getSetting('temperature')
         };
 
+        const reasoningScope = await provider.getReasoningScope({ apiKey, options });
+
         const [url, requestOptions] = provider.createImageRequest({
             model: modelId,
             messages: this.processFiles(messages),
             apiKey,
             settings,
-            options: { ...this, ...options }
+            options: { ...this, ...options, streamWriter, reasoningScope }
         });
+        const responseState = await provider.prepareRequest({ model: modelId, requestOptions, reasoningScope });
 
         const response = await this._fetchWithTimeout(
             url,
@@ -414,7 +474,10 @@ export class ApiManager {
         );
 
         const data = await response.json();
-        return provider.handleResponse({ data, tokenCounter });
+        requestOptions.signal?.throwIfAborted();
+        const parts = provider.handleResponse({ data, tokenCounter, responseState });
+        attachProviderState(parts, provider.finalizeResponseState(responseState));
+        return parts;
     }
 
     /**
@@ -482,40 +545,63 @@ export class ApiManager {
         return events;
     }
 
-    async handleStreamResponse(response, modelId, tokenCounter, writer) {
+    async handleStreamResponse(response, modelId, tokenCounter, writer, responseState = null, signal = null, provider = this.getProvider(modelId)) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder("utf-8");
-        const provider = this.getProvider(modelId);
         const state = { buffer: '', dataLines: [], dataStructure: null };
-        const collected = writer ? null : { text: [], thoughts: [] };
+        let streamCompleted = false;
+        const policy = provider.streamCompletion;
+        let ended = false;
+        const collected = writer ? null : [];
         const outputWriter = writer || {
+            parts: collected,
             processContent(content, isThought = false) {
-                collected[isThought ? 'thoughts' : 'text'].push(content);
+                if (!content) return;
+                const type = isThought ? 'thought' : 'text';
+                const last = collected.at(-1);
+                if (last?.type === type) last.content += content;
+                else collected.push({ type, content });
+            },
+            processImage(content, { thought = false } = {}) {
+                collected.push({ type: 'image', content, ...(thought ? { thought: true } : {}) });
+            },
+            setThinkingModel() {
+                this.isThinkingModel = true;
             }
         };
 
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            const chunk = decoder.decode(value, { stream: true });
-            for (const parsed of ApiManager.parseSSEChunk(state, chunk)) {
-                provider.handleStream({ parsed, tokenCounter, writer: outputWriter });
+        const consume = parsed => {
+            provider.handleStream({ parsed, tokenCounter, writer: outputWriter, responseState });
+            if (checkResponseStatus(parsed, policy)) streamCompleted = true;
+        };
+        try {
+            while (true) {
+                signal?.throwIfAborted();
+                const { done, value } = await reader.read();
+                if (done) {
+                    ended = true;
+                    break;
+                }
+                for (const parsed of ApiManager.parseSSEChunk(state, decoder.decode(value, { stream: true }))) {
+                    consume(parsed);
+                }
             }
+            for (const parsed of ApiManager.parseSSEChunk(state, decoder.decode())) consume(parsed);
+            for (const parsed of ApiManager.flushSSEBuffer(state)) consume(parsed);
+            signal?.throwIfAborted();
+            if (policy && (!streamCompleted || policy === 'chat-done' && !state.receivedDone)) {
+                throw new Error('Response incomplete: stream ended before completion');
+            }
+            const parts = writer ? writer.parts : (collected.length ? collected : provider.returnMessage([''], ['']));
+            attachProviderState(parts, provider.finalizeResponseState(responseState));
+            return writer ? true : parts;
+        } catch (error) {
+            if (responseState) responseState.valid = false;
+            throw error;
+        } finally {
+            if (!ended) await reader.cancel().catch(() => {});
+            reader.releaseLock();
         }
-
-        // Streams may end without a trailing newline or mid UTF-8 sequence;
-        // flush the decoder and parser so the final event (and its token
-        // usage) is not lost.
-        for (const parsed of ApiManager.parseSSEChunk(state, decoder.decode())) {
-            provider.handleStream({ parsed, tokenCounter, writer: outputWriter });
-        }
-        for (const parsed of ApiManager.flushSSEBuffer(state)) {
-            provider.handleStream({ parsed, tokenCounter, writer: outputWriter });
-        }
-
-        if (writer) return true;
-        return provider.returnMessage([collected.text.join('')], [collected.thoughts.join('')]);
     }
 
 
@@ -651,28 +737,75 @@ export class ApiManager {
             .replace(/\b\w/g, char => char.toUpperCase()) || 'Local Model';
     }
 
-    async getLocalModelConfig() {
+    async getLocalModelReasoning(port, rawId, externalAbort = null) {
+        const abort = new AbortController();
+        const cancel = () => abort.abort();
+        externalAbort?.signal.addEventListener('abort', cancel, { once: true });
+        if (externalAbort?.signal.aborted) cancel();
+        const timeout = setTimeout(cancel, TIMEOUT.LOCAL_SERVER_PING);
+        try {
+            const endpoint = `http://localhost:${port}`;
+            const query = rawId && rawId !== 'local-model' ? `?model=${encodeURIComponent(rawId)}` : '';
+            const response = await fetch(`${endpoint}/props${query}`, { signal: abort.signal });
+            if (!response.ok) return { supported: false, identity: null };
+            const props = await response.json();
+            const loadedModel = props.model_path || props.default_generation_settings?.model || props.model
+                || (rawId !== 'local-model' ? rawId : null);
+            if (typeof loadedModel !== 'string' || !loadedModel || loadedModel === 'local-model') {
+                return { supported: false, identity: null };
+            }
+            const identityData = JSON.stringify([
+                endpoint, rawId, loadedModel, props.chat_template ?? null, props.chat_template_tool_use ?? null
+            ]);
+            const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(identityData));
+            const identity = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+            return { supported: props.chat_template_caps?.supports_preserve_reasoning === true, identity };
+        } catch (_) {
+            return { supported: false, identity: null };
+        } finally {
+            clearTimeout(timeout);
+            externalAbort?.signal.removeEventListener('abort', cancel);
+        }
+    }
+
+    async getLocalModelConfig(override = null, externalAbort = null, { probeReasoning = true } = {}) {
+        if (override?.port != null) {
+            const port = override.port;
+            const raw = override.raw || 'local-model';
+            const reasoning = probeReasoning ? await this.getLocalModelReasoning(port, raw, externalAbort) : undefined;
+            return { ...override, raw, display: override.display || this.formatLocalModelName(raw), port, reasoning };
+        }
         const ports = [...new Set([this.localServerPort, ...LOCAL_SERVER.FALLBACK_PORTS])];
+        const selectedRaw = override?.raw && override.raw !== 'local-model' ? override.raw : null;
         for (const port of ports) {
+            if (externalAbort?.signal.aborted) break;
             const abort = new AbortController();
-            const timeout = setTimeout(() => abort.abort(), TIMEOUT.LOCAL_SERVER_PING);
+            const cancel = () => abort.abort();
+            externalAbort?.signal.addEventListener('abort', cancel, { once: true });
+            const timeout = setTimeout(cancel, TIMEOUT.LOCAL_SERVER_PING);
             try {
                 const response = await fetch(`http://localhost:${port}/v1/models`, { signal: abort.signal });
                 if (response.ok) {
                     const data = await response.json();
                     const firstModel = data.data?.[0];
-                    const rawId = typeof firstModel === 'string'
+                    const rawId = selectedRaw || (typeof firstModel === 'string'
                         ? firstModel
-                        : (firstModel?.id || firstModel?.name || 'local-model');
+                        : (firstModel?.id || firstModel?.name || 'local-model'));
                     this.localServerPort = port;
-                    const displayName = this.formatLocalModelName(rawId);
-                    return { raw: rawId, display: displayName, port };
+                    const reasoning = probeReasoning ? await this.getLocalModelReasoning(port, rawId, externalAbort) : undefined;
+                    return { ...override, raw: rawId, display: override?.display || this.formatLocalModelName(rawId), port, reasoning };
                 }
             } catch (_) {
             } finally {
                 clearTimeout(timeout);
+                externalAbort?.signal.removeEventListener('abort', cancel);
             }
         }
-        return { raw: 'local-model', display: 'Local Model', port: LOCAL_SERVER.DEFAULT_PORT };
+        return {
+            ...override, raw: selectedRaw || 'local-model',
+            display: override?.display || (selectedRaw ? this.formatLocalModelName(selectedRaw) : 'Local Model'),
+            port: this.localServerPort,
+            reasoning: { supported: false, identity: null }
+        };
     }
 }

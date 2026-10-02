@@ -56,7 +56,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Load Initial Data
     getLifetimeTokens((tokens) => {
-        tokensDisplay.innerText = `${tokens.input} | ${tokens.output}`;
+        const cachedLabel = tokens.cachedInput ? ` | ${tokens.cachedInput} cached` : '';
+        tokensDisplay.textContent = `${tokens.input} | ${tokens.output}${cachedLabel}`;
+        tokensDisplay.title = 'Input (excluding cached reads) | Output';
+        if (tokens.cachedInput) tokensDisplay.title += ` | Cached reads: ${tokens.cachedInput}`;
+        if (tokens.cacheWriteInput) {
+            tokensDisplay.title += ` | Cache writes: ${tokens.cacheWriteInput} (included in input)`;
+        }
     });
     
     void getCurrentMode().then(updateUI);

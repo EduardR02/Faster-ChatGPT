@@ -174,12 +174,25 @@ export class StreamWriterSimple {
     processContent(content, isThought = false) {
         if (!content) return;
 
+        if (this.parts.at(-1)?.type === 'image') {
+            this.nextPart(isThought);
+            this.isThoughtEnd = !isThought;
+        }
         this._handleTransition(content, isThought);
-
         this.parts.at(-1).content.push(content);
         this.fullText += content;
         this.bufferedContent += content;
         this.scheduleRender();
+    }
+
+    processImage(content, { thought = false } = {}) {
+        const current = this.parts.at(-1);
+        if (current?.type === 'image' || hasNonWhitespaceContent(current)) {
+            this.nextPart(thought);
+        }
+        Object.assign(this.parts.at(-1), { type: 'image', content: [content], ...(thought ? { thought: true } : {}) });
+        this.isThoughtEnd = !thought;
+        this.updateImageContent(content);
     }
 
     scheduleRender() {
@@ -310,8 +323,11 @@ export class StreamWriter extends StreamWriterSimple {
     processContent(content, isThought = false) {
         if (!content) return;
 
+        if (this.parts.at(-1)?.type === 'image') {
+            this.nextPart(isThought);
+            this.isThoughtEnd = !isThought;
+        }
         this._handleTransition(content, isThought);
-
         this.parts.at(-1).content.push(content);
         this.contentQueue.push(content);
 
@@ -320,6 +336,20 @@ export class StreamWriter extends StreamWriterSimple {
             this.lastFrameTime = 0;
             this.runAnimationLoop();
         }
+    }
+
+    processImage(content, options = {}) {
+        // Media boundaries are immediate; drain already-accepted text before switching DOM nodes.
+        while (this.contentQueue.length || this.transitionQueue.length) {
+            this.switchAtBoundaries(0);
+            const chunk = this.consumeChars(Infinity);
+            if (chunk) {
+                this.fullText += chunk;
+                if (this.useMarkdown) this._renderToDOM();
+                else this.contentDiv.append(chunk);
+            }
+        }
+        super.processImage(content, options);
     }
 
     hasActiveQueueContent() {

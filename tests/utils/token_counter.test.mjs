@@ -1,155 +1,116 @@
 import { TokenCounter } from '../../src/js/TokenCounter.js';
-import { createChromeMock, assertDeepEqual } from '../setup.mjs';
-import { describe, test, beforeEach } from 'bun:test';
+import { Footer } from '../../src/js/Footer.js';
+import { parseHTML } from 'linkedom';
+import { afterEach, describe, expect, test } from 'bun:test';
 
-// Setup chrome mock globally for these tests as storage_utils depends on it
-const chromeMock = createChromeMock();
-globalThis.chrome = chromeMock;
+const originalDocument = globalThis.document;
+const originalChrome = globalThis.chrome;
+afterEach(() => {
+    globalThis.document = originalDocument;
+    globalThis.chrome = originalChrome;
+});
 
-/**
- * Tests for TokenCounter class.
- * 
- * TokenCounter is responsible for:
- * 1. Maintaining a running count of input and output tokens for a session.
- * 2. Handling provider-specific counting logic (e.g., Gemini's cumulative counts vs others' deltas).
- * 3. Persisting lifetime token usage.
- */
+const totals = counter => [
+    counter.inputTokens, counter.outputTokens,
+    counter.cachedInputTokens, counter.cacheWriteInputTokens
+];
 
-describe('TokenCounter', () => {
-    
-    describe('Basic counting', () => {
-        test('initializes with zero tokens', () => {
-            const counter = new TokenCounter('openai');
-            assertDeepEqual(counter.inputTokens, 0);
-            assertDeepEqual(counter.outputTokens, 0);
-        });
-
-        test('accumulates tokens for delta-based providers (openai)', () => {
-            const counter = new TokenCounter('openai');
-            
-            counter.update(10, 5);
-            assertDeepEqual(counter.inputTokens, 10);
-            assertDeepEqual(counter.outputTokens, 5);
-
-            counter.update(20, 15);
-            assertDeepEqual(counter.inputTokens, 30);
-            assertDeepEqual(counter.outputTokens, 20);
-        });
-
-        test('handles partial updates (only input)', () => {
-            const counter = new TokenCounter('anthropic');
-            counter.update(100, undefined);
-            assertDeepEqual(counter.inputTokens, 100);
-            assertDeepEqual(counter.outputTokens, 0);
-        });
-
-        test('handles partial updates (only output)', () => {
-            const counter = new TokenCounter('anthropic');
-            counter.update(undefined, 50);
-            assertDeepEqual(counter.inputTokens, 0);
-            assertDeepEqual(counter.outputTokens, 50);
-        });
-
-        test('verify counting is deterministic', () => {
-            const counter1 = new TokenCounter('openai');
-            const counter2 = new TokenCounter('openai');
-            
-            const inputs = [[10, 5], [20, 30], [5, 5]];
-            
-            inputs.forEach(([i, o]) => {
-                counter1.update(i, o);
-                counter2.update(i, o);
-            });
-
-            assertDeepEqual(counter1.inputTokens, counter2.inputTokens);
-            assertDeepEqual(counter1.outputTokens, counter2.outputTokens);
-            assertDeepEqual(counter1.inputTokens, 35);
-            assertDeepEqual(counter1.outputTokens, 40);
-        });
+describe('per-response token snapshots', () => {
+    test('repeated and increasing snapshots replace counts without double counting', () => {
+        const counter = new TokenCounter();
+        counter.update(100, 3, 80, 25);
+        counter.update(100, 3, 80, 25);
+        expect(totals(counter)).toEqual([100, 3, 80, 25]);
+        counter.update(120, 40, 90, 30);
+        expect(totals(counter)).toEqual([120, 40, 90, 30]);
     });
 
-    describe('Provider-specific counting (Gemini)', () => {
-        test('uses cumulative counts for Gemini', () => {
-            const counter = new TokenCounter('gemini');
-            
-            // First update
-            counter.update(10, 5);
-            assertDeepEqual(counter.inputTokens, 10);
-            assertDeepEqual(counter.outputTokens, 5);
-
-            // Second update provides total count so far, not delta
-            counter.update(25, 12);
-            assertDeepEqual(counter.inputTokens, 25);
-            assertDeepEqual(counter.outputTokens, 12);
-            
-            // Third update
-            counter.update(30, 20);
-            assertDeepEqual(counter.inputTokens, 30);
-            assertDeepEqual(counter.outputTokens, 20);
-        });
-
-        test('gemini handles updates that decrease', () => {
-            const counter = new TokenCounter('gemini');
-            counter.update(100, 100);
-            counter.update(50, 50);
-            assertDeepEqual(counter.inputTokens, 50);
-            assertDeepEqual(counter.outputTokens, 50);
-        });
+    test('partial output and cache snapshots retain all absent categories', () => {
+        const counter = new TokenCounter();
+        counter.update(50, 2, 300, 40);
+        counter.update(undefined, 20);
+        expect(totals(counter)).toEqual([50, 20, 300, 40]);
+        counter.update(undefined, undefined, 320);
+        expect(totals(counter)).toEqual([50, 20, 320, 40]);
+        counter.update(55, undefined, undefined, 45);
+        expect(totals(counter)).toEqual([55, 20, 320, 45]);
     });
 
-    describe('Lifetime token persistence', () => {
-        beforeEach(() => {
-            // Reset storage before each test
-            const newMock = createChromeMock();
-            globalThis.chrome.storage = newMock.storage;
-            globalThis.chrome.runtime = newMock.runtime;
-        });
-
-        test('updates lifetime tokens via storage', async () => {
-            const counter = new TokenCounter('openai');
-            counter.update(100, 50);
-            
-            // Bypass sendMessage and the retry delays by mocking chrome.runtime.sendMessage to be undefined
-            // This makes setLifetimeTokens use applyLifetimeTokensDelta directly.
-            const originalSendMessage = chrome.runtime.sendMessage;
-            chrome.runtime.sendMessage = undefined;
-
-            try {
-                counter.updateLifetimeTokens();
-                
-                // wait for the storage update promise chain to resolve
-                await new Promise(resolve => setTimeout(resolve, 0));
-                
-                const storage = await chrome.storage.local.get(['lifetime_input_tokens', 'lifetime_output_tokens']);
-                assertDeepEqual(storage.lifetime_input_tokens, 100);
-                assertDeepEqual(storage.lifetime_output_tokens, 50);
-            } finally {
-                chrome.runtime.sendMessage = originalSendMessage;
-            }
-        });
+    test('corrected lower snapshots and explicit zero reset only supplied categories', () => {
+        const counter = new TokenCounter();
+        counter.update(100, 50, 90, 40);
+        counter.update(60, 25, 20, 10);
+        expect(totals(counter)).toEqual([60, 25, 20, 10]);
+        counter.update(undefined, 0, 0, 0);
+        expect(totals(counter)).toEqual([60, 0, 0, 0]);
+        counter.update(0);
+        expect(totals(counter)).toEqual([0, 0, 0, 0]);
     });
 
-    describe('Edge cases', () => {
-        test('handles zero tokens', () => {
-            const counter = new TokenCounter('openai');
-            counter.update(0, 0);
-            assertDeepEqual(counter.inputTokens, 0);
-            assertDeepEqual(counter.outputTokens, 0);
-        });
+    test('missing or nonnumeric fields do not erase a previous snapshot', () => {
+        const counter = new TokenCounter();
+        counter.update(30, 20, 10, 5);
+        counter.update(null, '40', {}, undefined);
+        counter.update(NaN, Infinity, -Infinity, '5');
+        counter.update();
+        expect(totals(counter)).toEqual([30, 20, 10, 5]);
+    });
 
-        test('handles large token counts', () => {
-            const counter = new TokenCounter('openai');
-            const large = 1_000_000_000;
-            counter.update(large, large);
-            assertDeepEqual(counter.inputTokens, large);
-            assertDeepEqual(counter.outputTokens, large);
+    test('lifetime persistence counts reads separately and writes only as an input subset', async () => {
+        const stored = {};
+        let completed;
+        const writeCompleted = new Promise(resolve => { completed = resolve; });
+        globalThis.chrome = {
+            runtime: {},
+            storage: { local: {
+                get: (_keys, callback) => callback(stored),
+                set: (values, callback) => {
+                    Object.assign(stored, values);
+                    callback();
+                    completed();
+                }
+            } }
+        };
+        const counter = new TokenCounter();
+        counter.update(100, 10, 300, 70);
+        counter.update(undefined, 40);
+        counter.updateLifetimeTokens();
+        await writeCompleted;
+        expect(stored).toEqual({
+            lifetime_input_tokens: 100,
+            lifetime_output_tokens: 40,
+            lifetime_cached_input_tokens: 300,
+            lifetime_cache_write_input_tokens: 70
         });
+    });
+});
 
-        test('ignores non-numeric inputs', () => {
-            const counter = new TokenCounter('openai');
-            counter.update('10', { count: 5 });
-            assertDeepEqual(counter.inputTokens, 0);
-            assertDeepEqual(counter.outputTokens, 0);
-        });
+describe('token footer', () => {
+    const render = (options = {}, isArena = false) => {
+        const { document } = parseHTML('<div id="message"></div>');
+        globalThis.document = document;
+        const container = document.getElementById('message');
+        new Footer(100, 20, isArena, () => false, () => {}, { ...options, hideRegenerate: true }).create(container);
+        return container.querySelector('.message-footer');
+    };
+
+    test('displays reads separately without displaying writes as additional input', () => {
+        const footer = render({ cachedInputTokens: 300, cacheWriteInputTokens: 70 });
+        expect(footer.textContent).toBe('100 | 20 | 300 cached');
+        expect(footer.querySelector('span').title).toContain('Cache writes: 70 (included in input)');
+        expect(footer.getAttribute('input-tokens')).toBe('100');
+        expect(footer.getAttribute('cached-input-tokens')).toBe('300');
+        expect(footer.getAttribute('cache-write-input-tokens')).toBe('70');
+    });
+
+    test('keeps the existing compact format when no cached reads exist', () => {
+        const footer = render({ cacheWriteInputTokens: 70 });
+        expect(footer.textContent).toBe('100 | 20');
+        expect(footer.querySelector('span').title).toContain('Cache writes: 70 (included in input)');
+        expect(render().textContent).toBe('100 | 20');
+    });
+
+    test('preserves the arena input label while showing actual cached reads', () => {
+        expect(render({ cachedInputTokens: 300 }, true).textContent).toBe('~ | 20 | 300 cached');
     });
 });

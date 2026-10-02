@@ -15,7 +15,7 @@ const createCore = () => {
         {
             role: 'assistant',
             contents: [[
-                { type: 'thought', content: 'required K3 reasoning' },
+                { type: 'thought', content: 'required K3 reasoning', model: 'kimi-k3' },
                 { type: 'text', content: 'Answer' }
             ]]
         },
@@ -29,7 +29,7 @@ describe('Kimi K3 API history', () => {
         const messages = createCore().getMessagesForAPI('kimi-k3');
 
         expect(messages[1].parts).toEqual([
-            { type: 'thought', content: 'required K3 reasoning' },
+            { type: 'thought', content: 'required K3 reasoning', model: 'kimi-k3' },
             { type: 'text', content: 'Answer' }
         ]);
     });
@@ -37,6 +37,19 @@ describe('Kimi K3 API history', () => {
     test('continues stripping private thought text for other models', () => {
         const messages = createCore().getMessagesForAPI('gpt-5.6-sol');
 
-        expect(messages[1].parts[0]).toEqual({ type: 'thought', content: '' });
+        expect(messages[1].parts[0].content).toBe('');
     });
+
+    for (const origin of [undefined, 'deepseek-flash', 'kimi-k2.6']) {
+        test(`rejects plain thoughts with ${origin || 'unknown'} provenance without editing stored history`, () => {
+            const core = createCore();
+            const original = core.currentChat.messages[1].contents[0][0];
+            if (origin) original.model = origin;
+            else delete original.model;
+            const messages = core.getMessagesForAPI('kimi-k3');
+            expect(messages[1].parts[0].content).toBe('');
+            expect(messages[1].parts[1].content).toBe('Answer');
+            expect(original.content).toBe('required K3 reasoning');
+        });
+    }
 });

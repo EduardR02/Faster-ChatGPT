@@ -25,23 +25,30 @@ export const isOn = (mode) => mode !== ModeEnum.Off;
  * Retrieves lifetime token usage statistics.
  */
 export const getLifetimeTokens = (callback) => {
-    chrome.storage.local.get(['lifetime_input_tokens', 'lifetime_output_tokens'], result => {
+    chrome.storage.local.get([
+        'lifetime_input_tokens', 'lifetime_output_tokens',
+        'lifetime_cached_input_tokens', 'lifetime_cache_write_input_tokens'
+    ], result => {
         callback({
-            input: result.lifetime_input_tokens || 0, 
-            output: result.lifetime_output_tokens || 0 
+            input: result.lifetime_input_tokens || 0,
+            output: result.lifetime_output_tokens || 0,
+            cachedInput: result.lifetime_cached_input_tokens || 0,
+            cacheWriteInput: result.lifetime_cache_write_input_tokens || 0
         });
     });
 };
 
 let lifetimeTokensUpdate = Promise.resolve();
 
-const applyLifetimeTokensDelta = (inputDelta, outputDelta) => {
+const applyLifetimeTokensDelta = (inputDelta, outputDelta, cachedInputDelta, cacheWriteInputDelta) => {
     lifetimeTokensUpdate = lifetimeTokensUpdate
         .then(() => new Promise(resolve => {
             getLifetimeTokens(current => {
                 chrome.storage.local.set({
-                    lifetime_input_tokens: current.input + inputDelta, 
-                    lifetime_output_tokens: current.output + outputDelta 
+                    lifetime_input_tokens: current.input + inputDelta,
+                    lifetime_output_tokens: current.output + outputDelta,
+                    lifetime_cached_input_tokens: current.cachedInput + cachedInputDelta,
+                    lifetime_cache_write_input_tokens: current.cacheWriteInput + cacheWriteInputDelta
                 }, resolve);
             });
         }))
@@ -49,29 +56,31 @@ const applyLifetimeTokensDelta = (inputDelta, outputDelta) => {
 };
 
 const LIFETIME_TOKEN_RETRY_DELAYS_MS = [100, 250];
-const sendLifetimeTokensDelta = (inputDelta, outputDelta, attempt = 0) => {
+const sendLifetimeTokensDelta = (inputDelta, outputDelta, cachedInputDelta, cacheWriteInputDelta, attempt = 0) => {
     chrome.runtime.sendMessage({
         type: 'increment_lifetime_tokens',
         inputDelta,
-        outputDelta
+        outputDelta,
+        cachedInputDelta,
+        cacheWriteInputDelta
     }).catch(() => {
         const delay = LIFETIME_TOKEN_RETRY_DELAYS_MS[attempt];
         if (delay == null) {
-            applyLifetimeTokensDelta(inputDelta, outputDelta);
+            applyLifetimeTokensDelta(inputDelta, outputDelta, cachedInputDelta, cacheWriteInputDelta);
             return;
         }
-        setTimeout(() => sendLifetimeTokensDelta(inputDelta, outputDelta, attempt + 1), delay);
+        setTimeout(() => sendLifetimeTokensDelta(inputDelta, outputDelta, cachedInputDelta, cacheWriteInputDelta, attempt + 1), delay);
     });
 };
 
 /**
- * Increments lifetime token usage statistics.
+ * Increments lifetime usage. Cache writes are a subset of input, not an extra total.
  */
-export const setLifetimeTokens = (inputDelta, outputDelta) => {
+export const setLifetimeTokens = (inputDelta = 0, outputDelta = 0, cachedInputDelta = 0, cacheWriteInputDelta = 0) => {
     if (chrome?.runtime?.sendMessage) {
-        sendLifetimeTokensDelta(inputDelta, outputDelta);
+        sendLifetimeTokensDelta(inputDelta, outputDelta, cachedInputDelta, cacheWriteInputDelta);
     } else {
-        applyLifetimeTokensDelta(inputDelta, outputDelta);
+        applyLifetimeTokensDelta(inputDelta, outputDelta, cachedInputDelta, cacheWriteInputDelta);
     }
 };
 
@@ -96,6 +105,8 @@ export const setDefaults = async () => {
         mode: ModeEnum.PromptMode,
         lifetime_input_tokens: 0,
         lifetime_output_tokens: 0,
+        lifetime_cached_input_tokens: 0,
+        lifetime_cache_write_input_tokens: 0,
         max_tokens: 16000,
         temperature: 1.0,
         loop_threshold: 2,
