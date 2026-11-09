@@ -20,6 +20,12 @@ All providers in one place. Switch models mid-conversation. Regenerate a respons
 
 Defaults apply only to fresh installs. Extension updates leave your saved model list unchanged; add new models manually in Settings. The current additions are OpenAI `gpt-6-sol` and `gpt-6-luna`, and Anthropic `claude-opus-5-5`. OpenAI models support either an API key or a connected ChatGPT subscription, subject to your account's model access.
 
+API compatibility has been checked for [`claude-fable-5-2`](https://platform.claude.com/docs/en/models/fable-5-2/migration-guide), [`gpt-6.1-sol`](https://developers.openai.com/api/docs/models/gpt-6.1-sol), and [`gpt-6.1-terra`](https://developers.openai.com/api/docs/models/gpt-6.1-terra). Fable keeps always-on adaptive thinking and five effort levels; Sol requires at least `low` effort; Terra also supports `none`. All three allow up to 128k output tokens. Fable's stricter thinking-prefix checks are covered by the existing replay guards, but its API workspace must allow 30-day retention.
+
+Terra now exposes reasoning, standard/pro modes, and web search without sending temperature. ChatGPT subscription requests identify as [Codex 0.165.0](https://github.com/openai/codex/releases/tag/rust-v0.165.0), which added Terra; model access still depends on the account. OpenAI currently documents [`gpt-6-luna`](https://developers.openai.com/api/docs/models/gpt-6-luna), not a 6.1 Luna model. Default and saved model lists are unchanged.
+
+The model request check does not resolve existing Claude response-handling gaps: classifier `refusal`, server-tool `pause_turn`, and `model_context_window_exceeded` currently pass as completed responses. They need separate handling for declined requests, paused searches, and context truncation respectively; these behaviors predate Fable 5.2.
+
 ### Council Mode
 
 Send your prompt to multiple models at once. An arbiter reads all the responses and writes a final synthesis.
